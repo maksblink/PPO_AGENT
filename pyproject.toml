@@ -7,7 +7,10 @@ name = "ppo-agent"
 version = "0.1.0"
 description = "Configuration-driven PPO agent training and evaluation"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pandas>=2.2,<4",
+    "pyarrow>=16,<25",
+]
 
 [project.optional-dependencies]
 dev = [

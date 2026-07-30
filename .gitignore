@@ -25,3 +25,6 @@ artifacts/
 
 # Data
 data/
+
+# Editable package installation metadata
+*.egg-info/

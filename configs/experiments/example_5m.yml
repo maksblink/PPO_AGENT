@@ -1,0 +1,49 @@
+schema_version: 1
+
+run:
+  name: example_5m
+  seed: 7
+
+continuation:
+  mode: fresh
+
+data:
+  path: data/NQ_CONTINUOUS_5m_WEEKDAYS_2010-06-07_00-00_2026-06-24_23-55_20260625_234318.parquet
+  train_ratio: 0.90
+
+environment:
+  window: 40
+  feature_set: v4_short_horizon_drawdown_rebound_context
+  position_side: long_only
+
+  stake_pln: 1000.0
+  fee_bps: 1.0
+  swap_bps: 3.0
+
+  reward_scale: 1.0
+  exposure_penalty: 0.0
+  turnover_penalty: 0.0
+  drawdown_penalty: 0.0
+  profit_reward_mult: 1.0
+  loss_reward_mult: 1.0
+
+ppo:
+  timesteps: 500000
+  device: cuda
+
+  hidden_sizes:
+    - 64
+    - 64
+
+  n_steps: 2048
+  batch_size: 1024
+  learning_rate: 0.0003
+  gamma: 0.90
+  clip_range: 0.20
+  ent_coef: 0.0002
+
+evaluation:
+  eval_every_steps: 50000
+  checkpoint_every_steps: 50000
+  best_metric: balanced_score_pct
+  early_stop_patience_evals: 5

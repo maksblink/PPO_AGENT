@@ -1,0 +1,463 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+import train_and_eval.run_config as run_config_module
+from train_and_eval.run_config import (
+    ResumeCompatibilityError,
+    RunConfigError,
+    load_run_config,
+    validate_resume_compatibility,
+)
+
+
+def _valid_config() -> dict:
+    return {
+        "schema_version": 1,
+        "run": {
+            "name": "test_run",
+            "seed": 7,
+        },
+        "continuation": {
+            "mode": "fresh",
+        },
+        "data": {
+            "path": "data/market.parquet",
+            "train_ratio": 0.9,
+        },
+        "environment": {
+            "window": 40,
+            "feature_set": "test_features",
+            "position_side": "long_only",
+            "stake_pln": 1000.0,
+            "fee_bps": 1.0,
+            "swap_bps": 3.0,
+            "reward_scale": 1.0,
+            "exposure_penalty": 0.0,
+            "turnover_penalty": 0.0,
+            "drawdown_penalty": 0.0,
+            "profit_reward_mult": 1.0,
+            "loss_reward_mult": 1.0,
+        },
+        "ppo": {
+            "timesteps": 1000,
+            "device": "cpu",
+            "hidden_sizes": [64, 64],
+            "n_steps": 256,
+            "batch_size": 64,
+            "learning_rate": 0.0003,
+            "gamma": 0.9,
+            "clip_range": 0.2,
+            "ent_coef": 0.0,
+        },
+        "evaluation": {
+            "eval_every_steps": 500,
+            "checkpoint_every_steps": 500,
+            "best_metric": "balanced_score_pct",
+            "early_stop_patience_evals": 5,
+        },
+    }
+
+
+def _write_config(
+    path: Path,
+    config: dict,
+    *,
+    sort_keys: bool = False,
+) -> Path:
+    path.write_text(
+        yaml.safe_dump(
+            config,
+            sort_keys=sort_keys,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_load_run_config_accepts_valid_config(
+    tmp_path: Path,
+) -> None:
+    path = _write_config(
+        tmp_path / "run.yml",
+        _valid_config(),
+    )
+
+    loaded = load_run_config(
+        path,
+        verify_data=False,
+    )
+
+    assert loaded.config.run.name == "test_run"
+    assert loaded.config.ppo.hidden_sizes == (64, 64)
+    assert len(loaded.sha256) == 64
+    assert '"schema_version":1' in loaded.normalized_json
+
+
+def test_load_run_config_rejects_unknown_field(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["ppo"]["unknown_parameter"] = 123
+
+    path = _write_config(
+        tmp_path / "unknown.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="unknown_parameter",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_load_run_config_rejects_unsafe_run_name(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["run"]["name"] = "../other-directory"
+
+    path = _write_config(
+        tmp_path / "unsafe-name.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="letters, digits",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_load_run_config_rejects_batch_larger_than_rollout(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["ppo"]["n_steps"] = 64
+    config["ppo"]["batch_size"] = 128
+
+    path = _write_config(
+        tmp_path / "invalid-batch.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="batch_size cannot be greater",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_normalized_config_ignores_yaml_key_order(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+
+    first_path = _write_config(
+        tmp_path / "first.yml",
+        config,
+        sort_keys=False,
+    )
+    second_path = _write_config(
+        tmp_path / "second.yml",
+        config,
+        sort_keys=True,
+    )
+
+    first = load_run_config(
+        first_path,
+        verify_data=False,
+    )
+    second = load_run_config(
+        second_path,
+        verify_data=False,
+    )
+
+    assert first.normalized_json == second.normalized_json
+    assert first.sha256 != second.sha256
+
+
+def test_load_run_config_verifies_referenced_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_config(
+        tmp_path / "run.yml",
+        _valid_config(),
+    )
+
+    expected_entry = {
+        "path": "data/market.parquet",
+        "status": "okay",
+        "sha256": "a" * 64,
+        "rows": 3,
+    }
+
+    def fake_verify_market_data(
+        path: str,
+        *,
+        data_directory: str | Path,
+        manifest_path: str | Path,
+    ) -> tuple[Path, dict]:
+        assert path == "data/market.parquet"
+        return Path("/tmp/data/market.parquet"), expected_entry
+
+    monkeypatch.setattr(
+        run_config_module,
+        "verify_market_data",
+        fake_verify_market_data,
+    )
+
+    loaded = load_run_config(path)
+
+    assert loaded.data_manifest_entry == expected_entry
+
+
+def _resume_config(
+    *,
+    source_run: str = "source_run",
+) -> dict:
+    config = _valid_config()
+    config["run"]["name"] = "continued_run"
+    config["continuation"] = {
+        "mode": "resume",
+        "source_run": source_run,
+        "checkpoint": "best",
+    }
+
+    return config
+
+
+def _load_without_data_verification(
+    tmp_path: Path,
+    filename: str,
+    config: dict,
+):
+    path = _write_config(
+        tmp_path / filename,
+        config,
+    )
+
+    return load_run_config(
+        path,
+        verify_data=False,
+    )
+
+
+def test_load_run_config_accepts_resume_mode(
+    tmp_path: Path,
+) -> None:
+    loaded = _load_without_data_verification(
+        tmp_path,
+        "resume.yml",
+        _resume_config(),
+    )
+
+    assert loaded.config.continuation.mode == "resume"
+    assert loaded.config.continuation.source_run == "source_run"
+    assert loaded.config.continuation.checkpoint == "best"
+
+
+def test_resume_mode_requires_source_run(
+    tmp_path: Path,
+) -> None:
+    config = _resume_config()
+    del config["continuation"]["source_run"]
+
+    path = _write_config(
+        tmp_path / "missing-source.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="source_run",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_fresh_mode_rejects_resume_fields(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["continuation"]["source_run"] = "other_run"
+
+    path = _write_config(
+        tmp_path / "invalid-fresh.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="source_run",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_resume_rejects_changed_hidden_sizes(
+    tmp_path: Path,
+) -> None:
+    source_config = _valid_config()
+    source_config["run"]["name"] = "source_run"
+
+    current_config = _resume_config()
+    current_config["ppo"]["hidden_sizes"] = [128, 64]
+
+    source = _load_without_data_verification(
+        tmp_path,
+        "source.yml",
+        source_config,
+    )
+    current = _load_without_data_verification(
+        tmp_path,
+        "current.yml",
+        current_config,
+    )
+
+    with pytest.raises(
+        ResumeCompatibilityError,
+        match="ppo.hidden_sizes",
+    ):
+        validate_resume_compatibility(
+            current.config,
+            source.config,
+        )
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "new_value", "expected_message"),
+    [
+        (
+            "environment",
+            "window",
+            80,
+            "environment.window",
+        ),
+        (
+            "environment",
+            "feature_set",
+            "different_features",
+            "environment.feature_set",
+        ),
+        (
+            "environment",
+            "position_side",
+            "long_short",
+            "environment.position_side",
+        ),
+    ],
+)
+def test_resume_rejects_changed_environment_structure(
+    tmp_path: Path,
+    section: str,
+    field: str,
+    new_value: object,
+    expected_message: str,
+) -> None:
+    source_config = _valid_config()
+    source_config["run"]["name"] = "source_run"
+
+    current_config = _resume_config()
+    current_config[section][field] = new_value
+
+    source = _load_without_data_verification(
+        tmp_path,
+        "source.yml",
+        source_config,
+    )
+    current = _load_without_data_verification(
+        tmp_path,
+        "current.yml",
+        current_config,
+    )
+
+    with pytest.raises(
+        ResumeCompatibilityError,
+        match=expected_message,
+    ):
+        validate_resume_compatibility(
+            current.config,
+            source.config,
+        )
+
+
+def test_resume_allows_training_parameter_changes(
+    tmp_path: Path,
+) -> None:
+    source_config = _valid_config()
+    source_config["run"]["name"] = "source_run"
+
+    current_config = _resume_config()
+    current_config["ppo"]["timesteps"] = 5000
+    current_config["ppo"]["learning_rate"] = 0.0001
+    current_config["ppo"]["gamma"] = 0.95
+    current_config["ppo"]["n_steps"] = 512
+    current_config["ppo"]["batch_size"] = 128
+    current_config["environment"]["profit_reward_mult"] = 1.2
+    current_config["evaluation"]["eval_every_steps"] = 1000
+
+    source = _load_without_data_verification(
+        tmp_path,
+        "source.yml",
+        source_config,
+    )
+    current = _load_without_data_verification(
+        tmp_path,
+        "current.yml",
+        current_config,
+    )
+
+    validate_resume_compatibility(
+        current.config,
+        source.config,
+    )
+
+
+def test_resume_rejects_wrong_source_config(
+    tmp_path: Path,
+) -> None:
+    source_config = _valid_config()
+    source_config["run"]["name"] = "different_source"
+
+    current_config = _resume_config(
+        source_run="expected_source",
+    )
+
+    source = _load_without_data_verification(
+        tmp_path,
+        "source.yml",
+        source_config,
+    )
+    current = _load_without_data_verification(
+        tmp_path,
+        "current.yml",
+        current_config,
+    )
+
+    with pytest.raises(
+        ResumeCompatibilityError,
+        match="does not match",
+    ):
+        validate_resume_compatibility(
+            current.config,
+            source.config,
+        )

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Configuration-driven PPO agent training and evaluation"
 requires-python = ">=3.12"
 dependencies = [
+    "numpy>=2,<3",
     "pandas>=2.2,<4",
     "pyarrow>=16,<25",
 ]
@@ -17,8 +18,9 @@ dev = [
     "pytest>=8,<9",
 ]
 
-[tool.setuptools]
-packages = ["train_and_eval"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["train_and_eval*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -28,3 +28,7 @@ data/
 
 # Editable package installation metadata
 *.egg-info/
+
+# Generated market-data validation manifest
+train_and_eval/market_data/manifest.json
+train_and_eval/market_data/manifest.json.tmp

@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from pydantic import (
@@ -31,6 +32,31 @@ from train_and_eval.market_data.load_market_data import (
 SCHEMA_VERSION = 1
 
 SAFE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+HH_MM_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+def parse_hh_mm(value: str) -> int:
+    """Convert a validated HH:MM value to minutes after midnight."""
+    if not HH_MM_PATTERN.fullmatch(value):
+        raise ValueError("must use 24-hour HH:MM format")
+
+    hours, minutes = value.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def validate_timezone(value: str) -> str:
+    """Require a valid IANA time-zone name."""
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as error:
+        raise ValueError(
+            "must be a valid IANA time zone, "
+            "for example America/New_York"
+        ) from error
+
+    return value
 
 
 class RunConfigError(ValueError):
@@ -138,27 +164,41 @@ class DataSection(StrictConfigModel):
 
 class EnvironmentSection(StrictConfigModel):
     window: PositiveInt
-    feature_set: str
+    context: str
     position_side: Literal[
         "long_only",
         "short_only",
         "long_short",
     ]
 
+    market_timezone: str
+    rth_open: str
+    rth_close: str
+
     stake_pln: PositiveFloat
     fee_bps: float = Field(ge=0.0)
+
     swap_bps: float = Field(ge=0.0)
+    swap_time: str
+    swap_timezone: str
+
+    force_close_on_done: bool
 
     reward_scale: PositiveFloat
+
+    # Signed coefficients:
+    # positive values act as penalties;
+    # negative values act as activity bonuses.
     exposure_penalty: float
     turnover_penalty: float
     drawdown_penalty: float
+
     profit_reward_mult: PositiveFloat
     loss_reward_mult: PositiveFloat
 
-    @field_validator("feature_set")
+    @field_validator("context")
     @classmethod
-    def validate_feature_set(cls, value: str) -> str:
+    def validate_context(cls, value: str) -> str:
         if not SAFE_NAME_PATTERN.fullmatch(value):
             raise ValueError(
                 "must contain only letters, digits, dots, "
@@ -166,6 +206,37 @@ class EnvironmentSection(StrictConfigModel):
             )
 
         return value
+
+    @field_validator(
+        "market_timezone",
+        "swap_timezone",
+    )
+    @classmethod
+    def validate_timezone_field(cls, value: str) -> str:
+        return validate_timezone(value)
+
+    @field_validator(
+        "rth_open",
+        "rth_close",
+        "swap_time",
+    )
+    @classmethod
+    def validate_time_field(cls, value: str) -> str:
+        parse_hh_mm(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_rth_hours(self) -> Self:
+        open_minutes = parse_hh_mm(self.rth_open)
+        close_minutes = parse_hh_mm(self.rth_close)
+
+        if close_minutes <= open_minutes:
+            raise ValueError(
+                "rth_close must be later than rth_open "
+                "within the same calendar day"
+            )
+
+        return self
 
 
 class PPOSection(StrictConfigModel):
@@ -225,8 +296,13 @@ class RunConfig(StrictConfigModel):
 
 RESUME_IMMUTABLE_FIELDS = (
     "environment.window",
-    "environment.feature_set",
+    "environment.context",
     "environment.position_side",
+    "environment.market_timezone",
+    "environment.rth_open",
+    "environment.rth_close",
+    "environment.swap_time",
+    "environment.swap_timezone",
     "ppo.hidden_sizes",
 )
 

@@ -30,11 +30,17 @@ def _valid_config() -> dict:
         },
         "environment": {
             "window": 40,
-            "feature_set": "test_features",
+            "context": "baseline_multiscale_v1",
             "position_side": "long_only",
+            "market_timezone": "America/New_York",
+            "rth_open": "09:30",
+            "rth_close": "16:00",
             "stake_pln": 1000.0,
             "fee_bps": 1.0,
             "swap_bps": 3.0,
+            "swap_time": "17:00",
+            "swap_timezone": "America/New_York",
+            "force_close_on_done": True,
             "reward_scale": 1.0,
             "exposure_penalty": 0.0,
             "turnover_penalty": 0.0,
@@ -354,9 +360,9 @@ def test_resume_rejects_changed_hidden_sizes(
         ),
         (
             "environment",
-            "feature_set",
-            "different_features",
-            "environment.feature_set",
+            "context",
+            "different_context",
+            "environment.context",
         ),
         (
             "environment",
@@ -413,6 +419,7 @@ def test_resume_allows_training_parameter_changes(
     current_config["ppo"]["n_steps"] = 512
     current_config["ppo"]["batch_size"] = 128
     current_config["environment"]["profit_reward_mult"] = 1.2
+    current_config["environment"]["force_close_on_done"] = False
     current_config["evaluation"]["eval_every_steps"] = 1000
 
     source = _load_without_data_verification(
@@ -456,6 +463,208 @@ def test_resume_rejects_wrong_source_config(
     with pytest.raises(
         ResumeCompatibilityError,
         match="does not match",
+    ):
+        validate_resume_compatibility(
+            current.config,
+            source.config,
+        )
+
+
+@pytest.mark.parametrize(
+    "position_side",
+    [
+        "long_only",
+        "short_only",
+        "long_short",
+    ],
+)
+def test_config_accepts_all_position_modes(
+    tmp_path: Path,
+    position_side: str,
+) -> None:
+    config = _valid_config()
+    config["environment"]["position_side"] = position_side
+
+    loaded = _load_without_data_verification(
+        tmp_path,
+        f"{position_side}.yml",
+        config,
+    )
+
+    assert loaded.config.environment.position_side == position_side
+
+
+def test_config_accepts_negative_reward_coefficients(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["environment"]["exposure_penalty"] = -0.25
+    config["environment"]["turnover_penalty"] = -0.10
+    config["environment"]["drawdown_penalty"] = -0.05
+
+    loaded = _load_without_data_verification(
+        tmp_path,
+        "negative-coefficients.yml",
+        config,
+    )
+
+    environment = loaded.config.environment
+
+    assert environment.exposure_penalty == -0.25
+    assert environment.turnover_penalty == -0.10
+    assert environment.drawdown_penalty == -0.05
+
+
+def test_config_rejects_weekend_swap_once(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["environment"]["weekend_swap_once"] = True
+
+    path = _write_config(
+        tmp_path / "weekend-swap.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="weekend_swap_once",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "rth_open",
+        "rth_close",
+        "swap_time",
+    ],
+)
+def test_config_rejects_invalid_time(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    config = _valid_config()
+    config["environment"][field] = "25:90"
+
+    path = _write_config(
+        tmp_path / f"invalid-{field}.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="HH:MM",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_config_rejects_invalid_timezone(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["environment"]["swap_timezone"] = "Invalid/Timezone"
+
+    path = _write_config(
+        tmp_path / "invalid-timezone.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="valid IANA time zone",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_config_rejects_rth_close_before_open(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["environment"]["rth_open"] = "16:00"
+    config["environment"]["rth_close"] = "09:30"
+
+    path = _write_config(
+        tmp_path / "invalid-rth.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="rth_close must be later",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "new_value", "expected_message"),
+    [
+        (
+            "market_timezone",
+            "Europe/Paris",
+            "environment.market_timezone",
+        ),
+        (
+            "rth_open",
+            "10:00",
+            "environment.rth_open",
+        ),
+        (
+            "rth_close",
+            "15:30",
+            "environment.rth_close",
+        ),
+        (
+            "swap_time",
+            "18:00",
+            "environment.swap_time",
+        ),
+        (
+            "swap_timezone",
+            "UTC",
+            "environment.swap_timezone",
+        ),
+    ],
+)
+def test_resume_rejects_changed_time_context(
+    tmp_path: Path,
+    field: str,
+    new_value: object,
+    expected_message: str,
+) -> None:
+    source_config = _valid_config()
+    source_config["run"]["name"] = "source_run"
+
+    current_config = _resume_config()
+    current_config["environment"][field] = new_value
+
+    source = _load_without_data_verification(
+        tmp_path,
+        "source-time-context.yml",
+        source_config,
+    )
+    current = _load_without_data_verification(
+        tmp_path,
+        "current-time-context.yml",
+        current_config,
+    )
+
+    with pytest.raises(
+        ResumeCompatibilityError,
+        match=expected_message,
     ):
         validate_resume_compatibility(
             current.config,

@@ -13,12 +13,21 @@ data:
 
 environment:
   window: 40
-  feature_set: v4_short_horizon_drawdown_rebound_context
+  context: baseline_multiscale_v1
   position_side: long_only
+
+  market_timezone: America/New_York
+  rth_open: "09:30"
+  rth_close: "16:00"
 
   stake_pln: 1000.0
   fee_bps: 1.0
+
   swap_bps: 3.0
+  swap_time: "17:00"
+  swap_timezone: America/New_York
+
+  force_close_on_done: true
 
   reward_scale: 1.0
   exposure_penalty: 0.0

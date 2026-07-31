@@ -349,7 +349,6 @@ def test_evaluations_table_contains_required_columns() -> None:
         "net_profit_return",
         "profit_factor",
         "payoff_ratio",
-        "expectancy_return",
         "min_bars_held",
         "avg_bars_held",
         "median_bars_held",

@@ -856,7 +856,6 @@ class Evaluation(Base):
                     AND breakeven_rate IS NULL
                     AND avg_trade_return IS NULL
                     AND median_trade_return IS NULL
-                    AND expectancy_return IS NULL
                     AND min_bars_held IS NULL
                     AND avg_bars_held IS NULL
                     AND median_bars_held IS NULL
@@ -873,7 +872,6 @@ class Evaluation(Base):
                     AND breakeven_rate IS NOT NULL
                     AND avg_trade_return IS NOT NULL
                     AND median_trade_return IS NOT NULL
-                    AND expectancy_return IS NOT NULL
                     AND min_bars_held IS NOT NULL
                     AND avg_bars_held IS NOT NULL
                     AND median_bars_held IS NOT NULL
@@ -1553,13 +1551,6 @@ class Evaluation(Base):
     )
 
     payoff_ratio: Mapped[
-        float | None
-    ] = mapped_column(
-        Float,
-        nullable=True,
-    )
-
-    expectancy_return: Mapped[
         float | None
     ] = mapped_column(
         Float,

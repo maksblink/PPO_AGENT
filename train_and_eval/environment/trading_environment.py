@@ -542,7 +542,7 @@ class TradingEnvironment(
                     self.config.stake_pln
                 )
             ),
-            entry_fee=self.entry_fee_paid,
+            entry_fee=entry_fee,
             close_fee=close_fee,
             swap_cost=swap_cost,
             swap_events=swap_events,

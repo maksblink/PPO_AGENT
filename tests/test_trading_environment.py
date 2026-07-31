@@ -431,3 +431,48 @@ def test_step_after_termination_is_rejected() -> None:
         match="after the episode",
     ):
         environment.step(0)
+
+
+def test_close_event_preserves_entry_fee() -> None:
+    frame = _market_frame(
+        opens=[
+            90.0,
+            95.0,
+            100.0,
+        ],
+        closes=[
+            91.0,
+            96.0,
+            110.0,
+        ],
+    )
+
+    environment = TradingEnvironment(
+        frame,
+        _config(
+            force_close_on_done=True,
+            fee_bps=10.0,
+        ),
+    )
+
+    environment.reset()
+    environment.step(1)
+
+    close_event = next(
+        event
+        for event in environment.trade_events
+        if event["event"] == "CLOSE_LONG"
+    )
+
+    assert close_event["gross_return"] == pytest.approx(
+        0.10
+    )
+    assert close_event["entry_fee"] == pytest.approx(
+        0.001
+    )
+    assert close_event["close_fee"] == pytest.approx(
+        0.001
+    )
+    assert close_event["net_return"] == pytest.approx(
+        0.098
+    )

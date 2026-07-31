@@ -163,6 +163,47 @@ class DataSection(StrictConfigModel):
         return path.as_posix()
 
 
+
+class TrainingSection(StrictConfigModel):
+    """
+    Define training duration using exactly one selected unit.
+
+    data_epochs:
+        Complete chronological passes through the TRAIN split.
+
+    timesteps:
+        Exact number of environment step() calls.
+    """
+
+    duration_unit: Literal[
+        "data_epochs",
+        "timesteps",
+    ]
+
+    duration_amount: int = Field(
+        strict=True,
+        ge=1,
+    )
+
+    def resolve_training_steps(
+        self,
+        *,
+        steps_per_data_epoch: int,
+    ) -> int:
+        if steps_per_data_epoch <= 0:
+            raise ValueError(
+                "steps_per_data_epoch must be greater than zero"
+            )
+
+        if self.duration_unit == "data_epochs":
+            return (
+                self.duration_amount
+                * steps_per_data_epoch
+            )
+
+        return self.duration_amount
+
+
 class EnvironmentSection(StrictConfigModel):
     window: PositiveInt
     context: str
@@ -248,7 +289,6 @@ class EnvironmentSection(StrictConfigModel):
 
 
 class PPOSection(StrictConfigModel):
-    timesteps: PositiveInt
     device: Literal["auto", "cpu", "cuda"]
 
     hidden_sizes: tuple[PositiveInt, ...] = Field(
@@ -296,6 +336,7 @@ class RunConfig(StrictConfigModel):
     run: RunSection
     continuation: ContinuationSection
     data: DataSection
+    training: TrainingSection
     environment: EnvironmentSection
     ppo: PPOSection
     evaluation: EvaluationSection
@@ -531,6 +572,11 @@ def main() -> int:
         )
 
     print(f"Data: {loaded.config.data.path}")
+    print(
+        "Training duration: "
+        f"{loaded.config.training.duration_amount} "
+        f"{loaded.config.training.duration_unit}"
+    )
 
     if loaded.data_manifest_entry is not None:
         print(

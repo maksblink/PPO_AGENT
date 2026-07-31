@@ -11,6 +11,10 @@ data:
   path: data/NQ_CONTINUOUS_5m_WEEKDAYS_2010-06-07_00-00_2026-06-24_23-55_20260625_234318.parquet
   train_ratio: 0.90
 
+training:
+  duration_unit: data_epochs
+  duration_amount: 1
+
 environment:
   window: 40
   context: baseline_multiscale_v1
@@ -37,7 +41,6 @@ environment:
   loss_reward_mult: 1.0
 
 ppo:
-  timesteps: 500000
   device: cuda
 
   hidden_sizes:

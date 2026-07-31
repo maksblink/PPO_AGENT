@@ -28,6 +28,10 @@ def _valid_config() -> dict:
             "path": "data/market.parquet",
             "train_ratio": 0.9,
         },
+        "training": {
+            "duration_unit": "timesteps",
+            "duration_amount": 1000,
+        },
         "environment": {
             "window": 40,
             "context": "baseline_multiscale_v1",
@@ -49,7 +53,6 @@ def _valid_config() -> dict:
             "loss_reward_mult": 1.0,
         },
         "ppo": {
-            "timesteps": 1000,
             "device": "cpu",
             "hidden_sizes": [64, 64],
             "n_steps": 256,
@@ -451,7 +454,7 @@ def test_resume_allows_training_parameter_changes(
     source_config["run"]["name"] = "source_run"
 
     current_config = _resume_config()
-    current_config["ppo"]["timesteps"] = 5000
+    current_config["training"]["duration_amount"] = 5000
     current_config["ppo"]["learning_rate"] = 0.0001
     current_config["ppo"]["gamma"] = 0.95
     current_config["ppo"]["n_steps"] = 512
@@ -729,3 +732,139 @@ def test_config_rejects_unknown_context(
             path,
             verify_data=False,
         )
+
+
+@pytest.mark.parametrize(
+    ("duration_unit", "duration_amount"),
+    [
+        ("data_epochs", 2),
+        ("timesteps", 500_000),
+    ],
+)
+def test_config_accepts_training_duration_modes(
+    tmp_path: Path,
+    duration_unit: str,
+    duration_amount: int,
+) -> None:
+    config = _valid_config()
+    config["training"] = {
+        "duration_unit": duration_unit,
+        "duration_amount": duration_amount,
+    }
+
+    loaded = _load_without_data_verification(
+        tmp_path,
+        f"{duration_unit}.yml",
+        config,
+    )
+
+    assert (
+        loaded.config.training.duration_unit
+        == duration_unit
+    )
+    assert (
+        loaded.config.training.duration_amount
+        == duration_amount
+    )
+
+
+@pytest.mark.parametrize(
+    "duration_amount",
+    [
+        0,
+        -1,
+        1.5,
+        "2",
+    ],
+)
+def test_config_rejects_invalid_duration_amount(
+    tmp_path: Path,
+    duration_amount: object,
+) -> None:
+    config = _valid_config()
+    config["training"]["duration_amount"] = duration_amount
+
+    path = _write_config(
+        tmp_path / "invalid-duration.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="duration_amount",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_config_rejects_unknown_duration_unit(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["training"]["duration_unit"] = "minutes"
+
+    path = _write_config(
+        tmp_path / "invalid-unit.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="duration_unit",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_ppo_section_rejects_timesteps(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["ppo"]["timesteps"] = 1000
+
+    path = _write_config(
+        tmp_path / "duplicate-duration.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="timesteps",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_training_duration_resolves_exact_steps() -> None:
+    epochs_config = _valid_config()
+    epochs_config["training"] = {
+        "duration_unit": "data_epochs",
+        "duration_amount": 3,
+    }
+
+    timesteps_config = _valid_config()
+    timesteps_config["training"] = {
+        "duration_unit": "timesteps",
+        "duration_amount": 12_345,
+    }
+
+    epochs = run_config_module.RunConfig.model_validate(
+        epochs_config
+    )
+    timesteps = run_config_module.RunConfig.model_validate(
+        timesteps_config
+    )
+
+    assert epochs.training.resolve_training_steps(
+        steps_per_data_epoch=1000,
+    ) == 3000
+
+    assert timesteps.training.resolve_training_steps(
+        steps_per_data_epoch=1000,
+    ) == 12_345

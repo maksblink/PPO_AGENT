@@ -381,19 +381,8 @@ class PPOSection(StrictConfigModel):
 class EvaluationSection(StrictConfigModel):
     eval_every_steps: PositiveInt
     checkpoint_every_steps: PositiveInt
-    best_metric: str
+    best_metric: Literal["balanced_score"]
     early_stop_patience_evals: PositiveInt
-
-    @field_validator("best_metric")
-    @classmethod
-    def validate_best_metric(cls, value: str) -> str:
-        if not SAFE_NAME_PATTERN.fullmatch(value):
-            raise ValueError(
-                "must contain only letters, digits, dots, "
-                "underscores, and hyphens"
-            )
-
-        return value
 
 
 class RunConfig(StrictConfigModel):

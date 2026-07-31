@@ -71,5 +71,5 @@ ppo:
 evaluation:
   eval_every_steps: 50000
   checkpoint_every_steps: 50000
-  best_metric: balanced_score_pct
+  best_metric: balanced_score
   early_stop_patience_evals: 5

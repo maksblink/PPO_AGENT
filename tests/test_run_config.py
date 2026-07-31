@@ -74,7 +74,7 @@ def _valid_config() -> dict:
         "evaluation": {
             "eval_every_steps": 500,
             "checkpoint_every_steps": 500,
-            "best_metric": "balanced_score_pct",
+            "best_metric": "balanced_score",
             "early_stop_patience_evals": 5,
         },
     }

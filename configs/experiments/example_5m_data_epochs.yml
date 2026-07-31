@@ -1,5 +1,4 @@
 config_schema_version: 1
-
 run:
   name: example_5m_data_epochs
   seed: 7
@@ -41,18 +40,33 @@ environment:
   loss_reward_mult: 1.0
 
 ppo:
+  policy: mlp
   device: cuda
 
   hidden_sizes:
     - 64
     - 64
 
+  activation: tanh
+
   n_steps: 2048
   batch_size: 1024
+  n_epochs: 10
+
   learning_rate: 0.0003
+
   gamma: 0.90
+  gae_lambda: 0.95
+
   clip_range: 0.20
+  clip_range_vf: null
+  normalize_advantage: true
+
   ent_coef: 0.0002
+  vf_coef: 0.5
+
+  max_grad_norm: 0.5
+  target_kl: null
 
 evaluation:
   eval_every_steps: 50000

@@ -289,24 +289,90 @@ class EnvironmentSection(StrictConfigModel):
 
 
 class PPOSection(StrictConfigModel):
+    policy: Literal["mlp"]
     device: Literal["auto", "cpu", "cuda"]
 
     hidden_sizes: tuple[PositiveInt, ...] = Field(
         min_length=1,
     )
+    activation: Literal["tanh", "relu"]
 
-    n_steps: PositiveInt
-    batch_size: PositiveInt
+    n_steps: int = Field(
+        strict=True,
+        ge=2,
+    )
+    batch_size: int = Field(
+        strict=True,
+        ge=2,
+    )
+    n_epochs: PositiveInt
+
     learning_rate: PositiveFloat
-    gamma: float = Field(gt=0.0, le=1.0)
-    clip_range: float = Field(gt=0.0, le=1.0)
-    ent_coef: float = Field(ge=0.0)
+
+    gamma: float = Field(
+        gt=0.0,
+        le=1.0,
+    )
+    gae_lambda: float = Field(
+        gt=0.0,
+        le=1.0,
+    )
+
+    clip_range: float = Field(
+        gt=0.0,
+        le=1.0,
+    )
+    clip_range_vf: float | None
+    normalize_advantage: bool
+
+    ent_coef: float = Field(
+        ge=0.0,
+    )
+    vf_coef: float = Field(
+        ge=0.0,
+    )
+
+    max_grad_norm: PositiveFloat
+    target_kl: float | None
+
+    @field_validator("clip_range_vf")
+    @classmethod
+    def validate_clip_range_vf(
+        cls,
+        value: float | None,
+    ) -> float | None:
+        if value is not None and value <= 0.0:
+            raise ValueError(
+                "clip_range_vf must be greater than zero "
+                "or null"
+            )
+
+        return value
+
+    @field_validator("target_kl")
+    @classmethod
+    def validate_target_kl(
+        cls,
+        value: float | None,
+    ) -> float | None:
+        if value is not None and value <= 0.0:
+            raise ValueError(
+                "target_kl must be greater than zero "
+                "or null"
+            )
+
+        return value
 
     @model_validator(mode="after")
     def validate_rollout_sizes(self) -> Self:
         if self.batch_size > self.n_steps:
             raise ValueError(
                 "batch_size cannot be greater than n_steps"
+            )
+
+        if self.n_steps % self.batch_size != 0:
+            raise ValueError(
+                "batch_size must divide n_steps exactly"
             )
 
         return self
@@ -352,7 +418,9 @@ RESUME_IMMUTABLE_FIELDS = (
     "environment.rth_close",
     "environment.swap_time",
     "environment.swap_timezone",
+    "ppo.policy",
     "ppo.hidden_sizes",
+    "ppo.activation",
 )
 
 

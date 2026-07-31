@@ -18,6 +18,13 @@ from train_and_eval.evaluation.persistence import (
     fail_evaluation,
     mark_evaluation_running,
 )
+from train_and_eval.evaluation.service import (
+    CheckpointEvaluationSource,
+    EvaluationServiceError,
+    EvaluationSourceMismatchError,
+    EvaluationSourceNotFoundError,
+    evaluate_run_validation_checkpoint,
+)
 from train_and_eval.evaluation.runner import (
     EvaluationPolicyTrace,
     EvaluationRunResult,
@@ -26,6 +33,11 @@ from train_and_eval.evaluation.runner import (
 )
 
 __all__ = [
+    "evaluate_run_validation_checkpoint",
+    "EvaluationSourceNotFoundError",
+    "EvaluationSourceMismatchError",
+    "EvaluationServiceError",
+    "CheckpointEvaluationSource",
     "EvaluationCheckpointNotFoundError",
     "EvaluationIdentityError",
     "EvaluationMetrics",

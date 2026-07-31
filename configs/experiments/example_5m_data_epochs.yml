@@ -1,7 +1,7 @@
 schema_version: 1
 
 run:
-  name: example_5m
+  name: example_5m_data_epochs
   seed: 7
 
 continuation:

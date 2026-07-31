@@ -10,7 +10,6 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum as SQLAlchemyEnum,
-    ForeignKey,
     Integer,
     MetaData,
     Numeric,
@@ -25,7 +24,6 @@ from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
     mapped_column,
-    relationship,
 )
 
 
@@ -90,30 +88,6 @@ class Run(Base):
         UniqueConstraint(
             "name",
             name="uq_runs_name",
-        ),
-        CheckConstraint(
-            """
-            (
-                continuation_mode = 'fresh'
-                AND source_run_id IS NULL
-                AND source_checkpoint IS NULL
-            )
-            OR
-            (
-                continuation_mode = 'resume'
-                AND source_run_id IS NOT NULL
-                AND source_checkpoint IS NOT NULL
-                AND length(trim(source_checkpoint)) > 0
-            )
-            """,
-            name="continuation_fields",
-        ),
-        CheckConstraint(
-            """
-            source_run_id IS NULL
-            OR source_run_id <> id
-            """,
-            name="source_run_not_self",
         ),
         CheckConstraint(
             "duration_amount >= 1",
@@ -193,23 +167,6 @@ class Run(Base):
         nullable=False,
     )
 
-    source_run_id: Mapped[int | None] = mapped_column(
-        BigInteger,
-        ForeignKey(
-            "runs.id",
-            ondelete="RESTRICT",
-        ),
-        nullable=True,
-        index=True,
-    )
-
-    source_checkpoint: Mapped[
-        str | None
-    ] = mapped_column(
-        String(128),
-        nullable=True,
-    )
-
     description: Mapped[str] = mapped_column(
         Text,
         nullable=False,
@@ -268,6 +225,11 @@ class Run(Base):
     )
 
     config_sha256: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    normalized_config_sha256: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
     )
@@ -373,23 +335,6 @@ class Run(Base):
     ] = mapped_column(
         Text,
         nullable=True,
-    )
-
-    source_run: Mapped[
-        Run | None
-    ] = relationship(
-        "Run",
-        remote_side="Run.id",
-        back_populates="resumed_runs",
-        foreign_keys=[source_run_id],
-    )
-
-    resumed_runs: Mapped[
-        list[Run]
-    ] = relationship(
-        "Run",
-        back_populates="source_run",
-        foreign_keys="Run.source_run_id",
     )
 
     def update_description(

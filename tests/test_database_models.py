@@ -19,8 +19,6 @@ def test_runs_table_contains_required_columns() -> None:
         "name",
         "status",
         "continuation_mode",
-        "source_run_id",
-        "source_checkpoint",
         "description",
         "created_at",
         "modified_at",
@@ -31,6 +29,7 @@ def test_runs_table_contains_required_columns() -> None:
         "config_schema_version",
         "seed",
         "config_sha256",
+        "normalized_config_sha256",
         "raw_config_yaml",
         "normalized_config_json",
         "data_path",
@@ -62,8 +61,6 @@ def test_runs_table_has_named_safety_constraints() -> None:
     expected_names = {
         "pk_runs",
         "uq_runs_name",
-        "ck_runs_continuation_fields",
-        "ck_runs_source_run_not_self",
         "ck_runs_duration_amount_positive",
         "ck_runs_train_rows_positive",
         "ck_runs_validation_rows_positive",
@@ -79,15 +76,6 @@ def test_runs_table_has_named_safety_constraints() -> None:
     )
 
 
-def test_source_run_uses_self_referencing_foreign_key() -> None:
-    table = Base.metadata.tables["runs"]
-    foreign_keys = list(
-        table.c.source_run_id.foreign_keys
-    )
-
-    assert len(foreign_keys) == 1
-    assert foreign_keys[0].target_fullname == "runs.id"
-    assert foreign_keys[0].ondelete == "RESTRICT"
 
 
 def test_description_has_database_default() -> None:
@@ -164,3 +152,13 @@ def test_update_description_rejects_naive_timestamp() -> None:
                 0,
             ),
         )
+
+
+def test_normalized_config_sha256_is_required() -> None:
+    column = Base.metadata.tables[
+        "runs"
+    ].c.normalized_config_sha256
+
+    assert column.nullable is False
+    assert column.type.length == 64
+

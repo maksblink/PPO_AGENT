@@ -1,4 +1,4 @@
-schema_version: 1
+config_schema_version: 1
 
 run:
   name: example_5m_data_epochs

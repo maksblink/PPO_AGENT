@@ -16,7 +16,7 @@ from train_and_eval.run_config import (
 
 def _valid_config() -> dict:
     return {
-        "schema_version": 1,
+        "config_schema_version": 1,
         "run": {
             "name": "test_run",
             "seed": 7,
@@ -103,7 +103,7 @@ def test_load_run_config_accepts_valid_config(
     assert loaded.config.run.name == "test_run"
     assert loaded.config.ppo.hidden_sizes == (64, 64)
     assert len(loaded.sha256) == 64
-    assert '"schema_version":1' in loaded.normalized_json
+    assert '"config_schema_version":1' in loaded.normalized_json
 
 
 def test_load_run_config_rejects_unknown_field(
@@ -868,3 +868,28 @@ def test_training_duration_resolves_exact_steps() -> None:
     assert timesteps.training.resolve_training_steps(
         steps_per_data_epoch=1000,
     ) == 12_345
+
+
+def test_config_rejects_legacy_schema_version_name(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+
+    config["schema_version"] = config.pop(
+        "config_schema_version"
+    )
+
+    path = _write_config(
+        tmp_path / "legacy-schema-version.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="config_schema_version|schema_version",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+

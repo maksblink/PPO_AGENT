@@ -331,7 +331,7 @@ class EvaluationSection(StrictConfigModel):
 
 
 class RunConfig(StrictConfigModel):
-    schema_version: Literal[SCHEMA_VERSION]
+    config_schema_version: Literal[SCHEMA_VERSION]
 
     run: RunSection
     continuation: ContinuationSection

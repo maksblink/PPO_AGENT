@@ -7,10 +7,10 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     CheckConstraint,
     DateTime,
     Enum as SQLAlchemyEnum,
+    Float,
     ForeignKey,
     Integer,
     Index,
@@ -98,6 +98,20 @@ class EvaluationDataScope(str, enum.Enum):
     RUN_VALIDATION = "run_validation"
     EXTENDED_OUT_OF_SAMPLE = "extended_out_of_sample"
     CUSTOM_RANGE = "custom_range"
+
+
+
+class EvaluationPolicyMode(str, enum.Enum):
+    DETERMINISTIC_ARGMAX = "deterministic_argmax"
+    STOCHASTIC_SAMPLE = "stochastic_sample"
+    PROBABILITY_THRESHOLD = "probability_threshold"
+
+
+class EvaluationCurrentStreakType(str, enum.Enum):
+    NONE = "none"
+    WIN = "win"
+    LOSS = "loss"
+    BREAKEVEN = "breakeven"
 
 
 def utc_now() -> datetime:
@@ -601,6 +615,445 @@ class Evaluation(Base):
 
     __table_args__ = (
         CheckConstraint(
+            """
+            (
+                policy_mode IN (
+                    'deterministic_argmax',
+                    'stochastic_sample'
+                )
+                AND threshold_action IS NULL
+                AND probability_threshold IS NULL
+            )
+            OR
+            (
+                policy_mode = 'probability_threshold'
+                AND threshold_action IS NOT NULL
+                AND threshold_action >= 0
+                AND probability_threshold IS NOT NULL
+                AND probability_threshold >= 0.0
+                AND probability_threshold <= 1.0
+            )
+            """,
+            name="policy_fields",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                agent_return IS NOT NULL
+                AND always_long_return IS NOT NULL
+                AND always_short_return IS NOT NULL
+                AND agent_vs_always_long_return IS NOT NULL
+                AND balanced_score IS NOT NULL
+
+                AND agent_max_drawdown IS NOT NULL
+                AND always_long_max_drawdown IS NOT NULL
+                AND always_short_max_drawdown IS NOT NULL
+                AND drawdown_improvement IS NOT NULL
+
+                AND net_exposure IS NOT NULL
+                AND long_exposure IS NOT NULL
+                AND short_exposure IS NOT NULL
+                AND flat_exposure IS NOT NULL
+                AND market_exposure IS NOT NULL
+
+                AND trade_events_total IS NOT NULL
+                AND trade_event_rate IS NOT NULL
+                AND round_trips IS NOT NULL
+                AND round_trip_rate IS NOT NULL
+
+                AND winning_trades IS NOT NULL
+                AND losing_trades IS NOT NULL
+                AND breakeven_trades IS NOT NULL
+                AND long_round_trips IS NOT NULL
+                AND short_round_trips IS NOT NULL
+
+                AND open_long_count IS NOT NULL
+                AND open_short_count IS NOT NULL
+                AND close_long_count IS NOT NULL
+                AND close_short_count IS NOT NULL
+                AND swap_events IS NOT NULL
+
+                AND gross_profit_return IS NOT NULL
+                AND gross_loss_return IS NOT NULL
+                AND net_profit_return IS NOT NULL
+
+                AND max_consecutive_wins IS NOT NULL
+                AND max_consecutive_losses IS NOT NULL
+                AND current_streak_type IS NOT NULL
+                AND current_streak IS NOT NULL
+
+                AND total_fee_return IS NOT NULL
+                AND total_swap_return IS NOT NULL
+                AND total_cost_return IS NOT NULL
+
+                AND cumulative_shaped_reward IS NOT NULL
+                AND open_position_return_at_end IS NOT NULL
+            )
+            """,
+            name="completed_core_metrics",
+        ),
+        CheckConstraint(
+            """
+            (agent_max_drawdown IS NULL
+                OR agent_max_drawdown <= 0.0)
+            AND
+            (always_long_max_drawdown IS NULL
+                OR always_long_max_drawdown <= 0.0)
+            AND
+            (always_short_max_drawdown IS NULL
+                OR always_short_max_drawdown <= 0.0)
+
+            AND
+            (net_exposure IS NULL
+                OR net_exposure BETWEEN -1.0 AND 1.0)
+            AND
+            (long_exposure IS NULL
+                OR long_exposure BETWEEN 0.0 AND 1.0)
+            AND
+            (short_exposure IS NULL
+                OR short_exposure BETWEEN 0.0 AND 1.0)
+            AND
+            (flat_exposure IS NULL
+                OR flat_exposure BETWEEN 0.0 AND 1.0)
+            AND
+            (market_exposure IS NULL
+                OR market_exposure BETWEEN 0.0 AND 1.0)
+
+            AND
+            (trade_event_rate IS NULL
+                OR trade_event_rate >= 0.0)
+            AND
+            (round_trip_rate IS NULL
+                OR round_trip_rate >= 0.0)
+
+            AND
+            (win_rate IS NULL
+                OR win_rate BETWEEN 0.0 AND 1.0)
+            AND
+            (loss_rate IS NULL
+                OR loss_rate BETWEEN 0.0 AND 1.0)
+            AND
+            (breakeven_rate IS NULL
+                OR breakeven_rate BETWEEN 0.0 AND 1.0)
+            AND
+            (long_win_rate IS NULL
+                OR long_win_rate BETWEEN 0.0 AND 1.0)
+            AND
+            (short_win_rate IS NULL
+                OR short_win_rate BETWEEN 0.0 AND 1.0)
+
+            AND
+            (avg_win_return IS NULL
+                OR avg_win_return > 0.0)
+            AND
+            (avg_loss_return IS NULL
+                OR avg_loss_return < 0.0)
+            AND
+            (largest_win_return IS NULL
+                OR largest_win_return > 0.0)
+            AND
+            (largest_loss_return IS NULL
+                OR largest_loss_return < 0.0)
+
+            AND
+            (gross_profit_return IS NULL
+                OR gross_profit_return >= 0.0)
+            AND
+            (gross_loss_return IS NULL
+                OR gross_loss_return <= 0.0)
+            AND
+            (profit_factor IS NULL
+                OR profit_factor >= 0.0)
+            AND
+            (payoff_ratio IS NULL
+                OR payoff_ratio >= 0.0)
+            """,
+            name="metric_ranges",
+        ),
+        CheckConstraint(
+            """
+            (trade_events_total IS NULL
+                OR trade_events_total >= 0)
+            AND
+            (round_trips IS NULL
+                OR round_trips >= 0)
+            AND
+            (winning_trades IS NULL
+                OR winning_trades >= 0)
+            AND
+            (losing_trades IS NULL
+                OR losing_trades >= 0)
+            AND
+            (breakeven_trades IS NULL
+                OR breakeven_trades >= 0)
+            AND
+            (long_round_trips IS NULL
+                OR long_round_trips >= 0)
+            AND
+            (short_round_trips IS NULL
+                OR short_round_trips >= 0)
+            AND
+            (open_long_count IS NULL
+                OR open_long_count >= 0)
+            AND
+            (open_short_count IS NULL
+                OR open_short_count >= 0)
+            AND
+            (close_long_count IS NULL
+                OR close_long_count >= 0)
+            AND
+            (close_short_count IS NULL
+                OR close_short_count >= 0)
+            AND
+            (swap_events IS NULL
+                OR swap_events >= 0)
+            AND
+            (min_bars_held IS NULL
+                OR min_bars_held >= 1)
+            AND
+            (max_bars_held IS NULL
+                OR max_bars_held >= 1)
+            AND
+            (max_consecutive_wins IS NULL
+                OR max_consecutive_wins >= 0)
+            AND
+            (max_consecutive_losses IS NULL
+                OR max_consecutive_losses >= 0)
+            AND
+            (current_streak IS NULL
+                OR current_streak >= 0)
+            """,
+            name="metric_counts_nonnegative",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                round_trips =
+                    winning_trades
+                    + losing_trades
+                    + breakeven_trades
+                AND
+                round_trips =
+                    long_round_trips
+                    + short_round_trips
+            )
+            """,
+            name="trade_count_consistency",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                (
+                    round_trips = 0
+                    AND win_rate IS NULL
+                    AND loss_rate IS NULL
+                    AND breakeven_rate IS NULL
+                    AND avg_trade_return IS NULL
+                    AND median_trade_return IS NULL
+                    AND expectancy_return IS NULL
+                    AND min_bars_held IS NULL
+                    AND avg_bars_held IS NULL
+                    AND median_bars_held IS NULL
+                    AND max_bars_held IS NULL
+                    AND avg_fee_per_trade_return IS NULL
+                    AND avg_swap_per_trade_return IS NULL
+                    AND avg_cost_per_trade_return IS NULL
+                )
+                OR
+                (
+                    round_trips > 0
+                    AND win_rate IS NOT NULL
+                    AND loss_rate IS NOT NULL
+                    AND breakeven_rate IS NOT NULL
+                    AND avg_trade_return IS NOT NULL
+                    AND median_trade_return IS NOT NULL
+                    AND expectancy_return IS NOT NULL
+                    AND min_bars_held IS NOT NULL
+                    AND avg_bars_held IS NOT NULL
+                    AND median_bars_held IS NOT NULL
+                    AND max_bars_held IS NOT NULL
+                    AND avg_fee_per_trade_return IS NOT NULL
+                    AND avg_swap_per_trade_return IS NOT NULL
+                    AND avg_cost_per_trade_return IS NOT NULL
+                )
+            )
+            """,
+            name="round_trip_metric_nullability",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                (
+                    long_round_trips = 0
+                    AND long_win_rate IS NULL
+                    AND long_avg_trade_return IS NULL
+                    AND long_median_trade_return IS NULL
+                )
+                OR
+                (
+                    long_round_trips > 0
+                    AND long_win_rate IS NOT NULL
+                    AND long_avg_trade_return IS NOT NULL
+                    AND long_median_trade_return IS NOT NULL
+                )
+            )
+            """,
+            name="long_metric_nullability",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                (
+                    short_round_trips = 0
+                    AND short_win_rate IS NULL
+                    AND short_avg_trade_return IS NULL
+                    AND short_median_trade_return IS NULL
+                )
+                OR
+                (
+                    short_round_trips > 0
+                    AND short_win_rate IS NOT NULL
+                    AND short_avg_trade_return IS NOT NULL
+                    AND short_median_trade_return IS NOT NULL
+                )
+            )
+            """,
+            name="short_metric_nullability",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                (
+                    winning_trades = 0
+                    AND avg_win_return IS NULL
+                    AND largest_win_return IS NULL
+                    AND avg_win_streak IS NULL
+                    AND max_consecutive_wins = 0
+                )
+                OR
+                (
+                    winning_trades > 0
+                    AND avg_win_return IS NOT NULL
+                    AND largest_win_return IS NOT NULL
+                    AND avg_win_streak IS NOT NULL
+                    AND max_consecutive_wins >= 1
+                )
+            )
+            """,
+            name="win_metric_nullability",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                (
+                    losing_trades = 0
+                    AND avg_loss_return IS NULL
+                    AND largest_loss_return IS NULL
+                    AND avg_loss_streak IS NULL
+                    AND max_consecutive_losses = 0
+                )
+                OR
+                (
+                    losing_trades > 0
+                    AND avg_loss_return IS NOT NULL
+                    AND largest_loss_return IS NOT NULL
+                    AND avg_loss_streak IS NOT NULL
+                    AND max_consecutive_losses >= 1
+                )
+            )
+            """,
+            name="loss_metric_nullability",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                (
+                    losing_trades = 0
+                    AND profit_factor IS NULL
+                )
+                OR
+                (
+                    losing_trades > 0
+                    AND profit_factor IS NOT NULL
+                )
+            )
+            """,
+            name="profit_factor_nullability",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                (
+                    winning_trades > 0
+                    AND losing_trades > 0
+                    AND payoff_ratio IS NOT NULL
+                )
+                OR
+                (
+                    (
+                        winning_trades = 0
+                        OR losing_trades = 0
+                    )
+                    AND payoff_ratio IS NULL
+                )
+            )
+            """,
+            name="payoff_ratio_nullability",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            round_trips = 0
+            OR
+            (
+                min_bars_held <= avg_bars_held
+                AND avg_bars_held <= max_bars_held
+                AND min_bars_held <= median_bars_held
+                AND median_bars_held <= max_bars_held
+            )
+            """,
+            name="holding_period_order",
+        ),
+        CheckConstraint(
+            """
+            status <> 'completed'
+            OR
+            (
+                (
+                    round_trips = 0
+                    AND current_streak_type = 'none'
+                    AND current_streak = 0
+                )
+                OR
+                (
+                    round_trips > 0
+                    AND current_streak_type <> 'none'
+                    AND current_streak >= 1
+                )
+            )
+            """,
+            name="streak_consistency",
+        ),
+        CheckConstraint(
             "data_rows >= 1",
             name="data_rows_positive",
         ),
@@ -755,9 +1208,32 @@ class Evaluation(Base):
         nullable=False,
     )
 
-    deterministic: Mapped[bool] = mapped_column(
-        Boolean,
+    policy_mode: Mapped[
+        EvaluationPolicyMode
+    ] = mapped_column(
+        SQLAlchemyEnum(
+            EvaluationPolicyMode,
+            name="evaluation_policy_mode",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
         nullable=False,
+    )
+
+    threshold_action: Mapped[
+        int | None
+    ] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    probability_threshold: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
     )
 
     seed: Mapped[int] = mapped_column(
@@ -829,6 +1305,482 @@ class Evaluation(Base):
         nullable=False,
         default=0,
         server_default=text("0"),
+    )
+
+    agent_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    always_long_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    always_short_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    agent_vs_always_long_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    balanced_score: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    agent_max_drawdown: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    always_long_max_drawdown: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    always_short_max_drawdown: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    drawdown_improvement: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    net_exposure: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    long_exposure: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    short_exposure: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    flat_exposure: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    market_exposure: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    trade_event_rate: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    round_trip_rate: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    win_rate: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    loss_rate: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    breakeven_rate: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    long_win_rate: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    short_win_rate: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_win_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_loss_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    median_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    long_avg_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    short_avg_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    long_median_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    short_median_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    largest_win_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    largest_loss_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    gross_profit_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    gross_loss_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    net_profit_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    profit_factor: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    payoff_ratio: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    expectancy_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_bars_held: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    median_bars_held: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_win_streak: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_loss_streak: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    total_fee_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    total_swap_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    total_cost_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_fee_per_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_swap_per_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    avg_cost_per_trade_return: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    cumulative_shaped_reward: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    open_position_return_at_end: Mapped[
+        float | None
+    ] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    trade_events_total: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    round_trips: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    winning_trades: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    losing_trades: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    breakeven_trades: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    long_round_trips: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    short_round_trips: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    open_long_count: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    open_short_count: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    close_long_count: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    close_short_count: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    swap_events: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    min_bars_held: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    max_bars_held: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    max_consecutive_wins: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    max_consecutive_losses: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    current_streak: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        nullable=True,
+    )
+
+    current_streak_type: Mapped[
+        EvaluationCurrentStreakType | None
+    ] = mapped_column(
+        SQLAlchemyEnum(
+            EvaluationCurrentStreakType,
+            name="evaluation_current_streak_type",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(

@@ -274,12 +274,14 @@ def test_checkpoint_save_reasons_are_explicit() -> None:
 def test_evaluations_table_contains_required_columns() -> None:
     table = Base.metadata.tables["evaluations"]
 
-    assert set(table.columns.keys()) == {
+    expected_columns = {
         "id",
         "checkpoint_id",
         "status",
         "trigger",
-        "deterministic",
+        "policy_mode",
+        "threshold_action",
+        "probability_threshold",
         "seed",
         "data_scope",
         "data_path",
@@ -299,7 +301,76 @@ def test_evaluations_table_contains_required_columns() -> None:
         "git_branch",
         "error_type",
         "error_message",
+        "agent_return",
+        "always_long_return",
+        "always_short_return",
+        "agent_vs_always_long_return",
+        "balanced_score",
+        "agent_max_drawdown",
+        "always_long_max_drawdown",
+        "always_short_max_drawdown",
+        "drawdown_improvement",
+        "net_exposure",
+        "long_exposure",
+        "short_exposure",
+        "flat_exposure",
+        "market_exposure",
+        "trade_events_total",
+        "trade_event_rate",
+        "round_trips",
+        "round_trip_rate",
+        "winning_trades",
+        "losing_trades",
+        "breakeven_trades",
+        "long_round_trips",
+        "short_round_trips",
+        "open_long_count",
+        "open_short_count",
+        "close_long_count",
+        "close_short_count",
+        "swap_events",
+        "win_rate",
+        "loss_rate",
+        "breakeven_rate",
+        "long_win_rate",
+        "short_win_rate",
+        "avg_trade_return",
+        "avg_win_return",
+        "avg_loss_return",
+        "median_trade_return",
+        "long_avg_trade_return",
+        "short_avg_trade_return",
+        "long_median_trade_return",
+        "short_median_trade_return",
+        "largest_win_return",
+        "largest_loss_return",
+        "gross_profit_return",
+        "gross_loss_return",
+        "net_profit_return",
+        "profit_factor",
+        "payoff_ratio",
+        "expectancy_return",
+        "min_bars_held",
+        "avg_bars_held",
+        "median_bars_held",
+        "max_bars_held",
+        "max_consecutive_wins",
+        "max_consecutive_losses",
+        "avg_win_streak",
+        "avg_loss_streak",
+        "current_streak_type",
+        "current_streak",
+        "total_fee_return",
+        "total_swap_return",
+        "total_cost_return",
+        "avg_fee_per_trade_return",
+        "avg_swap_per_trade_return",
+        "avg_cost_per_trade_return",
+        "cumulative_shaped_reward",
+        "open_position_return_at_end",
     }
+
+    assert set(table.columns.keys()) == expected_columns
 
 
 def test_evaluations_table_has_required_constraints() -> None:
@@ -312,6 +383,20 @@ def test_evaluations_table_has_required_constraints() -> None:
 
     expected_names = {
         "pk_evaluations",
+        "ck_evaluations_policy_fields",
+        "ck_evaluations_completed_core_metrics",
+        "ck_evaluations_metric_ranges",
+        "ck_evaluations_metric_counts_nonnegative",
+        "ck_evaluations_trade_count_consistency",
+        "ck_evaluations_round_trip_metric_nullability",
+        "ck_evaluations_long_metric_nullability",
+        "ck_evaluations_short_metric_nullability",
+        "ck_evaluations_win_metric_nullability",
+        "ck_evaluations_loss_metric_nullability",
+        "ck_evaluations_profit_factor_nullability",
+        "ck_evaluations_payoff_ratio_nullability",
+        "ck_evaluations_holding_period_order",
+        "ck_evaluations_streak_consistency",
         "ck_evaluations_data_rows_positive",
         "ck_evaluations_start_index_nonnegative",
         "ck_evaluations_range_nonempty",
@@ -364,7 +449,9 @@ def test_evaluations_do_not_duplicate_run_id() -> None:
 
 def test_evaluation_enum_values_are_explicit() -> None:
     from train_and_eval.database.models import (
+        EvaluationCurrentStreakType,
         EvaluationDataScope,
+        EvaluationPolicyMode,
         EvaluationStatus,
         EvaluationTrigger,
     )
@@ -397,3 +484,100 @@ def test_evaluation_enum_values_are_explicit() -> None:
         "extended_out_of_sample",
         "custom_range",
     }
+
+    assert {
+        value.value
+        for value in EvaluationPolicyMode
+    } == {
+        "deterministic_argmax",
+        "stochastic_sample",
+        "probability_threshold",
+    }
+
+    assert {
+        value.value
+        for value in EvaluationCurrentStreakType
+    } == {
+        "none",
+        "win",
+        "loss",
+        "breakeven",
+    }
+
+
+def test_policy_mode_replaces_deterministic_column() -> None:
+    table = Base.metadata.tables["evaluations"]
+
+    assert "deterministic" not in table.columns
+    assert table.c.policy_mode.nullable is False
+    assert table.c.threshold_action.nullable is True
+    assert table.c.probability_threshold.nullable is True
+
+
+def test_evaluation_metric_columns_are_nullable() -> None:
+    table = Base.metadata.tables["evaluations"]
+
+    metric_names = {
+        "agent_return",
+        "balanced_score",
+        "round_trips",
+        "win_rate",
+        "profit_factor",
+        "min_bars_held",
+        "avg_bars_held",
+        "current_streak_type",
+        "cumulative_shaped_reward",
+    }
+
+    assert all(
+        table.c[name].nullable
+        for name in metric_names
+    )
+
+
+def test_evaluation_count_metrics_use_bigint() -> None:
+    from sqlalchemy import BigInteger, Integer
+
+    table = Base.metadata.tables["evaluations"]
+
+    bigint_names = {
+        "trade_events_total",
+        "round_trips",
+        "winning_trades",
+        "min_bars_held",
+        "max_bars_held",
+        "current_streak",
+    }
+
+    assert all(
+        isinstance(table.c[name].type, BigInteger)
+        for name in bigint_names
+    )
+
+    assert isinstance(
+        table.c.threshold_action.type,
+        Integer,
+    )
+
+
+def test_evaluation_return_metrics_use_float() -> None:
+    from sqlalchemy import Float
+
+    table = Base.metadata.tables["evaluations"]
+
+    float_names = {
+        "agent_return",
+        "agent_max_drawdown",
+        "market_exposure",
+        "trade_event_rate",
+        "avg_trade_return",
+        "profit_factor",
+        "avg_bars_held",
+        "cumulative_shaped_reward",
+    }
+
+    assert all(
+        isinstance(table.c[name].type, Float)
+        for name in float_names
+    )
+

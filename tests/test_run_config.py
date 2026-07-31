@@ -360,12 +360,6 @@ def test_resume_rejects_changed_hidden_sizes(
         ),
         (
             "environment",
-            "context",
-            "different_context",
-            "environment.context",
-        ),
-        (
-            "environment",
             "position_side",
             "long_short",
             "environment.position_side",
@@ -399,6 +393,50 @@ def test_resume_rejects_changed_environment_structure(
     with pytest.raises(
         ResumeCompatibilityError,
         match=expected_message,
+    ):
+        validate_resume_compatibility(
+            current.config,
+            source.config,
+        )
+
+
+
+
+def test_resume_rejects_changed_registered_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Resume compatibility must also be tested between two context names
+    # that are both valid and registered.
+    monkeypatch.setattr(
+        run_config_module,
+        "AVAILABLE_CONTEXTS",
+        (
+            "baseline_multiscale_v1",
+            "different_context",
+        ),
+    )
+
+    source_config = _valid_config()
+    source_config["run"]["name"] = "source_run"
+
+    current_config = _resume_config()
+    current_config["environment"]["context"] = "different_context"
+
+    source = _load_without_data_verification(
+        tmp_path,
+        "source-context.yml",
+        source_config,
+    )
+    current = _load_without_data_verification(
+        tmp_path,
+        "current-context.yml",
+        current_config,
+    )
+
+    with pytest.raises(
+        ResumeCompatibilityError,
+        match="environment.context",
     ):
         validate_resume_compatibility(
             current.config,
@@ -669,4 +707,25 @@ def test_resume_rejects_changed_time_context(
         validate_resume_compatibility(
             current.config,
             source.config,
+        )
+
+
+def test_config_rejects_unknown_context(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["environment"]["context"] = "unknown_context"
+
+    path = _write_config(
+        tmp_path / "unknown-context.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="unknown context",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
         )

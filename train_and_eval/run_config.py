@@ -22,6 +22,7 @@ from pydantic import (
     model_validator,
 )
 
+from train_and_eval.environment.contexts import AVAILABLE_CONTEXTS
 from train_and_eval.market_data.load_market_data import (
     DATA_DIRECTORY,
     MANIFEST_PATH,
@@ -203,6 +204,13 @@ class EnvironmentSection(StrictConfigModel):
             raise ValueError(
                 "must contain only letters, digits, dots, "
                 "underscores, and hyphens"
+            )
+
+        if value not in AVAILABLE_CONTEXTS:
+            available = ", ".join(AVAILABLE_CONTEXTS)
+            raise ValueError(
+                f"unknown context {value!r}; "
+                f"available contexts: {available}"
             )
 
         return value

@@ -15,12 +15,20 @@ from train_and_eval.ppo.checkpoints import (
     load_persisted_ppo_checkpoint,
     persist_ppo_checkpoint,
 )
+from train_and_eval.ppo.policy import (
+    PPOPolicyDecision,
+    PPOPolicySelectionError,
+    PPOPolicySelector,
+)
 
 __all__ = [
     "PPOAdapterError",
     "PPOCheckpointFileError",
     "PPOCheckpointIntegrationError",
     "PPOCheckpointStepMismatchError",
+    "PPOPolicyDecision",
+    "PPOPolicySelectionError",
+    "PPOPolicySelector",
     "PolicyDevice",
     "create_ppo_model",
     "load_persisted_ppo_checkpoint",

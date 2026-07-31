@@ -627,8 +627,10 @@ class Evaluation(Base):
             OR
             (
                 policy_mode = 'probability_threshold'
-                AND threshold_action IS NOT NULL
-                AND threshold_action >= 0
+                AND (
+                    threshold_action IS NULL
+                    OR threshold_action = 1
+                )
                 AND probability_threshold IS NOT NULL
                 AND probability_threshold >= 0.0
                 AND probability_threshold <= 1.0

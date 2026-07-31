@@ -580,3 +580,31 @@ def test_evaluation_return_metrics_use_float() -> None:
         for name in float_names
     )
 
+
+
+def test_evaluation_policy_fields_allows_dynamic_threshold_action() -> None:
+    from sqlalchemy import CheckConstraint
+
+    from train_and_eval.database.models import Evaluation
+
+    policy_constraint = next(
+        constraint
+        for constraint in Evaluation.__table__.constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and "policy_fields" in str(constraint.name)
+        )
+    )
+
+    sql = " ".join(
+        str(policy_constraint.sqltext)
+        .lower()
+        .split()
+    )
+
+    assert (
+        "threshold_action is null "
+        "or threshold_action = 1"
+    ) in sql
+
+    assert "threshold_action >= 0" not in sql

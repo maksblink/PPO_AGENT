@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum as SQLAlchemyEnum,
@@ -76,6 +77,27 @@ class CheckpointSaveReason(str, enum.Enum):
     FINAL = "final"
     MANUAL = "manual"
     INTERRUPTED = "interrupted"
+
+
+
+class EvaluationStatus(str, enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class EvaluationTrigger(str, enum.Enum):
+    SCHEDULED = "scheduled"
+    FINAL = "final"
+    MANUAL = "manual"
+
+
+class EvaluationDataScope(str, enum.Enum):
+    RUN_VALIDATION = "run_validation"
+    EXTENDED_OUT_OF_SAMPLE = "extended_out_of_sample"
+    CUSTOM_RANGE = "custom_range"
 
 
 def utc_now() -> datetime:
@@ -549,11 +571,314 @@ class Checkpoint(Base):
         foreign_keys=[run_id],
     )
 
+    evaluations: Mapped[
+        list["Evaluation"]
+    ] = relationship(
+        "Evaluation",
+        back_populates="checkpoint",
+        foreign_keys="Evaluation.checkpoint_id",
+    )
+
     resumed_runs: Mapped[
         list["Run"]
     ] = relationship(
         "Run",
         back_populates="source_checkpoint",
         foreign_keys="Run.source_checkpoint_id",
+    )
+
+
+class Evaluation(Base):
+    """
+    One attempt to evaluate one immutable checkpoint.
+
+    The evaluated range is [evaluation_start_index,
+    evaluation_end_index), while earlier rows may be used only as
+    historical lookback.
+    """
+
+    __tablename__ = "evaluations"
+
+    __table_args__ = (
+        CheckConstraint(
+            "data_rows >= 1",
+            name="data_rows_positive",
+        ),
+        CheckConstraint(
+            "evaluation_start_index >= 0",
+            name="start_index_nonnegative",
+        ),
+        CheckConstraint(
+            """
+            evaluation_start_index
+                < evaluation_end_index
+            """,
+            name="range_nonempty",
+        ),
+        CheckConstraint(
+            "evaluation_end_index <= data_rows",
+            name="end_index_within_data",
+        ),
+        CheckConstraint(
+            "lookback_rows >= 1",
+            name="lookback_rows_positive",
+        ),
+        CheckConstraint(
+            "steps_expected >= 1",
+            name="steps_expected_positive",
+        ),
+        CheckConstraint(
+            """
+            steps_expected =
+                evaluation_end_index
+                - evaluation_start_index
+            """,
+            name="steps_match_range",
+        ),
+        CheckConstraint(
+            """
+            steps_completed >= 0
+            AND steps_completed <= steps_expected
+            """,
+            name="steps_completed_range",
+        ),
+        CheckConstraint(
+            """
+            evaluation_start_at
+                <= evaluation_end_at
+            """,
+            name="data_time_order",
+        ),
+        CheckConstraint(
+            """
+            finished_at IS NULL
+            OR started_at IS NULL
+            OR finished_at >= started_at
+            """,
+            name="execution_time_order",
+        ),
+        CheckConstraint(
+            "data_sha256 ~ '^[0-9a-f]{64}$'",
+            name="data_sha256_lowercase_hex",
+        ),
+        CheckConstraint(
+            """
+            (
+                status = 'pending'
+                AND started_at IS NULL
+                AND finished_at IS NULL
+                AND steps_completed = 0
+                AND error_type IS NULL
+                AND error_message IS NULL
+            )
+            OR
+            (
+                status = 'running'
+                AND started_at IS NOT NULL
+                AND finished_at IS NULL
+                AND error_type IS NULL
+                AND error_message IS NULL
+            )
+            OR
+            (
+                status = 'completed'
+                AND started_at IS NOT NULL
+                AND finished_at IS NOT NULL
+                AND steps_completed = steps_expected
+                AND error_type IS NULL
+                AND error_message IS NULL
+            )
+            OR
+            (
+                status = 'failed'
+                AND started_at IS NOT NULL
+                AND finished_at IS NOT NULL
+                AND error_type IS NOT NULL
+                AND length(trim(error_type)) > 0
+                AND error_message IS NOT NULL
+                AND length(trim(error_message)) > 0
+            )
+            OR
+            (
+                status = 'cancelled'
+                AND started_at IS NOT NULL
+                AND finished_at IS NOT NULL
+            )
+            """,
+            name="status_fields",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    checkpoint_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "checkpoints.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    status: Mapped[
+        EvaluationStatus
+    ] = mapped_column(
+        SQLAlchemyEnum(
+            EvaluationStatus,
+            name="evaluation_status",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=EvaluationStatus.PENDING,
+        server_default=EvaluationStatus.PENDING.value,
+    )
+
+    trigger: Mapped[
+        EvaluationTrigger
+    ] = mapped_column(
+        SQLAlchemyEnum(
+            EvaluationTrigger,
+            name="evaluation_trigger",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+
+    deterministic: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+
+    seed: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    data_scope: Mapped[
+        EvaluationDataScope
+    ] = mapped_column(
+        SQLAlchemyEnum(
+            EvaluationDataScope,
+            name="evaluation_data_scope",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+
+    data_path: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    data_sha256: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    data_rows: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    evaluation_start_index: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    evaluation_end_index: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    evaluation_start_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    evaluation_end_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    lookback_rows: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    steps_expected: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    steps_completed: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+
+    started_at: Mapped[
+        datetime | None
+    ] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    finished_at: Mapped[
+        datetime | None
+    ] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    git_commit: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    git_branch: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    error_type: Mapped[
+        str | None
+    ] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    error_message: Mapped[
+        str | None
+    ] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    checkpoint: Mapped["Checkpoint"] = relationship(
+        "Checkpoint",
+        back_populates="evaluations",
+        foreign_keys=[checkpoint_id],
     )
 

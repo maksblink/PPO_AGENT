@@ -269,3 +269,131 @@ def test_checkpoint_save_reasons_are_explicit() -> None:
         "interrupted",
     }
 
+
+
+def test_evaluations_table_contains_required_columns() -> None:
+    table = Base.metadata.tables["evaluations"]
+
+    assert set(table.columns.keys()) == {
+        "id",
+        "checkpoint_id",
+        "status",
+        "trigger",
+        "deterministic",
+        "seed",
+        "data_scope",
+        "data_path",
+        "data_sha256",
+        "data_rows",
+        "evaluation_start_index",
+        "evaluation_end_index",
+        "evaluation_start_at",
+        "evaluation_end_at",
+        "lookback_rows",
+        "steps_expected",
+        "steps_completed",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "git_commit",
+        "git_branch",
+        "error_type",
+        "error_message",
+    }
+
+
+def test_evaluations_table_has_required_constraints() -> None:
+    table = Base.metadata.tables["evaluations"]
+
+    constraint_names = {
+        constraint.name
+        for constraint in table.constraints
+    }
+
+    expected_names = {
+        "pk_evaluations",
+        "ck_evaluations_data_rows_positive",
+        "ck_evaluations_start_index_nonnegative",
+        "ck_evaluations_range_nonempty",
+        "ck_evaluations_end_index_within_data",
+        "ck_evaluations_lookback_rows_positive",
+        "ck_evaluations_steps_expected_positive",
+        "ck_evaluations_steps_match_range",
+        "ck_evaluations_steps_completed_range",
+        "ck_evaluations_data_time_order",
+        "ck_evaluations_execution_time_order",
+        "ck_evaluations_data_sha256_lowercase_hex",
+        "ck_evaluations_status_fields",
+    }
+
+    assert expected_names.issubset(
+        constraint_names
+    )
+
+
+def test_evaluation_checkpoint_uses_restrict_foreign_key() -> None:
+    table = Base.metadata.tables["evaluations"]
+    foreign_keys = list(
+        table.c.checkpoint_id.foreign_keys
+    )
+
+    assert len(foreign_keys) == 1
+    assert (
+        foreign_keys[0].target_fullname
+        == "checkpoints.id"
+    )
+    assert foreign_keys[0].ondelete == "RESTRICT"
+
+
+def test_evaluation_checkpoint_id_is_indexed() -> None:
+    table = Base.metadata.tables["evaluations"]
+
+    index_names = {
+        index.name
+        for index in table.indexes
+    }
+
+    assert "ix_evaluations_checkpoint_id" in index_names
+
+
+def test_evaluations_do_not_duplicate_run_id() -> None:
+    table = Base.metadata.tables["evaluations"]
+
+    assert "run_id" not in table.columns
+
+
+def test_evaluation_enum_values_are_explicit() -> None:
+    from train_and_eval.database.models import (
+        EvaluationDataScope,
+        EvaluationStatus,
+        EvaluationTrigger,
+    )
+
+    assert {
+        value.value
+        for value in EvaluationStatus
+    } == {
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+    }
+
+    assert {
+        value.value
+        for value in EvaluationTrigger
+    } == {
+        "scheduled",
+        "final",
+        "manual",
+    }
+
+    assert {
+        value.value
+        for value in EvaluationDataScope
+    } == {
+        "run_validation",
+        "extended_out_of_sample",
+        "custom_range",
+    }

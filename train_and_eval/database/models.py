@@ -10,7 +10,9 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum as SQLAlchemyEnum,
+    ForeignKey,
     Integer,
+    Index,
     MetaData,
     Numeric,
     String,
@@ -24,6 +26,7 @@ from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
     mapped_column,
+    relationship,
 )
 
 
@@ -66,6 +69,15 @@ class TrainingDurationUnit(str, enum.Enum):
     TIMESTEPS = "timesteps"
 
 
+
+class CheckpointSaveReason(str, enum.Enum):
+    INITIAL = "initial"
+    PERIODIC = "periodic"
+    FINAL = "final"
+    MANUAL = "manual"
+    INTERRUPTED = "interrupted"
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -85,6 +97,20 @@ class Run(Base):
     __tablename__ = "runs"
 
     __table_args__ = (
+        CheckConstraint(
+            """
+            (
+                continuation_mode = 'fresh'
+                AND source_checkpoint_id IS NULL
+            )
+            OR
+            (
+                continuation_mode = 'resume'
+                AND source_checkpoint_id IS NOT NULL
+            )
+            """,
+            name="continuation_fields",
+        ),
         UniqueConstraint(
             "name",
             name="uq_runs_name",
@@ -165,6 +191,23 @@ class Run(Base):
             values_callable=_enum_values,
         ),
         nullable=False,
+    )
+
+    source_checkpoint_id: Mapped[
+        int | None
+    ] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "checkpoints.id",
+            name=(
+                "fk_runs_source_checkpoint_id_"
+                "checkpoints"
+            ),
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        nullable=True,
+        index=True,
     )
 
     description: Mapped[str] = mapped_column(
@@ -337,6 +380,22 @@ class Run(Base):
         nullable=True,
     )
 
+    checkpoints: Mapped[
+        list["Checkpoint"]
+    ] = relationship(
+        "Checkpoint",
+        back_populates="run",
+        foreign_keys="Checkpoint.run_id",
+    )
+
+    source_checkpoint: Mapped[
+        "Checkpoint | None"
+    ] = relationship(
+        "Checkpoint",
+        back_populates="resumed_runs",
+        foreign_keys=[source_checkpoint_id],
+    )
+
     def update_description(
         self,
         description: str,
@@ -370,3 +429,131 @@ class Run(Base):
 
         self.description = description
         self.modified_at = timestamp
+
+
+class Checkpoint(Base):
+    """
+    One immutable model file saved during a training run.
+
+    `run_step` is local to the run that created the checkpoint.
+    `model_step` includes the complete resume history.
+    """
+
+    __tablename__ = "checkpoints"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "run_step",
+            name="uq_checkpoints_run_id_run_step",
+        ),
+        UniqueConstraint(
+            "relative_path",
+            name="uq_checkpoints_relative_path",
+        ),
+        CheckConstraint(
+            "run_step >= 0",
+            name="run_step_nonnegative",
+        ),
+        CheckConstraint(
+            "model_step >= 0",
+            name="model_step_nonnegative",
+        ),
+        CheckConstraint(
+            "model_step >= run_step",
+            name="model_step_not_less_than_run_step",
+        ),
+        CheckConstraint(
+            "size_bytes > 0",
+            name="size_bytes_positive",
+        ),
+        CheckConstraint(
+            "sha256 ~ '^[0-9a-f]{64}$'",
+            name="sha256_lowercase_hex",
+        ),
+        Index(
+            "ux_checkpoints_one_final_per_run",
+            "run_id",
+            unique=True,
+            postgresql_where=text(
+                "save_reason = 'final'"
+            ),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    run_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "runs.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    run_step: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    model_step: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    save_reason: Mapped[
+        CheckpointSaveReason
+    ] = mapped_column(
+        SQLAlchemyEnum(
+            CheckpointSaveReason,
+            name="checkpoint_save_reason",
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+
+    relative_path: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    sha256: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    size_bytes: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+
+    run: Mapped["Run"] = relationship(
+        "Run",
+        back_populates="checkpoints",
+        foreign_keys=[run_id],
+    )
+
+    resumed_runs: Mapped[
+        list["Run"]
+    ] = relationship(
+        "Run",
+        back_populates="source_checkpoint",
+        foreign_keys="Run.source_checkpoint_id",
+    )
+

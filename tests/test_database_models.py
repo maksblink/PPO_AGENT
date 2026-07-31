@@ -7,6 +7,7 @@ import pytest
 from train_and_eval.database.models import (
     DEFAULT_RUN_DESCRIPTION,
     Base,
+    CheckpointSaveReason,
     Run,
 )
 
@@ -19,6 +20,7 @@ def test_runs_table_contains_required_columns() -> None:
         "name",
         "status",
         "continuation_mode",
+        "source_checkpoint_id",
         "description",
         "created_at",
         "modified_at",
@@ -61,6 +63,7 @@ def test_runs_table_has_named_safety_constraints() -> None:
     expected_names = {
         "pk_runs",
         "uq_runs_name",
+        "ck_runs_continuation_fields",
         "ck_runs_duration_amount_positive",
         "ck_runs_train_rows_positive",
         "ck_runs_validation_rows_positive",
@@ -161,4 +164,108 @@ def test_normalized_config_sha256_is_required() -> None:
 
     assert column.nullable is False
     assert column.type.length == 64
+
+
+def test_run_source_checkpoint_uses_foreign_key() -> None:
+    table = Base.metadata.tables["runs"]
+    foreign_keys = list(
+        table.c.source_checkpoint_id.foreign_keys
+    )
+
+    assert len(foreign_keys) == 1
+    assert (
+        foreign_keys[0].target_fullname
+        == "checkpoints.id"
+    )
+    assert foreign_keys[0].ondelete == "RESTRICT"
+    assert foreign_keys[0].use_alter is True
+    assert (
+        foreign_keys[0].name
+        == "fk_runs_source_checkpoint_id_checkpoints"
+    )
+
+
+def test_checkpoints_table_contains_required_columns() -> None:
+    table = Base.metadata.tables["checkpoints"]
+
+    assert set(table.columns.keys()) == {
+        "id",
+        "run_id",
+        "run_step",
+        "model_step",
+        "save_reason",
+        "relative_path",
+        "sha256",
+        "size_bytes",
+        "created_at",
+    }
+
+
+def test_checkpoints_table_has_required_constraints() -> None:
+    table = Base.metadata.tables["checkpoints"]
+
+    constraint_names = {
+        constraint.name
+        for constraint in table.constraints
+    }
+
+    assert {
+        "pk_checkpoints",
+        "uq_checkpoints_run_id_run_step",
+        "uq_checkpoints_relative_path",
+        "ck_checkpoints_run_step_nonnegative",
+        "ck_checkpoints_model_step_nonnegative",
+        (
+            "ck_checkpoints_"
+            "model_step_not_less_than_run_step"
+        ),
+        "ck_checkpoints_size_bytes_positive",
+        "ck_checkpoints_sha256_lowercase_hex",
+    }.issubset(constraint_names)
+
+
+def test_checkpoint_run_uses_restrict_foreign_key() -> None:
+    table = Base.metadata.tables["checkpoints"]
+    foreign_keys = list(
+        table.c.run_id.foreign_keys
+    )
+
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0].target_fullname == "runs.id"
+    assert foreign_keys[0].ondelete == "RESTRICT"
+
+
+def test_checkpoint_indexes_are_defined() -> None:
+    table = Base.metadata.tables["checkpoints"]
+
+    indexes = {
+        index.name: index
+        for index in table.indexes
+    }
+
+    assert "ix_checkpoints_run_id" in indexes
+
+    final_index = indexes[
+        "ux_checkpoints_one_final_per_run"
+    ]
+
+    assert final_index.unique is True
+    assert str(
+        final_index.dialect_options[
+            "postgresql"
+        ]["where"]
+    ) == "save_reason = 'final'"
+
+
+def test_checkpoint_save_reasons_are_explicit() -> None:
+    assert {
+        reason.value
+        for reason in CheckpointSaveReason
+    } == {
+        "initial",
+        "periodic",
+        "final",
+        "manual",
+        "interrupted",
+    }
 

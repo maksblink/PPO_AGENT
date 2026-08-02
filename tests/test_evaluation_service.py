@@ -231,6 +231,16 @@ def _patch_setup(
 
     monkeypatch.setattr(
         service,
+        "get_context_definition",
+        lambda name: SimpleNamespace(
+            required_history_rows=(
+                lambda window: 2
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        service,
         "load_market_data",
         lambda *args, **kwargs: (
             events.append("load_data")
@@ -310,6 +320,7 @@ def test_runs_complete_validation_evaluation_service(
         assert kwargs[
             "evaluation_end_index"
         ] == 8
+        assert kwargs["lookback_rows"] == 2
         return result
 
     monkeypatch.setattr(

@@ -62,6 +62,22 @@ SUPPORTED_ROLLING_FEATURES = frozenset(
     ROLLING_FEATURE_PREFIXES
 )
 
+# Number of source rows additionally required beyond the horizon
+# itself to produce one fully initialized value.
+#
+# A horizon-H log return compares the current close with close.shift(H),
+# therefore it needs H earlier rows plus the current row. Volatility over
+# H one-bar returns likewise needs H + 1 closes. The remaining rolling
+# features need H rows including the current row.
+ROLLING_FEATURE_EXTRA_SOURCE_ROWS = {
+    "log_return": 1,
+    "volatility": 1,
+    "range_position": 0,
+    "close_vs_sma": 0,
+    "drawdown_from_high": 0,
+    "rebound_from_low": 0,
+}
+
 
 class ContextError(ValueError):
     """Raised when an observation context cannot be created."""
@@ -74,8 +90,39 @@ class ContextDefinition:
     name: str
     horizons: tuple[int, ...]
     window_features: tuple[str, ...]
+    rolling_features: tuple[str, ...]
     context_features: tuple[str, ...]
     state_features: tuple[str, ...]
+
+    def required_history_rows(self, window: int) -> int:
+        """
+        Return source rows needed for one fully initialized observation.
+
+        The count includes the currently closed candle. For example, a
+        log-return horizon of 6144 needs 6145 rows: 6144 earlier closes
+        plus the current close.
+        """
+        if window <= 0:
+            raise ContextError(
+                "Window must be greater than zero."
+            )
+
+        required_rows = int(window)
+
+        for feature_name in self.rolling_features:
+            extra_rows = (
+                ROLLING_FEATURE_EXTRA_SOURCE_ROWS[
+                    feature_name
+                ]
+            )
+
+            for horizon in self.horizons:
+                required_rows = max(
+                    required_rows,
+                    int(horizon) + extra_rows,
+                )
+
+        return required_rows
 
     def observation_size(self, window: int) -> int:
         if window <= 0:
@@ -197,6 +244,7 @@ class MarketContext:
             name=cls.name,
             horizons=cls.horizons,
             window_features=cls.window_features,
+            rolling_features=cls.rolling_features,
             context_features=cls.context_feature_names(),
             state_features=cls.state_features,
         )

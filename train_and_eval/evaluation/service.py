@@ -16,6 +16,9 @@ from train_and_eval.database.models import (
     EvaluationTrigger,
     Run,
 )
+from train_and_eval.environment.contexts import (
+    get_context_definition,
+)
 from train_and_eval.evaluation.persistence import (
     PersistedEvaluationState,
     complete_evaluation,
@@ -371,8 +374,16 @@ def evaluate_run_validation_checkpoint(
     evaluation_end_index = len(
         market_data
     )
-    lookback_rows = int(
-        config.environment.window
+    context_definition = (
+        get_context_definition(
+            config.environment.context
+        )
+    )
+    lookback_rows = (
+        context_definition
+        .required_history_rows(
+            int(config.environment.window)
+        )
     )
 
     if (

@@ -9,6 +9,9 @@ from stable_baselines3 import PPO
 from train_and_eval.database.models import (
     EvaluationPolicyMode,
 )
+from train_and_eval.environment.contexts import (
+    get_context_definition,
+)
 from train_and_eval.environment.trading_environment import (
     TradingEnvironment,
 )
@@ -100,7 +103,7 @@ def _evaluation_slice(
     evaluation_start_index: int,
     evaluation_end_index: int,
     lookback_rows: int,
-    window: int,
+    required_history_rows: int,
 ) -> tuple[
     pd.DataFrame,
     int,
@@ -138,10 +141,11 @@ def _evaluation_slice(
             "of market-data rows."
         )
 
-    if lookback < window:
+    if lookback < required_history_rows:
         raise EvaluationRunnerError(
-            "lookback_rows must be at least equal "
-            f"to environment.window={window}."
+            "lookback_rows must be at least "
+            f"{required_history_rows} to provide a "
+            "fully initialized observation context."
         )
 
     if start < lookback:
@@ -268,6 +272,15 @@ def run_ppo_evaluation(
         minimum=0,
     )
 
+    definition = get_context_definition(
+        environment_config.context
+    )
+    required_history_rows = (
+        definition.required_history_rows(
+            int(environment_config.window)
+        )
+    )
+
     (
         evaluation_data,
         local_observation_index,
@@ -276,8 +289,8 @@ def run_ppo_evaluation(
         evaluation_start_index=start,
         evaluation_end_index=end,
         lookback_rows=lookback,
-        window=int(
-            environment_config.window
+        required_history_rows=(
+            required_history_rows
         ),
     )
 

@@ -4,6 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from train_and_eval.environment.contexts import (
+    MarketContext,
+    register_context,
+)
 from train_and_eval.environment.trading_environment import (
     TradingEnvironment,
 )
@@ -14,6 +18,24 @@ from train_and_eval.evaluation.metrics import (
 from train_and_eval.run_config import (
     EnvironmentSection,
 )
+
+
+
+
+@register_context
+class EvaluationMetricsTestContext(MarketContext):
+    name = "evaluation_metrics_test_v1"
+    horizons = ()
+    window_features = (
+        "direction",
+        "range",
+        "body",
+        "upper_wick",
+        "lower_wick",
+        "vol_chg",
+    )
+    rolling_features = ()
+    include_time_features = True
 
 
 def _open_long(
@@ -427,27 +449,25 @@ def test_rejects_incorrect_closed_trade_net_return() -> None:
 
 
 def _integration_environment_config() -> EnvironmentSection:
-    return EnvironmentSection.model_validate(
-        {
-            "window": 2,
-            "context": "baseline_multiscale_v1",
-            "position_side": "long_only",
-            "market_timezone": "America/New_York",
-            "rth_open": "09:30",
-            "rth_close": "16:00",
-            "stake_pln": 1000.0,
-            "fee_bps": 10.0,
-            "swap_bps": 0.0,
-            "swap_time": "17:00",
-            "swap_timezone": "America/New_York",
-            "force_close_on_done": True,
-            "reward_scale": 1.0,
-            "exposure_penalty": 0.0,
-            "turnover_penalty": 0.0,
-            "drawdown_penalty": 0.0,
-            "profit_reward_mult": 1.0,
-            "loss_reward_mult": 1.0,
-        }
+    return EnvironmentSection.model_construct(
+        window=2,
+        context="evaluation_metrics_test_v1",
+        position_side="long_only",
+        market_timezone="America/New_York",
+        rth_open="09:30",
+        rth_close="16:00",
+        stake_pln=1000.0,
+        fee_bps=10.0,
+        swap_bps=0.0,
+        swap_time="17:00",
+        swap_timezone="America/New_York",
+        force_close_on_done=True,
+        reward_scale=1.0,
+        exposure_penalty=0.0,
+        turnover_penalty=0.0,
+        drawdown_penalty=0.0,
+        profit_reward_mult=1.0,
+        loss_reward_mult=1.0,
     )
 
 

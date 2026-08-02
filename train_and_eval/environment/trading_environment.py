@@ -12,6 +12,7 @@ from train_and_eval.environment.contexts import (
     PreparedContext,
     build_context,
     build_observation,
+    get_context_definition,
 )
 from train_and_eval.run_config import EnvironmentSection
 
@@ -176,6 +177,30 @@ class TradingEnvironment(
         self.window = int(config.window)
         self.start_index = start_index
 
+        definition = get_context_definition(
+            config.context
+        )
+        self.required_history_rows = (
+            definition.required_history_rows(
+                self.window
+            )
+        )
+        self.minimum_start_index = (
+            self.required_history_rows - 1
+        )
+
+        minimum_rows = (
+            self.required_history_rows + 1
+        )
+
+        if len(market_data) < minimum_rows:
+            raise TradingEnvironmentError(
+                "Market data is too short for one complete "
+                "observation context and one next-open step. "
+                "Required rows: "
+                f"{minimum_rows}, rows: {len(market_data)}."
+            )
+
         self.prepared_context: PreparedContext = (
             build_context(
                 config.context,
@@ -204,13 +229,6 @@ class TradingEnvironment(
         self.timestamps = self.frame[
             "DT"
         ].to_numpy()
-
-        if len(self.frame) < self.window + 1:
-            raise TradingEnvironmentError(
-                "Market data must contain at least "
-                f"window + 1 rows. Window: {self.window}, "
-                f"rows: {len(self.frame)}"
-            )
 
         self._action_targets = action_targets(
             config.position_side
@@ -255,7 +273,9 @@ class TradingEnvironment(
         self,
         requested_index: int | None,
     ) -> int:
-        minimum_index = self.window - 1
+        minimum_index = (
+            self.minimum_start_index
+        )
 
         if requested_index is None:
             index = minimum_index
@@ -265,7 +285,10 @@ class TradingEnvironment(
         if index < minimum_index:
             raise TradingEnvironmentError(
                 "start_index does not leave enough rows "
-                f"for window={self.window}: {index}"
+                "for a complete observation context. "
+                "Required history rows: "
+                f"{self.required_history_rows}, "
+                f"received start_index: {index}."
             )
 
         if index >= len(self.frame) - 1:
@@ -726,6 +749,9 @@ class TradingEnvironment(
                 )
             ),
             "equity": self._equity(),
+            "required_history_rows": (
+                self.required_history_rows
+            ),
         }
 
         self.last_info = dict(info)

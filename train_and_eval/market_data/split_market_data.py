@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from train_and_eval.environment.contexts import (
+    get_context_definition,
+)
 from train_and_eval.run_config import TrainingSection
 
 
@@ -21,9 +24,13 @@ class ChronologicalMarketDataSplit:
         Only rows belonging to TRAIN.
 
     validation_data_with_lookback:
-        Validation rows plus exactly `window` preceding TRAIN rows.
-        This permits the first validation decision to be made after the
-        final TRAIN candle and executed at the first VALIDATION open.
+        Validation rows plus the complete earlier TRAIN history required
+        to build both the market window and every rolling context feature.
+        These earlier rows are context only and are never scored.
+
+    training_start_index:
+        Local TRAIN observation index of the first fully initialized
+        observation. Its next step executes on the first scored TRAIN row.
 
     validation_start_index:
         Local observation index corresponding to the final TRAIN candle.
@@ -37,6 +44,8 @@ class ChronologicalMarketDataSplit:
     train_rows: int
     validation_rows: int
 
+    history_rows_required: int
+    training_start_index: int
     validation_lookback_rows: int
     validation_start_index: int
 
@@ -72,9 +81,10 @@ def split_market_data_chronologically(
     *,
     train_ratio: float,
     window: int,
+    context: str,
 ) -> ChronologicalMarketDataSplit:
     """
-    Split rows without shuffling.
+    Split rows without shuffling and preserve complete context history.
 
     TRAIN:
         market_data[0:split_index]
@@ -82,8 +92,10 @@ def split_market_data_chronologically(
     VALIDATION scoring:
         market_data[split_index:]
 
-    Validation receives earlier TRAIN rows only as historical lookback.
-    They are not counted as validation steps or validation results.
+    TRAIN begins only after the first fully initialized observation.
+    VALIDATION receives enough earlier TRAIN rows to make its first
+    observation fully initialized, while every VALIDATION row remains a
+    scored next-open execution step.
     """
     if market_data.empty:
         raise MarketDataSplitError(
@@ -100,6 +112,15 @@ def split_market_data_chronologically(
             "window must be greater than zero."
         )
 
+    definition = get_context_definition(
+        context
+    )
+    history_rows_required = (
+        definition.required_history_rows(
+            window
+        )
+    )
+
     total_rows = len(market_data)
 
     split_index = math.floor(
@@ -109,13 +130,19 @@ def split_market_data_chronologically(
     train_rows = split_index
     validation_rows = total_rows - split_index
 
-    # The training environment starts at index window - 1 and needs one
-    # later candle for next-open execution.
-    if train_rows < window + 1:
+    # One additional row is required after the first complete observation
+    # because actions execute at the next candle open.
+    minimum_train_rows = (
+        history_rows_required + 1
+    )
+
+    if train_rows < minimum_train_rows:
         raise MarketDataSplitError(
-            "TRAIN split is too short. It must contain at least "
-            f"window + 1 rows. Train rows: {train_rows}, "
-            f"window: {window}."
+            "TRAIN split is too short for a complete context and one "
+            "next-open execution step. "
+            f"Train rows: {train_rows}, "
+            f"required history rows: {history_rows_required}, "
+            f"minimum train rows: {minimum_train_rows}."
         )
 
     if validation_rows < 1:
@@ -123,7 +150,10 @@ def split_market_data_chronologically(
             "VALIDATION split must contain at least one row."
         )
 
-    lookback_start = split_index - window
+    lookback_start = (
+        split_index
+        - history_rows_required
+    )
 
     train_data = _slice_with_attrs(
         market_data,
@@ -137,10 +167,18 @@ def split_market_data_chronologically(
         None,
     )
 
-    validation_start_index = window - 1
+    training_start_index = (
+        history_rows_required - 1
+    )
+    validation_start_index = (
+        history_rows_required - 1
+    )
 
+    # From observation index history_rows_required - 1, the environment
+    # executes rows history_rows_required through train_rows - 1.
     steps_per_data_epoch = (
-        train_rows - window
+        train_rows
+        - history_rows_required
     )
 
     validation_steps = validation_rows
@@ -153,8 +191,18 @@ def split_market_data_chronologically(
         split_index=split_index,
         train_rows=train_rows,
         validation_rows=validation_rows,
-        validation_lookback_rows=window,
-        validation_start_index=validation_start_index,
+        history_rows_required=(
+            history_rows_required
+        ),
+        training_start_index=(
+            training_start_index
+        ),
+        validation_lookback_rows=(
+            history_rows_required
+        ),
+        validation_start_index=(
+            validation_start_index
+        ),
         steps_per_data_epoch=steps_per_data_epoch,
         validation_steps=validation_steps,
     )

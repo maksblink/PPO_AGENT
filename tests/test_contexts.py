@@ -100,6 +100,7 @@ def test_baseline_observation_size_for_window_40() -> None:
     )
 
     assert definition.observation_size(40) == 327
+    assert definition.required_history_rows(40) == 6145
 
     assert (
         get_context_definition(
@@ -310,6 +311,14 @@ def test_new_context_can_be_defined_by_one_class() -> None:
         prepared.definition.observation_size(10)
         == 26
     )
+    assert (
+        prepared.definition.required_history_rows(10)
+        == 10
+    )
+    assert (
+        prepared.definition.required_history_rows(2)
+        == 7
+    )
 
 
 def test_unknown_context_is_rejected() -> None:
@@ -326,3 +335,23 @@ def test_unknown_context_is_rejected() -> None:
             swap_time="17:00",
             swap_timezone="America/New_York",
         )
+
+
+def test_longest_log_return_is_complete_only_after_6145_rows() -> None:
+    source = _market_frame(rows=6145)
+    prepared = _build(source)
+
+    assert prepared.frame.loc[
+        6143,
+        "log_ret_6144",
+    ] == 0.0
+
+    expected = np.log(
+        source.loc[6144, "Close"]
+        / source.loc[0, "Close"]
+    )
+
+    assert prepared.frame.loc[
+        6144,
+        "log_ret_6144",
+    ] == pytest.approx(expected)

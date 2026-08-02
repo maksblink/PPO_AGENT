@@ -4,6 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from train_and_eval.environment.contexts import (
+    MarketContext,
+    register_context,
+)
 from train_and_eval.environment.trading_environment import (
     TradingEnvironment,
     TradingEnvironmentError,
@@ -16,6 +20,24 @@ from train_and_eval.run_config import (
 )
 
 
+
+
+@register_context
+class TradingEnvironmentTestContext(MarketContext):
+    name = "trading_environment_test_v1"
+    horizons = ()
+    window_features = (
+        "direction",
+        "range",
+        "body",
+        "upper_wick",
+        "lower_wick",
+        "vol_chg",
+    )
+    rolling_features = ()
+    include_time_features = True
+
+
 def _config(
     *,
     position_side: str = "long_only",
@@ -26,35 +48,25 @@ def _config(
     turnover_penalty: float = 0.0,
     drawdown_penalty: float = 0.0,
 ) -> EnvironmentSection:
-    return EnvironmentSection.model_validate(
-        {
-            "window": 2,
-            "context": "baseline_multiscale_v1",
-            "position_side": position_side,
-            "market_timezone": "America/New_York",
-            "rth_open": "09:30",
-            "rth_close": "16:00",
-            "stake_pln": 1000.0,
-            "fee_bps": fee_bps,
-            "swap_bps": swap_bps,
-            "swap_time": "17:00",
-            "swap_timezone": "America/New_York",
-            "force_close_on_done": (
-                force_close_on_done
-            ),
-            "reward_scale": 1.0,
-            "exposure_penalty": (
-                exposure_penalty
-            ),
-            "turnover_penalty": (
-                turnover_penalty
-            ),
-            "drawdown_penalty": (
-                drawdown_penalty
-            ),
-            "profit_reward_mult": 1.0,
-            "loss_reward_mult": 1.0,
-        }
+    return EnvironmentSection.model_construct(
+        window=2,
+        context="trading_environment_test_v1",
+        position_side=position_side,
+        market_timezone="America/New_York",
+        rth_open="09:30",
+        rth_close="16:00",
+        stake_pln=1000.0,
+        fee_bps=fee_bps,
+        swap_bps=swap_bps,
+        swap_time="17:00",
+        swap_timezone="America/New_York",
+        force_close_on_done=force_close_on_done,
+        reward_scale=1.0,
+        exposure_penalty=exposure_penalty,
+        turnover_penalty=turnover_penalty,
+        drawdown_penalty=drawdown_penalty,
+        profit_reward_mult=1.0,
+        loss_reward_mult=1.0,
     )
 
 
@@ -476,3 +488,57 @@ def test_close_event_preserves_entry_fee() -> None:
     assert close_event["net_return"] == pytest.approx(
         0.098
     )
+
+
+def test_complete_context_is_reused_after_every_episode_reset() -> None:
+    rows = 6147
+    frame = _market_frame(
+        opens=[100.0] * rows,
+        closes=[100.0] * rows,
+    )
+
+    baseline_config = _config().model_copy(
+        update={
+            "context": "baseline_multiscale_v1",
+        }
+    )
+
+    with pytest.raises(
+        TradingEnvironmentError,
+        match="complete observation context",
+    ):
+        TradingEnvironment(
+            frame,
+            baseline_config,
+            start_index=6143,
+        )
+
+    environment = TradingEnvironment(
+        frame,
+        baseline_config,
+    )
+
+    _, first_reset_info = environment.reset()
+
+    assert environment.required_history_rows == 6145
+    assert first_reset_info["observation_index"] == 6144
+    assert first_reset_info["required_history_rows"] == 6145
+
+    _, _, terminated, _, first_step_info = (
+        environment.step(0)
+    )
+
+    assert terminated is False
+    assert first_step_info["execution_index"] == 6145
+
+    _, _, terminated, _, second_step_info = (
+        environment.step(0)
+    )
+
+    assert terminated is True
+    assert second_step_info["execution_index"] == 6146
+
+    _, second_reset_info = environment.reset()
+
+    # Every later data epoch starts from the same complete context.
+    assert second_reset_info["observation_index"] == 6144

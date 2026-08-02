@@ -7,6 +7,7 @@ from train_and_eval.ppo.adapter import (
     create_ppo_model,
     load_ppo_model_file,
     ppo_constructor_kwargs,
+    ppo_resume_custom_objects,
     save_ppo_model_file,
 )
 from train_and_eval.ppo.checkpoints import (
@@ -35,5 +36,6 @@ __all__ = [
     "load_ppo_model_file",
     "persist_ppo_checkpoint",
     "ppo_constructor_kwargs",
+    "ppo_resume_custom_objects",
     "save_ppo_model_file",
 ]

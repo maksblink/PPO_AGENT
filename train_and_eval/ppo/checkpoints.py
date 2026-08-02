@@ -26,8 +26,10 @@ from train_and_eval.database.models import (
 from train_and_eval.ppo.adapter import (
     PolicyDevice,
     load_ppo_model_file,
+    ppo_resume_custom_objects,
     save_ppo_model_file,
 )
+from train_and_eval.run_config import PPOSection
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -134,6 +136,8 @@ def load_persisted_ppo_checkpoint(
     *,
     environment: Env | None,
     device: PolicyDevice,
+    training_config: PPOSection | None = None,
+    seed: int | None = None,
     project_root: str | Path = PROJECT_ROOT,
     artifacts_directory: str | Path = (
         DEFAULT_ARTIFACTS_DIRECTORY
@@ -156,10 +160,25 @@ def load_persisted_ppo_checkpoint(
         artifacts_directory=artifacts_directory,
     )
 
+    if (training_config is None) != (seed is None):
+        raise PPOCheckpointIntegrationError(
+            "training_config and seed must be supplied together."
+        )
+
+    custom_objects = (
+        None
+        if training_config is None
+        else ppo_resume_custom_objects(
+            training_config,
+            seed=int(seed),
+        )
+    )
+
     model = load_ppo_model_file(
         artifact.absolute_path,
         environment=environment,
         device=device,
+        custom_objects=custom_objects,
     )
 
     loaded_model_step = _nonnegative_integer(

@@ -1,0 +1,634 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+from pydantic import ValidationError
+from sqlalchemy import select
+
+from train_and_eval.artifact_storage.storage import (
+    DEFAULT_ARTIFACTS_DIRECTORY,
+    ArtifactStorage,
+)
+from train_and_eval.database.models import (
+    Checkpoint,
+    CheckpointSaveReason,
+    Evaluation,
+    EvaluationDataScope,
+    EvaluationStatus,
+    Run,
+)
+from train_and_eval.environment.trading_environment import (
+    TradingEnvironment,
+)
+from train_and_eval.market_data.load_market_data import (
+    DATA_DIRECTORY,
+    MANIFEST_PATH,
+    load_market_data,
+)
+from train_and_eval.market_data.split_market_data import (
+    ChronologicalMarketDataSplit,
+    split_market_data_chronologically,
+)
+from train_and_eval.ppo.adapter import (
+    create_ppo_model,
+)
+from train_and_eval.ppo.checkpoints import (
+    load_persisted_ppo_checkpoint,
+    persist_ppo_checkpoint,
+)
+from train_and_eval.reproducibility import (
+    require_clean_git,
+)
+from train_and_eval.run_config import (
+    FreshContinuationSection,
+    LoadedRunConfig,
+    ResumeContinuationSection,
+    RunConfig,
+    load_run_config,
+    validate_resume_compatibility,
+)
+from train_and_eval.training.execution import (
+    ExactPPOTrainingResult,
+    learn_ppo_exact_timesteps,
+)
+from train_and_eval.training.persistence import (
+    PersistedRunState,
+    complete_run,
+    create_pending_run,
+    fail_run,
+    mark_run_running,
+    update_run_progress,
+)
+from train_and_eval.checkpoints.persistence import (
+    PersistedCheckpoint,
+)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class TrainingServiceError(RuntimeError):
+    """Base error for complete PPO training services."""
+
+
+class TrainingSourceNotFoundError(
+    TrainingServiceError
+):
+    """Raised when a resume source run or checkpoint does not exist."""
+
+
+class TrainingSourceMismatchError(
+    TrainingServiceError
+):
+    """Raised when archived resume metadata is inconsistent."""
+
+
+class TrainingStoppedEarlyError(
+    TrainingServiceError
+):
+    """Raised when PPO stops before all requested local steps complete."""
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeTrainingSource:
+    """Immutable source checkpoint and configuration for resumed training."""
+
+    checkpoint_id: int
+    run_id: int
+    relative_path: str
+    sha256: str
+    size_bytes: int
+    model_step: int
+    source_config: RunConfig
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingServiceResult:
+    """Completed training run together with its final model checkpoint."""
+
+    run: PersistedRunState
+    checkpoint: PersistedCheckpoint
+    training: ExactPPOTrainingResult
+    source_checkpoint_id: int | None
+
+
+def _source_config(
+    source_run: Run,
+) -> RunConfig:
+    normalized_config = (
+        source_run.normalized_config_json
+    )
+
+    if not isinstance(
+        normalized_config,
+        dict,
+    ):
+        raise TrainingSourceMismatchError(
+            "Source run normalized_config_json "
+            "is not a JSON object."
+        )
+
+    try:
+        config = RunConfig.model_validate(
+            normalized_config
+        )
+    except ValidationError as error:
+        raise TrainingSourceMismatchError(
+            "Source run contains an invalid "
+            "normalized configuration."
+        ) from error
+
+    if (
+        int(source_run.config_schema_version)
+        != int(config.config_schema_version)
+    ):
+        raise TrainingSourceMismatchError(
+            "Source config schema version does not "
+            "match the source run database row."
+        )
+
+    if int(source_run.seed) != int(
+        config.run.seed
+    ):
+        raise TrainingSourceMismatchError(
+            "Source config seed does not match "
+            "the source run database row."
+        )
+
+    if str(source_run.data_path) != str(
+        config.data.path
+    ):
+        raise TrainingSourceMismatchError(
+            "Source config data path does not match "
+            "the source run database row."
+        )
+
+    return config
+
+
+def _checkpoint_source(
+    checkpoint: Checkpoint,
+    *,
+    source_run: Run,
+    source_config: RunConfig,
+) -> ResumeTrainingSource:
+    if int(checkpoint.run_id) != int(
+        source_run.id
+    ):
+        raise TrainingSourceMismatchError(
+            "Selected checkpoint does not belong "
+            "to the requested source run."
+        )
+
+    return ResumeTrainingSource(
+        checkpoint_id=int(checkpoint.id),
+        run_id=int(checkpoint.run_id),
+        relative_path=str(
+            checkpoint.relative_path
+        ),
+        sha256=str(checkpoint.sha256),
+        size_bytes=int(
+            checkpoint.size_bytes
+        ),
+        model_step=int(
+            checkpoint.model_step
+        ),
+        source_config=source_config,
+    )
+
+
+def _resolve_resume_source(
+    session_factory,
+    *,
+    current_config: RunConfig,
+) -> ResumeTrainingSource:
+    continuation = (
+        current_config.continuation
+    )
+
+    if not isinstance(
+        continuation,
+        ResumeContinuationSection,
+    ):
+        raise TrainingSourceMismatchError(
+            "Resume source resolution requires "
+            "a resume continuation config."
+        )
+
+    with session_factory() as session:
+        source_run = session.scalar(
+            select(Run).where(
+                Run.name
+                == continuation.source_run
+            )
+        )
+
+        if source_run is None:
+            raise TrainingSourceNotFoundError(
+                "Source run "
+                f"{continuation.source_run!r} "
+                "does not exist."
+            )
+
+        source_config = _source_config(
+            source_run
+        )
+        validate_resume_compatibility(
+            current_config,
+            source_config,
+        )
+
+        selector = (
+            continuation.checkpoint
+            .strip()
+            .lower()
+        )
+
+        if selector == "final":
+            checkpoint = session.scalar(
+                select(Checkpoint).where(
+                    Checkpoint.run_id
+                    == int(source_run.id),
+                    Checkpoint.save_reason
+                    == CheckpointSaveReason.FINAL,
+                )
+            )
+
+        elif selector == "best":
+            checkpoint = session.scalar(
+                select(Checkpoint)
+                .join(
+                    Evaluation,
+                    Evaluation.checkpoint_id
+                    == Checkpoint.id,
+                )
+                .where(
+                    Checkpoint.run_id
+                    == int(source_run.id),
+                    Evaluation.status
+                    == EvaluationStatus.COMPLETED,
+                    Evaluation.data_scope
+                    == EvaluationDataScope.RUN_VALIDATION,
+                    Evaluation.balanced_score
+                    .is_not(None),
+                )
+                .order_by(
+                    Evaluation.balanced_score.desc(),
+                    Evaluation.finished_at.desc().nullslast(),
+                    Evaluation.id.desc(),
+                )
+                .limit(1)
+            )
+
+        elif selector.isdecimal():
+            checkpoint = session.get(
+                Checkpoint,
+                int(selector),
+            )
+
+        else:
+            raise TrainingSourceMismatchError(
+                "Unsupported resume checkpoint selector "
+                f"{continuation.checkpoint!r}. "
+                "Use 'best', 'final', or a numeric "
+                "checkpoint ID."
+            )
+
+        if checkpoint is None:
+            raise TrainingSourceNotFoundError(
+                "No checkpoint matched selector "
+                f"{continuation.checkpoint!r} "
+                "for source run "
+                f"{continuation.source_run!r}."
+            )
+
+        return _checkpoint_source(
+            checkpoint,
+            source_run=source_run,
+            source_config=source_config,
+        )
+
+
+def _load_and_split_data(
+    loaded_config: LoadedRunConfig,
+    *,
+    data_directory: str | Path,
+    manifest_path: str | Path,
+) -> tuple[
+    pd.DataFrame,
+    ChronologicalMarketDataSplit,
+]:
+    config = loaded_config.config
+    market_data = load_market_data(
+        config.data.path,
+        data_directory=data_directory,
+        manifest_path=manifest_path,
+    )
+    split = split_market_data_chronologically(
+        market_data,
+        train_ratio=float(
+            config.data.train_ratio
+        ),
+        window=int(
+            config.environment.window
+        ),
+        context=str(
+            config.environment.context
+        ),
+    )
+
+    return market_data, split
+
+
+def _local_model_steps(
+    model: Any | None,
+    *,
+    model_steps_before: int | None,
+    maximum: int,
+) -> int:
+    if (
+        model is None
+        or model_steps_before is None
+    ):
+        return 0
+
+    try:
+        current_steps = int(
+            model.num_timesteps
+        )
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+    completed = max(
+        0,
+        current_steps
+        - int(model_steps_before),
+    )
+
+    return min(
+        completed,
+        int(maximum),
+    )
+
+
+def train_ppo_run(
+    session_factory,
+    *,
+    config_path: str | Path,
+    project_root: str | Path = PROJECT_ROOT,
+    data_directory: str | Path = DATA_DIRECTORY,
+    manifest_path: str | Path = MANIFEST_PATH,
+    artifacts_directory: str | Path = (
+        DEFAULT_ARTIFACTS_DIRECTORY
+    ),
+    verbose: int = 0,
+    log_interval: int | None = 1,
+    progress_bar: bool = False,
+) -> TrainingServiceResult:
+    """
+    Execute one complete fresh or resumed PPO training run.
+
+    This core service creates the run lifecycle, trains for exactly the
+    requested local steps, persists one final checkpoint, and records an
+    interrupted checkpoint when execution fails after a model exists.
+    Periodic checkpoints and validation evaluations are orchestrated by a
+    later scheduling layer.
+    """
+    root = (
+        Path(project_root)
+        .expanduser()
+        .resolve()
+    )
+
+    # This must remain the first external operation.
+    git_state = require_clean_git(
+        root
+    )
+
+    loaded_config = load_run_config(
+        config_path,
+        verify_data=True,
+        data_directory=data_directory,
+        manifest_path=manifest_path,
+    )
+    config = loaded_config.config
+    _, split = _load_and_split_data(
+        loaded_config,
+        data_directory=data_directory,
+        manifest_path=manifest_path,
+    )
+
+    continuation = config.continuation
+    resume_source: (
+        ResumeTrainingSource | None
+    ) = None
+
+    if isinstance(
+        continuation,
+        ResumeContinuationSection,
+    ):
+        resume_source = _resolve_resume_source(
+            session_factory,
+            current_config=config,
+        )
+    elif not isinstance(
+        continuation,
+        FreshContinuationSection,
+    ):
+        raise TrainingSourceMismatchError(
+            "Unsupported continuation configuration."
+        )
+
+    pending = create_pending_run(
+        session_factory,
+        loaded_config=loaded_config,
+        split=split,
+        git_state=git_state,
+        source_checkpoint_id=(
+            None
+            if resume_source is None
+            else resume_source.checkpoint_id
+        ),
+    )
+    run_id = pending.run_id
+    requested_steps = int(
+        pending.training_steps_requested
+    )
+
+    model: Any | None = None
+    model_steps_before: int | None = None
+    final_checkpoint: (
+        PersistedCheckpoint | None
+    ) = None
+
+    try:
+        mark_run_running(
+            session_factory,
+            run_id=run_id,
+        )
+
+        environment = TradingEnvironment(
+            split.train_data,
+            config.environment,
+            start_index=(
+                split.training_start_index
+            ),
+        )
+
+        if resume_source is None:
+            model = create_ppo_model(
+                environment,
+                config.ppo,
+                seed=int(config.run.seed),
+                verbose=verbose,
+            )
+        else:
+            model = load_persisted_ppo_checkpoint(
+                resume_source,
+                environment=environment,
+                device=config.ppo.device,
+                training_config=config.ppo,
+                seed=int(config.run.seed),
+                project_root=root,
+                artifacts_directory=(
+                    artifacts_directory
+                ),
+            )
+
+        model_steps_before = int(
+            model.num_timesteps
+        )
+
+        training_result = (
+            learn_ppo_exact_timesteps(
+                model,
+                total_timesteps=(
+                    requested_steps
+                ),
+                log_interval=log_interval,
+                progress_bar=progress_bar,
+            )
+        )
+
+        if training_result.stopped_early:
+            raise TrainingStoppedEarlyError(
+                "PPO stopped before all requested "
+                "training steps completed."
+            )
+
+        if (
+            training_result.local_steps_completed
+            != requested_steps
+        ):
+            raise TrainingStoppedEarlyError(
+                "PPO completed an unexpected number "
+                "of local training steps."
+            )
+
+        update_run_progress(
+            session_factory,
+            run_id=run_id,
+            training_steps_completed=(
+                training_result
+                .local_steps_completed
+            ),
+        )
+
+        storage = ArtifactStorage(
+            project_root=root,
+            artifacts_directory=(
+                artifacts_directory
+            ),
+        )
+        final_checkpoint = (
+            persist_ppo_checkpoint(
+                session_factory,
+                storage,
+                model,
+                run_id=run_id,
+                run_step=(
+                    training_result
+                    .local_steps_completed
+                ),
+                save_reason=(
+                    CheckpointSaveReason.FINAL
+                ),
+            )
+        )
+
+        completed = complete_run(
+            session_factory,
+            run_id=run_id,
+        )
+
+        return TrainingServiceResult(
+            run=completed,
+            checkpoint=final_checkpoint,
+            training=training_result,
+            source_checkpoint_id=(
+                None
+                if resume_source is None
+                else resume_source.checkpoint_id
+            ),
+        )
+
+    except BaseException as error:
+        local_steps = _local_model_steps(
+            model,
+            model_steps_before=(
+                model_steps_before
+            ),
+            maximum=requested_steps,
+        )
+
+        if (
+            model is not None
+            and final_checkpoint is None
+        ):
+            try:
+                storage = ArtifactStorage(
+                    project_root=root,
+                    artifacts_directory=(
+                        artifacts_directory
+                    ),
+                )
+                persist_ppo_checkpoint(
+                    session_factory,
+                    storage,
+                    model,
+                    run_id=run_id,
+                    run_step=local_steps,
+                    save_reason=(
+                        CheckpointSaveReason
+                        .INTERRUPTED
+                    ),
+                )
+            except BaseException as checkpoint_error:
+                error.add_note(
+                    "Additionally, persisting the "
+                    "interrupted PPO checkpoint failed: "
+                    f"{type(checkpoint_error).__name__}: "
+                    f"{checkpoint_error}"
+                )
+
+        try:
+            fail_run(
+                session_factory,
+                run_id=run_id,
+                error=error,
+                training_steps_completed=(
+                    local_steps
+                ),
+            )
+        except BaseException as failure_error:
+            error.add_note(
+                "Additionally, persisting the failed "
+                "run state failed: "
+                f"{type(failure_error).__name__}: "
+                f"{failure_error}"
+            )
+
+        raise

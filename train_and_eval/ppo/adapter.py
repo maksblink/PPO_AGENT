@@ -132,6 +132,44 @@ def ppo_constructor_kwargs(
     }
 
 
+def ppo_resume_custom_objects(
+    config: PPOSection,
+    *,
+    seed: int,
+) -> dict[str, Any]:
+    """Override mutable PPO training settings when loading for resume."""
+    resolved_seed = _integer_value(
+        seed,
+        name="seed",
+        minimum=0,
+    )
+
+    return {
+        "n_steps": config.n_steps,
+        "batch_size": config.batch_size,
+        "n_epochs": config.n_epochs,
+        "learning_rate": (
+            config.learning_rate
+        ),
+        "gamma": config.gamma,
+        "gae_lambda": config.gae_lambda,
+        "clip_range": config.clip_range,
+        "clip_range_vf": (
+            config.clip_range_vf
+        ),
+        "normalize_advantage": (
+            config.normalize_advantage
+        ),
+        "ent_coef": config.ent_coef,
+        "vf_coef": config.vf_coef,
+        "max_grad_norm": (
+            config.max_grad_norm
+        ),
+        "target_kl": config.target_kl,
+        "seed": resolved_seed,
+    }
+
+
 def create_ppo_model(
     environment: Env,
     config: PPOSection,
@@ -223,6 +261,7 @@ def load_ppo_model_file(
     *,
     environment: Env | None,
     device: PolicyDevice,
+    custom_objects: dict[str, Any] | None = None,
 ) -> PPO:
     """Load a native PPO ZIP file after basic file validation."""
     resolved_path = (
@@ -250,6 +289,7 @@ def load_ppo_model_file(
             str(resolved_path),
             env=environment,
             device=device,
+            custom_objects=custom_objects,
             print_system_info=False,
         )
     except Exception as error:

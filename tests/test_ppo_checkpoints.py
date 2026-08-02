@@ -313,3 +313,62 @@ def test_rejects_database_model_step_mismatch(
             device="cpu",
             project_root=project_root,
         )
+
+
+def test_resume_load_overrides_mutable_ppo_training_settings(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    session = FakeSession()
+
+    persisted = persist_ppo_checkpoint(
+        FakeSessionFactory(session),
+        ArtifactStorage(
+            project_root=project_root
+        ),
+        _trained_model(),
+        run_id=12,
+        run_step=8,
+        save_reason="final",
+    )
+    checkpoint = SimpleNamespace(
+        id=persisted.checkpoint_id,
+        relative_path=persisted.relative_path,
+        sha256=persisted.sha256,
+        size_bytes=persisted.size_bytes,
+        model_step=persisted.model_step,
+    )
+    config = _ppo_config().model_copy(
+        update={
+            "n_steps": 4,
+            "batch_size": 2,
+            "n_epochs": 3,
+            "learning_rate": 0.0007,
+            "gamma": 0.80,
+            "gae_lambda": 0.85,
+            "ent_coef": 0.01,
+        }
+    )
+
+    loaded = load_persisted_ppo_checkpoint(
+        checkpoint,
+        environment=TinyEnvironment(),
+        device="cpu",
+        training_config=config,
+        seed=777,
+        project_root=project_root,
+    )
+
+    assert loaded.num_timesteps == 8
+    assert loaded.n_steps == 4
+    assert loaded.rollout_buffer.buffer_size == 4
+    assert loaded.batch_size == 2
+    assert loaded.n_epochs == 3
+    assert loaded.learning_rate == pytest.approx(
+        0.0007
+    )
+    assert loaded.gamma == pytest.approx(0.80)
+    assert loaded.gae_lambda == pytest.approx(0.85)
+    assert loaded.ent_coef == pytest.approx(0.01)
+    assert loaded.seed == 777

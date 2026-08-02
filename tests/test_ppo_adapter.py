@@ -300,3 +300,32 @@ def test_rejects_invalid_checkpoint_zip(
             environment=TinyEnvironment(),
             device="cpu",
         )
+
+
+def test_resume_custom_objects_override_mutable_training_settings() -> None:
+    from train_and_eval.ppo.adapter import (
+        ppo_resume_custom_objects,
+    )
+
+    config = _ppo_config()
+    values = ppo_resume_custom_objects(
+        config,
+        seed=321,
+    )
+
+    assert values == {
+        "n_steps": 8,
+        "batch_size": 4,
+        "n_epochs": 2,
+        "learning_rate": pytest.approx(0.0003),
+        "gamma": pytest.approx(0.90),
+        "gae_lambda": pytest.approx(0.95),
+        "clip_range": pytest.approx(0.20),
+        "clip_range_vf": None,
+        "normalize_advantage": True,
+        "ent_coef": pytest.approx(0.0002),
+        "vf_coef": pytest.approx(0.5),
+        "max_grad_norm": pytest.approx(0.5),
+        "target_kl": None,
+        "seed": 321,
+    }

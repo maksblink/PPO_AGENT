@@ -7,6 +7,15 @@ from train_and_eval.training.execution import (
     PPOTrainingIdentityError,
     learn_ppo_exact_timesteps,
 )
+from train_and_eval.training.service import (
+    ResumeTrainingSource,
+    TrainingServiceError,
+    TrainingServiceResult,
+    TrainingSourceMismatchError,
+    TrainingSourceNotFoundError,
+    TrainingStoppedEarlyError,
+    train_ppo_run,
+)
 from train_and_eval.training.persistence import (
     PersistedRunState,
     RunIdentityError,
@@ -22,6 +31,13 @@ from train_and_eval.training.persistence import (
 )
 
 __all__ = [
+    "train_ppo_run",
+    "TrainingStoppedEarlyError",
+    "TrainingSourceNotFoundError",
+    "TrainingSourceMismatchError",
+    "TrainingServiceResult",
+    "TrainingServiceError",
+    "ResumeTrainingSource",
     "ExactPPOTrainingResult",
     "PPOTrainingCompatibilityError",
     "PPOTrainingExecutionError",

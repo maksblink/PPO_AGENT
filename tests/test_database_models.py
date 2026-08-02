@@ -45,6 +45,8 @@ def test_runs_table_contains_required_columns() -> None:
         "training_steps_requested",
         "training_steps_completed",
         "data_epochs_completed",
+        "stopped_early",
+        "early_stop_reason",
         "error_type",
         "error_message",
     }
@@ -72,6 +74,7 @@ def test_runs_table_has_named_safety_constraints() -> None:
         "ck_runs_requested_steps_positive",
         "ck_runs_completed_steps_range",
         "ck_runs_completed_epochs_nonnegative",
+        "ck_runs_early_stop_fields",
         "ck_runs_execution_time_order",
         "ck_runs_status_fields",
     }
@@ -213,7 +216,10 @@ def test_checkpoints_table_has_required_constraints() -> None:
 
     assert {
         "pk_checkpoints",
-        "uq_checkpoints_run_id_run_step",
+        (
+            "uq_checkpoints_run_id_run_step_"
+            "save_reason"
+        ),
         "uq_checkpoints_relative_path",
         "ck_checkpoints_run_step_nonnegative",
         "ck_checkpoints_model_step_nonnegative",
@@ -610,3 +616,30 @@ def test_evaluation_policy_fields_allows_dynamic_threshold_action() -> None:
     ) in sql
 
     assert "threshold_action >= 0" not in sql
+
+
+def test_checkpoint_step_uniqueness_includes_save_reason() -> None:
+    from sqlalchemy import UniqueConstraint
+
+    table = Base.metadata.tables["checkpoints"]
+    constraint = next(
+        item
+        for item in table.constraints
+        if (
+            isinstance(item, UniqueConstraint)
+            and item.name
+            == (
+                "uq_checkpoints_run_id_run_step_"
+                "save_reason"
+            )
+        )
+    )
+
+    assert [
+        column.name
+        for column in constraint.columns
+    ] == [
+        "run_id",
+        "run_step",
+        "save_reason",
+    ]

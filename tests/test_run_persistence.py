@@ -177,6 +177,8 @@ def test_creates_pending_run_from_verified_inputs() -> None:
     assert state.training_steps_requested == 500000
     assert state.training_steps_completed == 0
     assert state.data_epochs_completed == Decimal("0")
+    assert state.stopped_early is False
+    assert state.early_stop_reason is None
     assert state.started_at is None
     assert state.finished_at is None
 
@@ -368,3 +370,69 @@ def test_failed_run_persists_progress_and_original_error() -> None:
     assert failed.finished_at is not None
     assert failed.error_type == "RuntimeError"
     assert failed.error_message == "CUDA training failed"
+
+
+def test_completes_intentionally_early_stopped_run() -> None:
+    session = FakeSession()
+    _create_pending(session)
+    mark_run_running(
+        FakeSessionFactory(session),
+        run_id=51,
+    )
+    update_run_progress(
+        FakeSessionFactory(session),
+        run_id=51,
+        training_steps_completed=510,
+    )
+
+    completed = complete_run(
+        FakeSessionFactory(session),
+        run_id=51,
+        stopped_early=True,
+        early_stop_reason=(
+            "balanced_score did not improve for "
+            "5 consecutive evaluations."
+        ),
+    )
+
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.training_steps_completed == 510
+    assert completed.stopped_early is True
+    assert completed.early_stop_reason is not None
+    assert "balanced_score" in completed.early_stop_reason
+
+
+def test_rejects_invalid_early_stop_completion_fields() -> None:
+    session = FakeSession()
+    _create_pending(session)
+    mark_run_running(
+        FakeSessionFactory(session),
+        run_id=51,
+    )
+    update_run_progress(
+        FakeSessionFactory(session),
+        run_id=51,
+        training_steps_completed=510,
+    )
+
+    with pytest.raises(
+        RunIdentityError,
+        match="must not be empty",
+    ):
+        complete_run(
+            FakeSessionFactory(session),
+            run_id=51,
+            stopped_early=True,
+            early_stop_reason="   ",
+        )
+
+    with pytest.raises(
+        RunIdentityError,
+        match="must be null",
+    ):
+        complete_run(
+            FakeSessionFactory(session),
+            run_id=51,
+            stopped_early=False,
+            early_stop_reason="unexpected",
+        )

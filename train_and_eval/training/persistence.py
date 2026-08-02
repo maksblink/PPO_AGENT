@@ -64,6 +64,8 @@ class PersistedRunState:
     training_steps_requested: int
     training_steps_completed: int
     data_epochs_completed: Decimal
+    stopped_early: bool
+    early_stop_reason: str | None
     started_at: datetime | None
     finished_at: datetime | None
     error_type: str | None
@@ -146,6 +148,12 @@ def _snapshot(run: Run) -> PersistedRunState:
         ),
         data_epochs_completed=Decimal(
             run.data_epochs_completed
+        ),
+        stopped_early=bool(
+            run.stopped_early
+        ),
+        early_stop_reason=(
+            run.early_stop_reason
         ),
         started_at=run.started_at,
         finished_at=run.finished_at,
@@ -349,6 +357,8 @@ def create_pending_run(
                 ),
                 training_steps_completed=0,
                 data_epochs_completed=Decimal("0"),
+                stopped_early=False,
+                early_stop_reason=None,
                 started_at=None,
                 finished_at=None,
                 error_type=None,
@@ -396,6 +406,8 @@ def mark_run_running(
             run.status = RunStatus.RUNNING
             run.started_at = utc_now()
             run.finished_at = None
+            run.stopped_early = False
+            run.early_stop_reason = None
             run.error_type = None
             run.error_message = None
 
@@ -483,8 +495,10 @@ def complete_run(
     session_factory: SessionFactory,
     *,
     run_id: int,
+    stopped_early: bool = False,
+    early_stop_reason: str | None = None,
 ) -> PersistedRunState:
-    """Mark a fully progressed running run as completed."""
+    """Mark a fully progressed or intentionally early-stopped run completed."""
     resolved_id = _integer_value(
         run_id,
         name="run_id",
@@ -505,16 +519,65 @@ def complete_run(
                     f"{current_status.value} to completed."
                 )
 
-            if int(run.training_steps_completed) != int(
+            completed_steps = int(
+                run.training_steps_completed
+            )
+            requested_steps = int(
                 run.training_steps_requested
+            )
+
+            if not isinstance(
+                stopped_early,
+                bool,
             ):
-                raise RunStateTransitionError(
-                    "A run cannot complete before all requested "
-                    "training steps are persisted."
+                raise RunIdentityError(
+                    "stopped_early must be a boolean."
                 )
+
+            resolved_reason: str | None = None
+
+            if stopped_early:
+                if not isinstance(
+                    early_stop_reason,
+                    str,
+                ):
+                    raise RunIdentityError(
+                        "early_stop_reason must be a string "
+                        "when stopped_early is true."
+                    )
+
+                resolved_reason = (
+                    early_stop_reason.strip()
+                )
+
+                if not resolved_reason:
+                    raise RunIdentityError(
+                        "early_stop_reason must not be empty."
+                    )
+
+                if not 0 < completed_steps < requested_steps:
+                    raise RunStateTransitionError(
+                        "An early-stopped run must persist at least "
+                        "one step and fewer than all requested steps."
+                    )
+            else:
+                if early_stop_reason is not None:
+                    raise RunIdentityError(
+                        "early_stop_reason must be null when "
+                        "stopped_early is false."
+                    )
+
+                if completed_steps != requested_steps:
+                    raise RunStateTransitionError(
+                        "A run cannot complete before all requested "
+                        "training steps are persisted unless it is "
+                        "explicitly marked as early-stopped."
+                    )
 
             run.status = RunStatus.COMPLETED
             run.finished_at = utc_now()
+            run.stopped_early = stopped_early
+            run.early_stop_reason = resolved_reason
             run.error_type = None
             run.error_message = None
 
@@ -615,6 +678,8 @@ def fail_run(
 
             run.status = RunStatus.FAILED
             run.finished_at = now
+            run.stopped_early = False
+            run.early_stop_reason = None
             run.training_steps_completed = resolved_steps
             run.data_epochs_completed = _data_epochs_completed(
                 training_steps_completed=resolved_steps,

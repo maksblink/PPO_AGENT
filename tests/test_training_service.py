@@ -128,6 +128,8 @@ def _run_state(
         training_steps_requested=requested,
         training_steps_completed=completed,
         data_epochs_completed=Decimal("0"),
+        stopped_early=False,
+        early_stop_reason=None,
         started_at=None,
         finished_at=None,
         error_type=None,
@@ -965,6 +967,7 @@ class ResumeLookupSession:
         self.checkpoint_by_id = (
             checkpoint_by_id
         )
+        self.statements: list[object] = []
 
     def __enter__(self):
         return self
@@ -978,6 +981,7 @@ class ResumeLookupSession:
         return False
 
     def scalar(self, statement):
+        self.statements.append(statement)
         return self.scalar_values.pop(0)
 
     def get(self, model, identity):
@@ -1055,6 +1059,42 @@ def test_resolves_final_resume_checkpoint() -> None:
         "source-run"
     )
 
+
+
+def test_resolves_best_resume_checkpoint_by_balanced_score() -> None:
+    current, source_run, _ = (
+        _source_run_and_config()
+    )
+    raw = current.model_dump(
+        mode="json"
+    )
+    raw["continuation"]["checkpoint"] = "best"
+    best_config = RunConfig.model_validate(raw)
+    checkpoint = SimpleNamespace(
+        id=77,
+        run_id=44,
+        relative_path="artifacts/best.zip",
+        sha256="e" * 64,
+        size_bytes=120,
+        model_step=400,
+    )
+    session = ResumeLookupSession(
+        scalar_values=[
+            source_run,
+            checkpoint,
+        ]
+    )
+
+    source = service._resolve_resume_source(
+        ResumeLookupFactory(session),
+        current_config=best_config,
+    )
+
+    assert source.checkpoint_id == 77
+    query_text = str(session.statements[1]).lower()
+    assert "balanced_score desc" in query_text
+    assert "evaluations.status" in query_text
+    assert "evaluations.data_scope" in query_text
 
 def test_rejects_missing_resume_source_run() -> None:
     current = _loaded_config(
@@ -1421,3 +1461,258 @@ def test_evaluation_failure_uses_existing_checkpoint_without_duplicate_interrupt
         CheckpointSaveReason.PERIODIC
     ]
     assert failed_steps == [4]
+
+
+def test_early_stopping_creates_final_checkpoint_at_same_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    loaded = _loaded_config(
+        checkpoint_every_steps=100,
+        eval_every_steps=4,
+    )
+    raw = loaded.config.model_dump(
+        mode="json"
+    )
+    raw["training"]["duration_amount"] = 20
+    raw["evaluation"][
+        "early_stop_patience_evals"
+    ] = 2
+    early_config = RunConfig.model_validate(raw)
+    loaded = replace(
+        loaded,
+        config=early_config,
+        normalized_json=normalize_config(
+            early_config
+        ),
+    )
+    _patch_preflight(
+        monkeypatch,
+        tmp_path,
+        events,
+        loaded=loaded,
+    )
+
+    model = FakeModel(num_timesteps=0)
+    monkeypatch.setattr(
+        service,
+        "create_pending_run",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.PENDING,
+            requested=20,
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "mark_run_running",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.RUNNING,
+            requested=20,
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "TradingEnvironment",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        service,
+        "create_ppo_model",
+        lambda *args, **kwargs: model,
+    )
+
+    trained_segments: list[int] = []
+
+    def train(*args, **kwargs):
+        segment = kwargs["total_timesteps"]
+        before = model.num_timesteps
+        model.num_timesteps += segment
+        trained_segments.append(segment)
+        return _training_result(
+            before=before,
+            completed=segment,
+            requested=segment,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "learn_ppo_exact_timesteps",
+        train,
+    )
+    monkeypatch.setattr(
+        service,
+        "update_run_progress",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.RUNNING,
+            requested=20,
+            completed=kwargs[
+                "training_steps_completed"
+            ],
+        ),
+    )
+
+    saved: list[tuple[int, CheckpointSaveReason]] = []
+
+    def persist(*args, **kwargs):
+        run_step = kwargs["run_step"]
+        reason = kwargs["save_reason"]
+        saved.append((run_step, reason))
+        return replace(
+            _checkpoint(
+                save_reason=reason,
+                run_step=run_step,
+                model_step=model.num_timesteps,
+            ),
+            checkpoint_id=(
+                100 + len(saved)
+            ),
+        )
+
+    monkeypatch.setattr(
+        service,
+        "persist_ppo_checkpoint",
+        persist,
+    )
+
+    scores = iter([
+        1.0,
+        0.9,
+        0.8,
+        0.8,
+    ])
+    evaluation_calls: list[tuple[int, str, float]] = []
+
+    def evaluate(*args, **kwargs):
+        score = next(scores)
+        evaluation_calls.append((
+            kwargs["checkpoint_id"],
+            kwargs["trigger"],
+            score,
+        ))
+        return SimpleNamespace(
+            evaluation_id=(
+                300 + len(evaluation_calls)
+            ),
+            checkpoint_id=kwargs[
+                "checkpoint_id"
+            ],
+            balanced_score=score,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "evaluate_run_validation_checkpoint",
+        evaluate,
+    )
+
+    completed_calls: list[dict[str, Any]] = []
+
+    def complete(*args, **kwargs):
+        completed_calls.append(kwargs)
+        return replace(
+            _run_state(
+                RunStatus.COMPLETED,
+                requested=20,
+                completed=12,
+            ),
+            stopped_early=True,
+            early_stop_reason=kwargs[
+                "early_stop_reason"
+            ],
+        )
+
+    monkeypatch.setattr(
+        service,
+        "complete_run",
+        complete,
+    )
+
+    result = service.train_ppo_run(
+        object(),
+        config_path="run.yml",
+        project_root=tmp_path,
+    )
+
+    assert trained_segments == [4, 4, 4]
+    assert saved == [
+        (4, CheckpointSaveReason.PERIODIC),
+        (8, CheckpointSaveReason.PERIODIC),
+        (12, CheckpointSaveReason.PERIODIC),
+        (12, CheckpointSaveReason.FINAL),
+    ]
+    assert [
+        trigger
+        for _, trigger, _ in evaluation_calls
+    ] == [
+        "scheduled",
+        "scheduled",
+        "scheduled",
+        "final",
+    ]
+    assert completed_calls[0][
+        "stopped_early"
+    ] is True
+    assert result.training.stopped_early is True
+    assert result.training.local_steps_completed == 12
+    assert result.training.local_steps_requested == 20
+    assert result.checkpoint.save_reason == (
+        CheckpointSaveReason.FINAL
+    )
+    assert result.checkpoint.run_step == 12
+    assert result.best_checkpoint.run_step == 4
+    assert result.best_evaluation.balanced_score == 1.0
+    assert result.early_stop_reason is not None
+
+
+def test_early_stopping_patience_resets_after_improvement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    tracker = service.BalancedScoreEarlyStopping(
+        patience=2
+    )
+
+    decisions = [
+        tracker.observe(
+            checkpoint_id=index,
+            evaluation_id=100 + index,
+            balanced_score=score,
+        )
+        for index, score in enumerate(
+            [1.0, 0.9, 1.1, 1.0, 0.9],
+            start=1,
+        )
+    ]
+
+    assert decisions[1].no_improvement_evals == 1
+    assert decisions[2].improved is True
+    assert decisions[2].no_improvement_evals == 0
+    assert decisions[3].should_stop is False
+    assert decisions[4].should_stop is True
+    assert decisions[4].best_checkpoint_id == 3
+
+
+def test_final_evaluation_can_become_best_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The tracker is the same mechanism used by the service for scheduled
+    # and final evaluations. A final improvement must replace prior best.
+    tracker = service.BalancedScoreEarlyStopping(
+        patience=5
+    )
+    tracker.observe(
+        checkpoint_id=1,
+        evaluation_id=11,
+        balanced_score=0.1,
+    )
+    final = tracker.observe(
+        checkpoint_id=2,
+        evaluation_id=12,
+        balanced_score=0.2,
+    )
+
+    assert final.improved is True
+    assert final.best_checkpoint_id == 2
+    assert final.best_evaluation_id == 12

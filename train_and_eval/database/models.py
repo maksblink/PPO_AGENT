@@ -190,6 +190,21 @@ class Run(Base):
         ),
         CheckConstraint(
             """
+            (
+                stopped_early = false
+                AND early_stop_reason IS NULL
+            )
+            OR
+            (
+                stopped_early = true
+                AND early_stop_reason IS NOT NULL
+                AND length(trim(early_stop_reason)) > 0
+            )
+            """,
+            name="early_stop_fields",
+        ),
+        CheckConstraint(
+            """
             finished_at IS NULL
             OR started_at IS NULL
             OR finished_at >= started_at
@@ -204,6 +219,8 @@ class Run(Base):
                 AND finished_at IS NULL
                 AND training_steps_completed = 0
                 AND data_epochs_completed = 0
+                AND stopped_early = false
+                AND early_stop_reason IS NULL
                 AND error_type IS NULL
                 AND error_message IS NULL
             )
@@ -212,6 +229,8 @@ class Run(Base):
                 status = 'running'
                 AND started_at IS NOT NULL
                 AND finished_at IS NULL
+                AND stopped_early = false
+                AND early_stop_reason IS NULL
                 AND error_type IS NULL
                 AND error_message IS NULL
             )
@@ -220,7 +239,24 @@ class Run(Base):
                 status = 'completed'
                 AND started_at IS NOT NULL
                 AND finished_at IS NOT NULL
-                AND training_steps_completed = training_steps_requested
+                AND
+                (
+                    (
+                        stopped_early = false
+                        AND early_stop_reason IS NULL
+                        AND training_steps_completed
+                            = training_steps_requested
+                    )
+                    OR
+                    (
+                        stopped_early = true
+                        AND early_stop_reason IS NOT NULL
+                        AND length(trim(early_stop_reason)) > 0
+                        AND training_steps_completed > 0
+                        AND training_steps_completed
+                            < training_steps_requested
+                    )
+                )
                 AND error_type IS NULL
                 AND error_message IS NULL
             )
@@ -229,6 +265,8 @@ class Run(Base):
                 status = 'failed'
                 AND started_at IS NOT NULL
                 AND finished_at IS NOT NULL
+                AND stopped_early = false
+                AND early_stop_reason IS NULL
                 AND error_type IS NOT NULL
                 AND length(trim(error_type)) > 0
                 AND error_message IS NOT NULL
@@ -239,6 +277,8 @@ class Run(Base):
                 status = 'cancelled'
                 AND started_at IS NOT NULL
                 AND finished_at IS NOT NULL
+                AND stopped_early = false
+                AND early_stop_reason IS NULL
             )
             """,
             name="status_fields",
@@ -457,6 +497,19 @@ class Run(Base):
         server_default=text("0"),
     )
 
+    stopped_early: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+
+    early_stop_reason: Mapped[
+        str | None
+    ] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     error_type: Mapped[
         str | None
     ] = mapped_column(
@@ -536,7 +589,11 @@ class Checkpoint(Base):
         UniqueConstraint(
             "run_id",
             "run_step",
-            name="uq_checkpoints_run_id_run_step",
+            "save_reason",
+            name=(
+                "uq_checkpoints_run_id_run_step_"
+                "save_reason"
+            ),
         ),
         UniqueConstraint(
             "relative_path",

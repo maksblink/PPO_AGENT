@@ -1,5 +1,10 @@
 """Training execution and run lifecycle persistence."""
 
+from train_and_eval.training.early_stopping import (
+    BalancedScoreEarlyStopping,
+    EarlyStoppingDecision,
+    EarlyStoppingError,
+)
 from train_and_eval.training.execution import (
     ExactPPOTrainingResult,
     PPOTrainingCompatibilityError,
@@ -36,6 +41,9 @@ from train_and_eval.training.persistence import (
 )
 
 __all__ = [
+    "BalancedScoreEarlyStopping",
+    "EarlyStoppingDecision",
+    "EarlyStoppingError",
     "build_training_schedule",
     "TrainingScheduleError",
     "TrainingEvent",

@@ -56,6 +56,10 @@ from train_and_eval.run_config import (
     load_run_config,
     validate_resume_compatibility,
 )
+from train_and_eval.training.early_stopping import (
+    BalancedScoreEarlyStopping,
+    EarlyStoppingDecision,
+)
 from train_and_eval.training.execution import (
     ExactPPOTrainingResult,
     learn_ppo_exact_timesteps,
@@ -122,7 +126,10 @@ class TrainingServiceResult:
     checkpoint: PersistedCheckpoint
     checkpoints: tuple[PersistedCheckpoint, ...]
     evaluations: tuple[PersistedEvaluationState, ...]
+    best_checkpoint: PersistedCheckpoint
+    best_evaluation: PersistedEvaluationState
     training: ExactPPOTrainingResult
+    early_stop_reason: str | None
     source_checkpoint_id: int | None
 
 
@@ -405,7 +412,9 @@ def train_ppo_run(
     Training is split at exact checkpoint and evaluation boundaries. Every
     evaluation receives one immutable checkpoint. The final local step is
     persisted once as a FINAL checkpoint and evaluated once with trigger
-    FINAL. Early stopping is intentionally handled by a later layer.
+    FINAL. Consecutive non-improving scheduled evaluations may stop the
+    run early; the stopping step then receives its own FINAL checkpoint
+    and FINAL evaluation.
     """
     root = (
         Path(project_root)
@@ -491,6 +500,16 @@ def train_ppo_run(
     persisted_evaluations: list[
         PersistedEvaluationState
     ] = []
+    early_stopping = BalancedScoreEarlyStopping(
+        patience=int(
+            config.evaluation
+            .early_stop_patience_evals
+        )
+    )
+    best_checkpoint: PersistedCheckpoint | None = None
+    best_evaluation: PersistedEvaluationState | None = None
+    last_decision: EarlyStoppingDecision | None = None
+    early_stop_reason: str | None = None
     completed_steps = 0
     rollout_sizes: list[int] = []
 
@@ -675,6 +694,117 @@ def train_ppo_run(
                 persisted_evaluations.append(
                     evaluation
                 )
+                last_decision = (
+                    early_stopping.observe(
+                        checkpoint_id=(
+                            checkpoint.checkpoint_id
+                        ),
+                        evaluation_id=(
+                            evaluation.evaluation_id
+                        ),
+                        balanced_score=(
+                            evaluation.balanced_score
+                        ),
+                    )
+                )
+
+                if last_decision.improved:
+                    best_checkpoint = checkpoint
+                    best_evaluation = evaluation
+
+                if (
+                    not event.final
+                    and last_decision.should_stop
+                ):
+                    early_stop_reason = (
+                        "balanced_score did not improve "
+                        f"for {last_decision.no_improvement_evals} "
+                        "consecutive scheduled evaluations; "
+                        "best score was "
+                        f"{last_decision.best_score:.17g}."
+                    )
+
+                    final_checkpoint = (
+                        persist_ppo_checkpoint(
+                            session_factory,
+                            storage,
+                            model,
+                            run_id=run_id,
+                            run_step=completed_steps,
+                            save_reason=(
+                                CheckpointSaveReason
+                                .FINAL
+                            ),
+                        )
+                    )
+                    persisted_checkpoints.append(
+                        final_checkpoint
+                    )
+
+                    final_evaluation = (
+                        evaluate_run_validation_checkpoint(
+                            session_factory,
+                            checkpoint_id=(
+                                final_checkpoint
+                                .checkpoint_id
+                            ),
+                            trigger="final",
+                            policy_mode=(
+                                config.evaluation
+                                .policy_mode
+                            ),
+                            threshold_action=(
+                                config.evaluation
+                                .threshold_action
+                            ),
+                            probability_threshold=(
+                                config.evaluation
+                                .probability_threshold
+                            ),
+                            seed=int(
+                                config.run.seed
+                            ),
+                            project_root=root,
+                            data_directory=(
+                                data_directory
+                            ),
+                            manifest_path=(
+                                manifest_path
+                            ),
+                            artifacts_directory=(
+                                artifacts_directory
+                            ),
+                        )
+                    )
+                    persisted_evaluations.append(
+                        final_evaluation
+                    )
+                    final_decision = (
+                        early_stopping.observe(
+                            checkpoint_id=(
+                                final_checkpoint
+                                .checkpoint_id
+                            ),
+                            evaluation_id=(
+                                final_evaluation
+                                .evaluation_id
+                            ),
+                            balanced_score=(
+                                final_evaluation
+                                .balanced_score
+                            ),
+                        )
+                    )
+
+                    if final_decision.improved:
+                        best_checkpoint = (
+                            final_checkpoint
+                        )
+                        best_evaluation = (
+                            final_evaluation
+                        )
+
+                    break
 
         if final_checkpoint is None:
             raise TrainingServiceError(
@@ -684,6 +814,9 @@ def train_ppo_run(
 
         model_steps_after = int(
             model.num_timesteps
+        )
+        stopped_early = (
+            early_stop_reason is not None
         )
         aggregate_training = (
             ExactPPOTrainingResult(
@@ -702,28 +835,48 @@ def train_ppo_run(
                 rollout_sizes=tuple(
                     rollout_sizes
                 ),
-                stopped_early=False,
+                stopped_early=stopped_early,
             )
         )
 
         if (
             aggregate_training
-            .local_steps_completed
-            != requested_steps
-            or aggregate_training
             .model_steps_after
             != aggregate_training
             .model_steps_before
-            + requested_steps
+            + completed_steps
         ):
+            raise TrainingStoppedEarlyError(
+                "PPO completed an inconsistent total "
+                "number of training steps."
+            )
+
+        if stopped_early:
+            if not 0 < completed_steps < requested_steps:
+                raise TrainingStoppedEarlyError(
+                    "Early stopping did not terminate at "
+                    "a valid partial run step."
+                )
+        elif completed_steps != requested_steps:
             raise TrainingStoppedEarlyError(
                 "PPO completed an unexpected total "
                 "number of training steps."
             )
 
+        if (
+            best_checkpoint is None
+            or best_evaluation is None
+        ):
+            raise TrainingServiceError(
+                "Training completed without a usable "
+                "validation evaluation."
+            )
+
         completed = complete_run(
             session_factory,
             run_id=run_id,
+            stopped_early=stopped_early,
+            early_stop_reason=early_stop_reason,
         )
 
         return TrainingServiceResult(
@@ -735,7 +888,12 @@ def train_ppo_run(
             evaluations=tuple(
                 persisted_evaluations
             ),
+            best_checkpoint=best_checkpoint,
+            best_evaluation=best_evaluation,
             training=aggregate_training,
+            early_stop_reason=(
+                early_stop_reason
+            ),
             source_checkpoint_id=(
                 None
                 if resume_source is None

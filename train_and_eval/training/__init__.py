@@ -1,5 +1,12 @@
-"""Training-run lifecycle persistence."""
+"""Training execution and run lifecycle persistence."""
 
+from train_and_eval.training.execution import (
+    ExactPPOTrainingResult,
+    PPOTrainingCompatibilityError,
+    PPOTrainingExecutionError,
+    PPOTrainingIdentityError,
+    learn_ppo_exact_timesteps,
+)
 from train_and_eval.training.persistence import (
     PersistedRunState,
     RunIdentityError,
@@ -15,6 +22,10 @@ from train_and_eval.training.persistence import (
 )
 
 __all__ = [
+    "ExactPPOTrainingResult",
+    "PPOTrainingCompatibilityError",
+    "PPOTrainingExecutionError",
+    "PPOTrainingIdentityError",
     "PersistedRunState",
     "RunIdentityError",
     "RunNotFoundError",
@@ -24,6 +35,7 @@ __all__ = [
     "complete_run",
     "create_pending_run",
     "fail_run",
+    "learn_ppo_exact_timesteps",
     "mark_run_running",
     "update_run_progress",
 ]

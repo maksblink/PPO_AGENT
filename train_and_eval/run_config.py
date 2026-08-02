@@ -381,8 +381,52 @@ class PPOSection(StrictConfigModel):
 class EvaluationSection(StrictConfigModel):
     eval_every_steps: PositiveInt
     checkpoint_every_steps: PositiveInt
+
+    policy_mode: Literal[
+        "deterministic_argmax",
+        "stochastic_sample",
+        "probability_threshold",
+    ]
+    threshold_action: int | None
+    probability_threshold: float | None
+
     best_metric: Literal["balanced_score"]
     early_stop_patience_evals: PositiveInt
+
+    @model_validator(mode="after")
+    def validate_policy_fields(self) -> Self:
+        if self.policy_mode != "probability_threshold":
+            if self.threshold_action is not None:
+                raise ValueError(
+                    "threshold_action must be null for "
+                    "non-threshold policy modes"
+                )
+
+            if self.probability_threshold is not None:
+                raise ValueError(
+                    "probability_threshold must be null for "
+                    "non-threshold policy modes"
+                )
+
+            return self
+
+        if self.probability_threshold is None:
+            raise ValueError(
+                "probability_threshold is required for "
+                "probability_threshold mode"
+            )
+
+        if not 0.0 <= self.probability_threshold <= 1.0:
+            raise ValueError(
+                "probability_threshold must be between 0 and 1"
+            )
+
+        if self.threshold_action not in {None, 1}:
+            raise ValueError(
+                "threshold_action must be 1 or null"
+            )
+
+        return self
 
 
 class RunConfig(StrictConfigModel):
@@ -395,6 +439,27 @@ class RunConfig(StrictConfigModel):
     environment: EnvironmentSection
     ppo: PPOSection
     evaluation: EvaluationSection
+
+    @model_validator(mode="after")
+    def validate_evaluation_action_space(self) -> Self:
+        evaluation = self.evaluation
+
+        if evaluation.policy_mode != "probability_threshold":
+            return self
+
+        if self.environment.position_side == "long_short":
+            if evaluation.threshold_action is not None:
+                raise ValueError(
+                    "threshold_action must be null for "
+                    "long_short probability-threshold evaluation"
+                )
+        elif evaluation.threshold_action != 1:
+            raise ValueError(
+                "threshold_action must be 1 for long_only or "
+                "short_only probability-threshold evaluation"
+            )
+
+        return self
 
 
 

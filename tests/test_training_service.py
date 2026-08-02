@@ -47,6 +47,8 @@ class FakeModel:
 def _loaded_config(
     *,
     resume: bool = False,
+    checkpoint_every_steps: int = 50_000,
+    eval_every_steps: int = 50_000,
 ) -> LoadedRunConfig:
     loaded = load_run_config(
         "configs/experiments/"
@@ -67,6 +69,12 @@ def _loaded_config(
         "timesteps"
     )
     raw["training"]["duration_amount"] = 10
+    raw["evaluation"][
+        "checkpoint_every_steps"
+    ] = checkpoint_every_steps
+    raw["evaluation"][
+        "eval_every_steps"
+    ] = eval_every_steps
 
     if resume:
         raw["continuation"] = {
@@ -214,6 +222,22 @@ def _patch_preflight(
             )
         ),
     )
+    monkeypatch.setattr(
+        service,
+        "evaluate_run_validation_checkpoint",
+        lambda *args, **kwargs: (
+            events.append(
+                f"{kwargs['trigger']}_evaluation"
+            )
+            or SimpleNamespace(
+                evaluation_id=301,
+                checkpoint_id=kwargs[
+                    "checkpoint_id"
+                ],
+                balanced_score=0.25,
+            )
+        ),
+    )
 
     return resolved_loaded
 
@@ -349,6 +373,7 @@ def test_executes_complete_fresh_training_run(
         "train",
         "progress",
         "final_checkpoint",
+        "final_evaluation",
         "completed",
     ]
 
@@ -1081,3 +1106,318 @@ def test_rejects_numeric_checkpoint_from_other_run() -> None:
             ResumeLookupFactory(session),
             current_config=numeric_config,
         )
+
+
+
+def test_executes_periodic_checkpoint_and_evaluation_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    _patch_preflight(
+        monkeypatch,
+        tmp_path,
+        events,
+        loaded=_loaded_config(
+            checkpoint_every_steps=4,
+            eval_every_steps=6,
+        ),
+    )
+    model = FakeModel(
+        num_timesteps=0
+    )
+
+    monkeypatch.setattr(
+        service,
+        "create_pending_run",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.PENDING
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "mark_run_running",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.RUNNING
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "TradingEnvironment",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        service,
+        "create_ppo_model",
+        lambda *args, **kwargs: model,
+    )
+
+    trained_segments: list[int] = []
+
+    def train(*args, **kwargs):
+        segment = kwargs["total_timesteps"]
+        before = model.num_timesteps
+        model.num_timesteps += segment
+        trained_segments.append(segment)
+        return _training_result(
+            before=before,
+            completed=segment,
+            requested=segment,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "learn_ppo_exact_timesteps",
+        train,
+    )
+
+    progress_steps: list[int] = []
+
+    def progress(*args, **kwargs):
+        completed = kwargs[
+            "training_steps_completed"
+        ]
+        progress_steps.append(completed)
+        return _run_state(
+            RunStatus.RUNNING,
+            completed=completed,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "update_run_progress",
+        progress,
+    )
+
+    checkpoint_steps: list[
+        tuple[int, CheckpointSaveReason]
+    ] = []
+
+    def persist(*args, **kwargs):
+        run_step = kwargs["run_step"]
+        reason = kwargs["save_reason"]
+        checkpoint_steps.append(
+            (run_step, reason)
+        )
+        return replace(
+            _checkpoint(
+                save_reason=reason,
+                run_step=run_step,
+                model_step=model.num_timesteps,
+            ),
+            checkpoint_id=90 + run_step,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "persist_ppo_checkpoint",
+        persist,
+    )
+
+    evaluation_calls: list[
+        tuple[int, str]
+    ] = []
+
+    def evaluate(*args, **kwargs):
+        evaluation_calls.append(
+            (
+                kwargs["checkpoint_id"],
+                kwargs["trigger"],
+            )
+        )
+        assert kwargs["policy_mode"] == (
+            "deterministic_argmax"
+        )
+        assert kwargs["threshold_action"] is None
+        assert (
+            kwargs["probability_threshold"]
+            is None
+        )
+        return SimpleNamespace(
+            evaluation_id=(
+                300 + len(evaluation_calls)
+            ),
+            checkpoint_id=kwargs["checkpoint_id"],
+            balanced_score=0.1,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "evaluate_run_validation_checkpoint",
+        evaluate,
+    )
+    monkeypatch.setattr(
+        service,
+        "complete_run",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.COMPLETED,
+            completed=10,
+        ),
+    )
+
+    result = service.train_ppo_run(
+        object(),
+        config_path="run.yml",
+        project_root=tmp_path,
+        log_interval=None,
+    )
+
+    assert trained_segments == [4, 2, 2, 2]
+    assert progress_steps == [4, 6, 8, 10]
+    assert checkpoint_steps == [
+        (4, CheckpointSaveReason.PERIODIC),
+        (6, CheckpointSaveReason.PERIODIC),
+        (8, CheckpointSaveReason.PERIODIC),
+        (10, CheckpointSaveReason.FINAL),
+    ]
+    assert evaluation_calls == [
+        (96, "scheduled"),
+        (100, "final"),
+    ]
+    assert len(result.checkpoints) == 4
+    assert len(result.evaluations) == 2
+    assert result.checkpoint.run_step == 10
+    assert result.training.rollout_sizes == (
+        4,
+        2,
+        2,
+        2,
+    )
+    assert (
+        result.training.local_steps_completed
+        == 10
+    )
+
+
+def test_evaluation_failure_uses_existing_checkpoint_without_duplicate_interrupted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    _patch_preflight(
+        monkeypatch,
+        tmp_path,
+        events,
+        loaded=_loaded_config(
+            checkpoint_every_steps=4,
+            eval_every_steps=4,
+        ),
+    )
+    model = FakeModel(
+        num_timesteps=0
+    )
+
+    monkeypatch.setattr(
+        service,
+        "create_pending_run",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.PENDING
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "mark_run_running",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.RUNNING
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "TradingEnvironment",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        service,
+        "create_ppo_model",
+        lambda *args, **kwargs: model,
+    )
+
+    def train(*args, **kwargs):
+        segment = kwargs["total_timesteps"]
+        before = model.num_timesteps
+        model.num_timesteps += segment
+        return _training_result(
+            before=before,
+            completed=segment,
+            requested=segment,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "learn_ppo_exact_timesteps",
+        train,
+    )
+    monkeypatch.setattr(
+        service,
+        "update_run_progress",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.RUNNING,
+            completed=kwargs[
+                "training_steps_completed"
+            ],
+        ),
+    )
+
+    save_reasons: list[
+        CheckpointSaveReason
+    ] = []
+
+    def persist(*args, **kwargs):
+        save_reasons.append(
+            kwargs["save_reason"]
+        )
+        return _checkpoint(
+            save_reason=kwargs["save_reason"],
+            run_step=kwargs["run_step"],
+            model_step=model.num_timesteps,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "persist_ppo_checkpoint",
+        persist,
+    )
+    evaluation_error = RuntimeError(
+        "validation failed"
+    )
+    monkeypatch.setattr(
+        service,
+        "evaluate_run_validation_checkpoint",
+        lambda *args, **kwargs: (
+            _ for _ in ()
+        ).throw(evaluation_error),
+    )
+
+    failed_steps: list[int] = []
+
+    def fail_state(*args, **kwargs):
+        failed_steps.append(
+            kwargs[
+                "training_steps_completed"
+            ]
+        )
+        return _run_state(
+            RunStatus.FAILED,
+            completed=4,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "fail_run",
+        fail_state,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="validation failed",
+    ):
+        service.train_ppo_run(
+            object(),
+            config_path="run.yml",
+            project_root=tmp_path,
+        )
+
+    assert save_reasons == [
+        CheckpointSaveReason.PERIODIC
+    ]
+    assert failed_steps == [4]

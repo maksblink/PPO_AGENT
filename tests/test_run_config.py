@@ -74,6 +74,9 @@ def _valid_config() -> dict:
         "evaluation": {
             "eval_every_steps": 500,
             "checkpoint_every_steps": 500,
+            "policy_mode": "deterministic_argmax",
+            "threshold_action": None,
+            "probability_threshold": None,
             "best_metric": "balanced_score",
             "early_stop_patience_evals": 5,
         },
@@ -902,3 +905,85 @@ def test_config_rejects_legacy_schema_version_name(
             verify_data=False,
         )
 
+
+
+
+def test_rejects_threshold_fields_for_deterministic_policy(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["evaluation"]["probability_threshold"] = 0.6
+
+    path = _write_config(
+        tmp_path / "invalid-evaluation.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="must be null",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_requires_direction_action_for_two_action_threshold_policy(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["evaluation"].update(
+        {
+            "policy_mode": "probability_threshold",
+            "threshold_action": None,
+            "probability_threshold": 0.6,
+        }
+    )
+
+    path = _write_config(
+        tmp_path / "invalid-threshold.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="threshold_action must be 1",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_accepts_dynamic_long_short_threshold_policy(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["environment"]["position_side"] = "long_short"
+    config["evaluation"].update(
+        {
+            "policy_mode": "probability_threshold",
+            "threshold_action": None,
+            "probability_threshold": 0.6,
+        }
+    )
+
+    path = _write_config(
+        tmp_path / "long-short-threshold.yml",
+        config,
+    )
+
+    loaded = load_run_config(
+        path,
+        verify_data=False,
+    )
+
+    assert (
+        loaded.config.evaluation.policy_mode
+        == "probability_threshold"
+    )
+    assert (
+        loaded.config.evaluation.threshold_action
+        is None
+    )

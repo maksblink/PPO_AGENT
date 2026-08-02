@@ -71,5 +71,10 @@ ppo:
 evaluation:
   eval_every_steps: 50000
   checkpoint_every_steps: 50000
+
+  policy_mode: deterministic_argmax
+  threshold_action: null
+  probability_threshold: null
+
   best_metric: balanced_score
   early_stop_patience_evals: 5

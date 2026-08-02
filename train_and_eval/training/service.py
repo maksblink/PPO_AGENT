@@ -23,6 +23,12 @@ from train_and_eval.database.models import (
 from train_and_eval.environment.trading_environment import (
     TradingEnvironment,
 )
+from train_and_eval.evaluation.persistence import (
+    PersistedEvaluationState,
+)
+from train_and_eval.evaluation.service import (
+    evaluate_run_validation_checkpoint,
+)
 from train_and_eval.market_data.load_market_data import (
     DATA_DIRECTORY,
     MANIFEST_PATH,
@@ -61,6 +67,9 @@ from train_and_eval.training.persistence import (
     fail_run,
     mark_run_running,
     update_run_progress,
+)
+from train_and_eval.training.scheduling import (
+    build_training_schedule,
 )
 from train_and_eval.checkpoints.persistence import (
     PersistedCheckpoint,
@@ -107,10 +116,12 @@ class ResumeTrainingSource:
 
 @dataclass(frozen=True, slots=True)
 class TrainingServiceResult:
-    """Completed training run together with its final model checkpoint."""
+    """Completed run, checkpoints, evaluations, and aggregate training."""
 
     run: PersistedRunState
     checkpoint: PersistedCheckpoint
+    checkpoints: tuple[PersistedCheckpoint, ...]
+    evaluations: tuple[PersistedEvaluationState, ...]
     training: ExactPPOTrainingResult
     source_checkpoint_id: int | None
 
@@ -391,11 +402,10 @@ def train_ppo_run(
     """
     Execute one complete fresh or resumed PPO training run.
 
-    This core service creates the run lifecycle, trains for exactly the
-    requested local steps, persists one final checkpoint, and records an
-    interrupted checkpoint when execution fails after a model exists.
-    Periodic checkpoints and validation evaluations are orchestrated by a
-    later scheduling layer.
+    Training is split at exact checkpoint and evaluation boundaries. Every
+    evaluation receives one immutable checkpoint. The final local step is
+    persisted once as a FINAL checkpoint and evaluated once with trigger
+    FINAL. Early stopping is intentionally handled by a later layer.
     """
     root = (
         Path(project_root)
@@ -457,12 +467,32 @@ def train_ppo_run(
     requested_steps = int(
         pending.training_steps_requested
     )
+    schedule = build_training_schedule(
+        total_steps=requested_steps,
+        checkpoint_every_steps=int(
+            config.evaluation
+            .checkpoint_every_steps
+        ),
+        eval_every_steps=int(
+            config.evaluation
+            .eval_every_steps
+        ),
+    )
 
     model: Any | None = None
     model_steps_before: int | None = None
     final_checkpoint: (
         PersistedCheckpoint | None
     ) = None
+    latest_checkpoint_step: int | None = None
+    persisted_checkpoints: list[
+        PersistedCheckpoint
+    ] = []
+    persisted_evaluations: list[
+        PersistedEvaluationState
+    ] = []
+    completed_steps = 0
+    rollout_sizes: list[int] = []
 
     try:
         mark_run_running(
@@ -501,63 +531,195 @@ def train_ppo_run(
         model_steps_before = int(
             model.num_timesteps
         )
-
-        training_result = (
-            learn_ppo_exact_timesteps(
-                model,
-                total_timesteps=(
-                    requested_steps
-                ),
-                log_interval=log_interval,
-                progress_bar=progress_bar,
-            )
-        )
-
-        if training_result.stopped_early:
-            raise TrainingStoppedEarlyError(
-                "PPO stopped before all requested "
-                "training steps completed."
-            )
-
-        if (
-            training_result.local_steps_completed
-            != requested_steps
-        ):
-            raise TrainingStoppedEarlyError(
-                "PPO completed an unexpected number "
-                "of local training steps."
-            )
-
-        update_run_progress(
-            session_factory,
-            run_id=run_id,
-            training_steps_completed=(
-                training_result
-                .local_steps_completed
-            ),
-        )
-
         storage = ArtifactStorage(
             project_root=root,
             artifacts_directory=(
                 artifacts_directory
             ),
         )
-        final_checkpoint = (
-            persist_ppo_checkpoint(
+
+        for event in schedule:
+            segment_steps = (
+                int(event.run_step)
+                - completed_steps
+            )
+            expected_model_steps_before = (
+                int(model_steps_before)
+                + completed_steps
+            )
+
+            segment_result = (
+                learn_ppo_exact_timesteps(
+                    model,
+                    total_timesteps=(
+                        segment_steps
+                    ),
+                    log_interval=log_interval,
+                    progress_bar=progress_bar,
+                )
+            )
+
+            if segment_result.stopped_early:
+                raise TrainingStoppedEarlyError(
+                    "PPO stopped before the next "
+                    "scheduled training boundary."
+                )
+
+            if (
+                segment_result.model_steps_before
+                != expected_model_steps_before
+                or segment_result.model_steps_after
+                != expected_model_steps_before
+                + segment_steps
+            ):
+                raise TrainingStoppedEarlyError(
+                    "PPO segment reported inconsistent "
+                    "absolute model steps."
+                )
+
+            if (
+                segment_result.local_steps_completed
+                != segment_steps
+            ):
+                raise TrainingStoppedEarlyError(
+                    "PPO completed an unexpected number "
+                    "of steps in a scheduled segment."
+                )
+
+            completed_steps += int(
+                segment_result
+                .local_steps_completed
+            )
+            rollout_sizes.extend(
+                segment_result.rollout_sizes
+            )
+
+            if completed_steps != int(
+                event.run_step
+            ):
+                raise TrainingStoppedEarlyError(
+                    "PPO did not reach the exact "
+                    "scheduled run step."
+                )
+
+            update_run_progress(
+                session_factory,
+                run_id=run_id,
+                training_steps_completed=(
+                    completed_steps
+                ),
+            )
+
+            save_reason = (
+                CheckpointSaveReason.FINAL
+                if event.final
+                else CheckpointSaveReason.PERIODIC
+            )
+            checkpoint = persist_ppo_checkpoint(
                 session_factory,
                 storage,
                 model,
                 run_id=run_id,
-                run_step=(
-                    training_result
-                    .local_steps_completed
+                run_step=completed_steps,
+                save_reason=save_reason,
+            )
+            persisted_checkpoints.append(
+                checkpoint
+            )
+            latest_checkpoint_step = (
+                completed_steps
+            )
+
+            if event.final:
+                final_checkpoint = checkpoint
+
+            if event.evaluation_due:
+                evaluation = (
+                    evaluate_run_validation_checkpoint(
+                        session_factory,
+                        checkpoint_id=(
+                            checkpoint.checkpoint_id
+                        ),
+                        trigger=(
+                            "final"
+                            if event.final
+                            else "scheduled"
+                        ),
+                        policy_mode=(
+                            config.evaluation
+                            .policy_mode
+                        ),
+                        threshold_action=(
+                            config.evaluation
+                            .threshold_action
+                        ),
+                        probability_threshold=(
+                            config.evaluation
+                            .probability_threshold
+                        ),
+                        seed=int(
+                            config.run.seed
+                        ),
+                        project_root=root,
+                        data_directory=(
+                            data_directory
+                        ),
+                        manifest_path=(
+                            manifest_path
+                        ),
+                        artifacts_directory=(
+                            artifacts_directory
+                        ),
+                    )
+                )
+                persisted_evaluations.append(
+                    evaluation
+                )
+
+        if final_checkpoint is None:
+            raise TrainingServiceError(
+                "Training schedule did not create a "
+                "final checkpoint."
+            )
+
+        model_steps_after = int(
+            model.num_timesteps
+        )
+        aggregate_training = (
+            ExactPPOTrainingResult(
+                model_steps_before=int(
+                    model_steps_before
                 ),
-                save_reason=(
-                    CheckpointSaveReason.FINAL
+                model_steps_after=(
+                    model_steps_after
                 ),
+                local_steps_requested=(
+                    requested_steps
+                ),
+                local_steps_completed=(
+                    completed_steps
+                ),
+                rollout_sizes=tuple(
+                    rollout_sizes
+                ),
+                stopped_early=False,
             )
         )
+
+        if (
+            aggregate_training
+            .local_steps_completed
+            != requested_steps
+            or aggregate_training
+            .model_steps_after
+            != aggregate_training
+            .model_steps_before
+            + requested_steps
+        ):
+            raise TrainingStoppedEarlyError(
+                "PPO completed an unexpected total "
+                "number of training steps."
+            )
 
         completed = complete_run(
             session_factory,
@@ -567,7 +729,13 @@ def train_ppo_run(
         return TrainingServiceResult(
             run=completed,
             checkpoint=final_checkpoint,
-            training=training_result,
+            checkpoints=tuple(
+                persisted_checkpoints
+            ),
+            evaluations=tuple(
+                persisted_evaluations
+            ),
+            training=aggregate_training,
             source_checkpoint_id=(
                 None
                 if resume_source is None
@@ -587,6 +755,8 @@ def train_ppo_run(
         if (
             model is not None
             and final_checkpoint is None
+            and latest_checkpoint_step
+            != local_steps
         ):
             try:
                 storage = ArtifactStorage(

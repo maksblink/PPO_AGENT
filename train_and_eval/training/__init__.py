@@ -7,6 +7,11 @@ from train_and_eval.training.execution import (
     PPOTrainingIdentityError,
     learn_ppo_exact_timesteps,
 )
+from train_and_eval.training.scheduling import (
+    TrainingEvent,
+    TrainingScheduleError,
+    build_training_schedule,
+)
 from train_and_eval.training.service import (
     ResumeTrainingSource,
     TrainingServiceError,
@@ -31,6 +36,9 @@ from train_and_eval.training.persistence import (
 )
 
 __all__ = [
+    "build_training_schedule",
+    "TrainingScheduleError",
+    "TrainingEvent",
     "train_ppo_run",
     "TrainingStoppedEarlyError",
     "TrainingSourceNotFoundError",

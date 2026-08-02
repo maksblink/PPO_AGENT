@@ -7,6 +7,10 @@ from typing import Any
 
 import pandas as pd
 from pydantic import ValidationError
+
+from train_and_eval.artifact_storage.storage import (
+    DEFAULT_ARTIFACTS_DIRECTORY,
+)
 from sqlalchemy.orm import Session
 
 from train_and_eval.database.models import (
@@ -328,6 +332,9 @@ def evaluate_run_validation_checkpoint(
     project_root: str | Path = PROJECT_ROOT,
     data_directory: str | Path = DATA_DIRECTORY,
     manifest_path: str | Path = MANIFEST_PATH,
+    artifacts_directory: str | Path = (
+        DEFAULT_ARTIFACTS_DIRECTORY
+    ),
 ) -> PersistedEvaluationState:
     """
     Evaluate one persisted checkpoint on its archived validation range.
@@ -471,6 +478,9 @@ def evaluate_run_validation_checkpoint(
                 environment=None,
                 device=config.ppo.device,
                 project_root=root,
+                artifacts_directory=(
+                    artifacts_directory
+                ),
             )
         )
 

@@ -17,7 +17,7 @@ venv/
 .vscode/
 
 # Runtime files
-runs/
+/runs/
 outputs/
 logs/
 /checkpoints/

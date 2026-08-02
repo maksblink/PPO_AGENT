@@ -188,6 +188,61 @@ class Run(Base):
             "data_epochs_completed >= 0",
             name="completed_epochs_nonnegative",
         ),
+        CheckConstraint(
+            """
+            finished_at IS NULL
+            OR started_at IS NULL
+            OR finished_at >= started_at
+            """,
+            name="execution_time_order",
+        ),
+        CheckConstraint(
+            """
+            (
+                status = 'pending'
+                AND started_at IS NULL
+                AND finished_at IS NULL
+                AND training_steps_completed = 0
+                AND data_epochs_completed = 0
+                AND error_type IS NULL
+                AND error_message IS NULL
+            )
+            OR
+            (
+                status = 'running'
+                AND started_at IS NOT NULL
+                AND finished_at IS NULL
+                AND error_type IS NULL
+                AND error_message IS NULL
+            )
+            OR
+            (
+                status = 'completed'
+                AND started_at IS NOT NULL
+                AND finished_at IS NOT NULL
+                AND training_steps_completed = training_steps_requested
+                AND error_type IS NULL
+                AND error_message IS NULL
+            )
+            OR
+            (
+                status = 'failed'
+                AND started_at IS NOT NULL
+                AND finished_at IS NOT NULL
+                AND error_type IS NOT NULL
+                AND length(trim(error_type)) > 0
+                AND error_message IS NOT NULL
+                AND length(trim(error_message)) > 0
+            )
+            OR
+            (
+                status = 'cancelled'
+                AND started_at IS NOT NULL
+                AND finished_at IS NOT NULL
+            )
+            """,
+            name="status_fields",
+        ),
     )
 
     id: Mapped[int] = mapped_column(

@@ -72,6 +72,8 @@ def test_runs_table_has_named_safety_constraints() -> None:
         "ck_runs_requested_steps_positive",
         "ck_runs_completed_steps_range",
         "ck_runs_completed_epochs_nonnegative",
+        "ck_runs_execution_time_order",
+        "ck_runs_status_fields",
     }
 
     assert expected_names.issubset(

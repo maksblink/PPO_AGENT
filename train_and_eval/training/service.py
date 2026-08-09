@@ -122,6 +122,11 @@ class ResumeTrainingSource:
     model_step: int
     source_config: RunConfig
 
+    @property
+    def id(self) -> int:
+        """Checkpoint identity expected by the shared artifact loader."""
+        return self.checkpoint_id
+
 
 @dataclass(frozen=True, slots=True)
 class TrainingServiceResult:

@@ -449,6 +449,8 @@ def test_resume_loads_source_with_current_training_settings(
 
     def load_model(*args, **kwargs):
         events.append("load_model")
+        assert args[0].id == 88
+        assert args[0].checkpoint_id == 88
         assert kwargs[
             "training_config"
         ] == loaded.config.ppo

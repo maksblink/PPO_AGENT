@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import stable_baselines3
@@ -26,6 +27,17 @@ class PPOTrainingIdentityError(
     PPOTrainingExecutionError
 ):
     """Raised when exact training arguments are invalid."""
+
+
+
+
+@dataclass(frozen=True, slots=True)
+class PPOTrainingUpdate:
+    model_steps: int
+    local_steps_completed: int
+    rollout_iteration: int
+    rollout_size: int
+    metrics: Mapping[str, int | float]
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +101,66 @@ def _new_rollout_buffer(
     )
 
 
+
+_TRAIN_LOG_KEYS = {
+    "train/approx_kl": "approx_kl",
+    "train/clip_fraction": "clip_fraction",
+    "train/clip_range": "clip_range",
+    "train/entropy_loss": "entropy_loss",
+    "train/explained_variance": "explained_variance",
+    "train/learning_rate": "learning_rate",
+    "train/loss": "loss",
+    "train/n_updates": "n_updates",
+    "train/policy_gradient_loss": "policy_gradient_loss",
+    "train/value_loss": "value_loss",
+}
+
+
+def _numeric_value(value: Any) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, int):
+        return value
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _latest_training_metrics(model: PPO) -> dict[str, int | float]:
+    metrics: dict[str, int | float] = {}
+    values = getattr(model.logger, "name_to_value", {})
+
+    for source_name, output_name in _TRAIN_LOG_KEYS.items():
+        value = _numeric_value(values.get(source_name))
+        if value is not None:
+            metrics[output_name] = value
+
+    episode_buffer = getattr(model, "ep_info_buffer", None)
+    if episode_buffer:
+        rewards = [
+            _numeric_value(item.get("r"))
+            for item in episode_buffer
+            if isinstance(item, dict) and "r" in item
+        ]
+        lengths = [
+            _numeric_value(item.get("l"))
+            for item in episode_buffer
+            if isinstance(item, dict) and "l" in item
+        ]
+        rewards = [value for value in rewards if value is not None]
+        lengths = [value for value in lengths if value is not None]
+
+        if rewards:
+            metrics["ep_rew_mean"] = float(sum(rewards) / len(rewards))
+        if lengths:
+            metrics["ep_len_mean"] = float(sum(lengths) / len(lengths))
+
+    return metrics
+
+
 def learn_ppo_exact_timesteps(
     model: PPO,
     *,
@@ -96,6 +168,7 @@ def learn_ppo_exact_timesteps(
     callback: MaybeCallback = None,
     log_interval: int | None = 1,
     progress_bar: bool = False,
+    update_callback: Callable[[PPOTrainingUpdate], None] | None = None,
 ) -> ExactPPOTrainingResult:
     """
     Train PPO for exactly the requested number of environment steps.
@@ -239,6 +312,19 @@ def learn_ppo_exact_timesteps(
                 model.dump_logs(iteration)
 
             model.train()
+
+            if update_callback is not None:
+                update_callback(
+                    PPOTrainingUpdate(
+                        model_steps=int(model.num_timesteps),
+                        local_steps_completed=(
+                            int(model.num_timesteps) - model_steps_before
+                        ),
+                        rollout_iteration=iteration,
+                        rollout_size=rollout_steps,
+                        metrics=_latest_training_metrics(model),
+                    )
+                )
 
     except BaseException as error:
         if training_started:

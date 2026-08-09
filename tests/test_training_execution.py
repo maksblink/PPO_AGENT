@@ -247,3 +247,49 @@ def test_trains_final_single_step_rollout() -> None:
     assert result.rollout_sizes == (8, 1)
     assert result.local_steps_completed == 9
     assert model.num_timesteps == 9
+
+
+def test_reports_latest_training_metrics_after_each_rollout() -> None:
+    environment = CountingEnvironment(
+        episode_steps=20
+    )
+    model = create_ppo_model(
+        environment,
+        _ppo_config(),
+        seed=19,
+    )
+    updates = []
+
+    result = learn_ppo_exact_timesteps(
+        model,
+        total_timesteps=10,
+        log_interval=None,
+        update_callback=updates.append,
+    )
+
+    assert result.rollout_sizes == (8, 2)
+    assert [
+        update.local_steps_completed
+        for update in updates
+    ] == [8, 10]
+    assert [
+        update.rollout_iteration
+        for update in updates
+    ] == [1, 2]
+    assert [
+        update.rollout_size
+        for update in updates
+    ] == [8, 2]
+    assert all(
+        "approx_kl" in update.metrics
+        for update in updates
+    )
+    assert all(
+        "entropy_loss" in update.metrics
+        for update in updates
+    )
+    assert all(
+        "explained_variance" in update.metrics
+        for update in updates
+    )
+    assert updates[-1].metrics["n_updates"] == 2

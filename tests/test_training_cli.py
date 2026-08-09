@@ -162,6 +162,7 @@ def _args(**overrides):
         "verbose": 1,
         "log_interval": 1,
         "progress_bar": False,
+        "plain_output": False,
         "traceback": False,
     }
     values.update(overrides)
@@ -230,6 +231,7 @@ def test_executes_training_and_prints_success_summary(
         "verbose": 2,
         "log_interval": 3,
         "progress_bar": True,
+        "progress_reporter": None,
     }
 
     output = stdout.getvalue()
@@ -452,6 +454,7 @@ def test_main_parses_cli_arguments(
         "verbose": 2,
         "log_interval": 5,
         "progress_bar": True,
+        "plain_output": False,
         "traceback": True,
     }
 
@@ -470,3 +473,59 @@ def test_parser_rejects_nonpositive_log_interval() -> None:
         )
 
     assert captured.value.code == 2
+
+class TTYStringIO(StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_tty_uses_live_dashboard_and_suppresses_native_sb3_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = FakeEngine()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "require_clean_git",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_database_engine",
+        lambda: engine,
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_session_factory",
+        lambda received_engine: object(),
+    )
+
+    def train(*args, **kwargs):
+        captured.update(kwargs)
+        return _result()
+
+    monkeypatch.setattr(
+        cli,
+        "train_ppo_run",
+        train,
+    )
+
+    exit_code = cli.execute_training_cli(
+        _args(
+            verbose=2,
+            log_interval=9,
+            progress_bar=True,
+        ),
+        stdout=TTYStringIO(),
+        stderr=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured["verbose"] == 0
+    assert captured["log_interval"] is None
+    assert captured["progress_bar"] is False
+    assert isinstance(
+        captured["progress_reporter"],
+        cli.LiveTrainingProgress,
+    )

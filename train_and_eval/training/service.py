@@ -62,7 +62,12 @@ from train_and_eval.training.early_stopping import (
 )
 from train_and_eval.training.execution import (
     ExactPPOTrainingResult,
+    PPOTrainingUpdate,
     learn_ppo_exact_timesteps,
+)
+from train_and_eval.training.progress import (
+    TrainingProgressReporter,
+    ValidationMetricSnapshot,
 )
 from train_and_eval.training.persistence import (
     PersistedRunState,
@@ -392,6 +397,93 @@ def _local_model_steps(
     )
 
 
+def _progress_call(
+    progress_reporter: TrainingProgressReporter | None,
+    method_name: str,
+    /,
+    *args,
+    **kwargs,
+) -> None:
+    if progress_reporter is None:
+        return
+
+    try:
+        method = getattr(progress_reporter, method_name)
+        method(*args, **kwargs)
+    except BaseException:
+        # Terminal reporting is observational and must never alter
+        # checkpointing, evaluation, early stopping, or training.
+        return
+
+
+def _validation_progress_metrics(
+    session_factory,
+    *,
+    evaluation_id: int,
+    checkpoint_id: int,
+    run_step: int,
+    trigger: str,
+) -> ValidationMetricSnapshot:
+    with session_factory() as session:
+        evaluation = session.get(
+            Evaluation,
+            int(evaluation_id),
+        )
+
+        if evaluation is None:
+            raise TrainingServiceError(
+                f"Evaluation {evaluation_id} does not exist after completion."
+            )
+
+        if int(evaluation.checkpoint_id) != int(checkpoint_id):
+            raise TrainingServiceError(
+                "Completed evaluation checkpoint does not match the training event."
+            )
+
+        return ValidationMetricSnapshot(
+            evaluation_id=int(evaluation.id),
+            checkpoint_id=int(evaluation.checkpoint_id),
+            run_step=int(run_step),
+            trigger=str(trigger),
+            balanced_score=(
+                None if evaluation.balanced_score is None
+                else float(evaluation.balanced_score)
+            ),
+            agent_return=(
+                None if evaluation.agent_return is None
+                else float(evaluation.agent_return)
+            ),
+            always_long_return=(
+                None if evaluation.always_long_return is None
+                else float(evaluation.always_long_return)
+            ),
+            always_short_return=(
+                None if evaluation.always_short_return is None
+                else float(evaluation.always_short_return)
+            ),
+            agent_max_drawdown=(
+                None if evaluation.agent_max_drawdown is None
+                else float(evaluation.agent_max_drawdown)
+            ),
+            profit_factor=(
+                None if evaluation.profit_factor is None
+                else float(evaluation.profit_factor)
+            ),
+            win_rate=(
+                None if evaluation.win_rate is None
+                else float(evaluation.win_rate)
+            ),
+            market_exposure=(
+                None if evaluation.market_exposure is None
+                else float(evaluation.market_exposure)
+            ),
+            round_trips=(
+                None if evaluation.round_trips is None
+                else int(evaluation.round_trips)
+            ),
+        )
+
+
 def train_ppo_run(
     session_factory,
     *,
@@ -405,6 +497,7 @@ def train_ppo_run(
     verbose: int = 0,
     log_interval: int | None = 1,
     progress_bar: bool = False,
+    progress_reporter: TrainingProgressReporter | None = None,
 ) -> TrainingServiceResult:
     """
     Execute one complete fresh or resumed PPO training run.
@@ -557,6 +650,15 @@ def train_ppo_run(
             ),
         )
 
+        _progress_call(
+            progress_reporter,
+            "start",
+            run_id=run_id,
+            run_name=config.run.name,
+            requested_steps=requested_steps,
+            model_steps_before=model_steps_before,
+        )
+
         for event in schedule:
             segment_steps = (
                 int(event.run_step)
@@ -567,14 +669,48 @@ def train_ppo_run(
                 + completed_steps
             )
 
+            segment_completed_before = completed_steps
+            rollout_count_before = len(rollout_sizes)
+
+            def report_training_update(
+                update: PPOTrainingUpdate,
+            ) -> None:
+                _progress_call(
+                    progress_reporter,
+                    "training_update",
+                    completed_steps=(
+                        segment_completed_before
+                        + update.local_steps_completed
+                    ),
+                    model_steps=update.model_steps,
+                    rollouts_completed=(
+                        rollout_count_before
+                        + update.rollout_iteration
+                    ),
+                    metrics=update.metrics,
+                )
+
             segment_result = (
                 learn_ppo_exact_timesteps(
                     model,
                     total_timesteps=(
                         segment_steps
                     ),
-                    log_interval=log_interval,
-                    progress_bar=progress_bar,
+                    log_interval=(
+                        None
+                        if progress_reporter is not None
+                        else log_interval
+                    ),
+                    progress_bar=(
+                        False
+                        if progress_reporter is not None
+                        else progress_bar
+                    ),
+                    update_callback=(
+                        report_training_update
+                        if progress_reporter is not None
+                        else None
+                    ),
                 )
             )
 
@@ -653,17 +789,27 @@ def train_ppo_run(
                 final_checkpoint = checkpoint
 
             if event.evaluation_due:
+                evaluation_trigger = (
+                    "final"
+                    if event.final
+                    else "scheduled"
+                )
+
+                _progress_call(
+                    progress_reporter,
+                    "validation_started",
+                    run_step=completed_steps,
+                    checkpoint_id=checkpoint.checkpoint_id,
+                    trigger=evaluation_trigger,
+                )
+
                 evaluation = (
                     evaluate_run_validation_checkpoint(
                         session_factory,
                         checkpoint_id=(
                             checkpoint.checkpoint_id
                         ),
-                        trigger=(
-                            "final"
-                            if event.final
-                            else "scheduled"
-                        ),
+                        trigger=evaluation_trigger,
                         policy_mode=(
                             config.evaluation
                             .policy_mode
@@ -694,6 +840,26 @@ def train_ppo_run(
                 persisted_evaluations.append(
                     evaluation
                 )
+
+                if progress_reporter is not None:
+                    try:
+                        validation_metrics = _validation_progress_metrics(
+                            session_factory,
+                            evaluation_id=evaluation.evaluation_id,
+                            checkpoint_id=checkpoint.checkpoint_id,
+                            run_step=completed_steps,
+                            trigger=evaluation_trigger,
+                        )
+                    except BaseException:
+                        validation_metrics = None
+
+                    if validation_metrics is not None:
+                        _progress_call(
+                            progress_reporter,
+                            "validation_completed",
+                            validation_metrics,
+                        )
+
                 last_decision = (
                     early_stopping.observe(
                         checkpoint_id=(
@@ -741,6 +907,16 @@ def train_ppo_run(
                         final_checkpoint
                     )
 
+                    _progress_call(
+                        progress_reporter,
+                        "validation_started",
+                        run_step=completed_steps,
+                        checkpoint_id=(
+                            final_checkpoint.checkpoint_id
+                        ),
+                        trigger="final",
+                    )
+
                     final_evaluation = (
                         evaluate_run_validation_checkpoint(
                             session_factory,
@@ -779,6 +955,32 @@ def train_ppo_run(
                     persisted_evaluations.append(
                         final_evaluation
                     )
+
+                    if progress_reporter is not None:
+                        try:
+                            final_validation_metrics = (
+                                _validation_progress_metrics(
+                                    session_factory,
+                                    evaluation_id=(
+                                        final_evaluation.evaluation_id
+                                    ),
+                                    checkpoint_id=(
+                                        final_checkpoint.checkpoint_id
+                                    ),
+                                    run_step=completed_steps,
+                                    trigger="final",
+                                )
+                            )
+                        except BaseException:
+                            final_validation_metrics = None
+
+                        if final_validation_metrics is not None:
+                            _progress_call(
+                                progress_reporter,
+                                "validation_completed",
+                                final_validation_metrics,
+                            )
+
                     final_decision = (
                         early_stopping.observe(
                             checkpoint_id=(
@@ -879,6 +1081,13 @@ def train_ppo_run(
             early_stop_reason=early_stop_reason,
         )
 
+        _progress_call(
+            progress_reporter,
+            "finish",
+            completed_steps=completed_steps,
+            stopped_early=stopped_early,
+        )
+
         return TrainingServiceResult(
             run=completed,
             checkpoint=final_checkpoint,
@@ -958,5 +1167,12 @@ def train_ppo_run(
                 f"{type(failure_error).__name__}: "
                 f"{failure_error}"
             )
+
+        _progress_call(
+            progress_reporter,
+            "fail",
+            error,
+            completed_steps=local_steps,
+        )
 
         raise

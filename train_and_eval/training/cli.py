@@ -13,6 +13,9 @@ from train_and_eval.database.session import (
 from train_and_eval.reproducibility import (
     require_clean_git,
 )
+from train_and_eval.training.progress import (
+    LiveTrainingProgress,
+)
 from train_and_eval.training.service import (
     TrainingServiceResult,
     train_ppo_run,
@@ -55,8 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(0, 1, 2),
         default=1,
         help=(
-            "Stable-Baselines3 verbosity: 0=silent, 1=info, "
-            "2=debug. Default: 1."
+            "Stable-Baselines3 verbosity for --plain-output: "
+            "0=silent, 1=info, 2=debug. Default: 1."
         ),
     )
     parser.add_argument(
@@ -64,13 +67,25 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_integer,
         default=1,
         help=(
-            "Log every N PPO rollout iterations. Default: 1."
+            "Legacy --plain-output logging interval in PPO rollout "
+            "iterations. The live dashboard refreshes every rollout."
         ),
     )
     parser.add_argument(
         "--progress-bar",
         action="store_true",
-        help="Enable the Stable-Baselines3 progress bar.",
+        help=(
+            "Enable the Stable-Baselines3 progress bar with "
+            "--plain-output. The live dashboard has its own bar."
+        ),
+    )
+    parser.add_argument(
+        "--plain-output",
+        action="store_true",
+        help=(
+            "Disable the live terminal dashboard and use the legacy "
+            "Stable-Baselines3 line-by-line logging output."
+        ),
     )
     parser.add_argument(
         "--traceback",
@@ -211,6 +226,16 @@ def _print_failure(
         print(f"Note: {note}", file=stream)
 
 
+def _supports_live_output(stream: TextIO) -> bool:
+    if not hasattr(stream, "isatty"):
+        return False
+
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, OSError):
+        return False
+
+
 def execute_training_cli(
     args: argparse.Namespace,
     *,
@@ -229,12 +254,27 @@ def execute_training_cli(
             engine
         )
 
+        live_output = (
+            not args.plain_output
+            and _supports_live_output(stdout)
+        )
+        progress_reporter = (
+            LiveTrainingProgress(stdout)
+            if live_output
+            else None
+        )
+
         result = train_ppo_run(
             session_factory,
             config_path=args.config,
-            verbose=args.verbose,
-            log_interval=args.log_interval,
-            progress_bar=args.progress_bar,
+            verbose=(0 if live_output else args.verbose),
+            log_interval=(
+                None if live_output else args.log_interval
+            ),
+            progress_bar=(
+                False if live_output else args.progress_bar
+            ),
+            progress_reporter=progress_reporter,
         )
 
     except KeyboardInterrupt as error:

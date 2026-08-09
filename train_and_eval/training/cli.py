@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 import traceback
+import warnings
 from collections.abc import Sequence
 from typing import Any, TextIO
 
@@ -204,6 +205,47 @@ def _print_success(
     )
 
 
+def _print_live_success(
+    result: TrainingServiceResult,
+    *,
+    stream: TextIO,
+) -> None:
+    run = result.run
+    training = result.training
+    outcome = "stopped early" if run.stopped_early else "completed"
+
+    print(
+        f"✓ Run #{run.run_id} {outcome}: {run.name}",
+        file=stream,
+    )
+    print(
+        "  Steps "
+        f"{run.training_steps_completed:,}/{run.training_steps_requested:,}"
+        f" | data epochs {run.data_epochs_completed}"
+        f" | model {training.model_steps_before:,} -> {training.model_steps_after:,}",
+        file=stream,
+    )
+    print(
+        "  Best balanced_score "
+        f"{_score_text(result.best_evaluation.balanced_score)}"
+        f" | checkpoint #{result.best_checkpoint.checkpoint_id}"
+        f" @ run step {result.best_checkpoint.run_step:,}",
+        file=stream,
+    )
+    print(
+        "  Final checkpoint "
+        f"#{result.checkpoint.checkpoint_id}: "
+        f"{result.checkpoint.relative_path}",
+        file=stream,
+    )
+
+    if run.early_stop_reason:
+        print(
+            f"  Early stop: {run.early_stop_reason}",
+            file=stream,
+        )
+
+
 def _print_failure(
     error: BaseException,
     *,
@@ -264,18 +306,32 @@ def execute_training_cli(
             else None
         )
 
-        result = train_ppo_run(
-            session_factory,
-            config_path=args.config,
-            verbose=(0 if live_output else args.verbose),
-            log_interval=(
-                None if live_output else args.log_interval
-            ),
-            progress_bar=(
-                False if live_output else args.progress_bar
-            ),
-            progress_reporter=progress_reporter,
-        )
+        with warnings.catch_warnings():
+            if live_output:
+                warnings.filterwarnings(
+                    "ignore",
+                    message=(
+                        r"You are trying to run PPO on the GPU, but it is "
+                        r"primarily intended to run on the CPU.*"
+                    ),
+                    category=UserWarning,
+                    module=(
+                        r"stable_baselines3\.common\.on_policy_algorithm"
+                    ),
+                )
+
+            result = train_ppo_run(
+                session_factory,
+                config_path=args.config,
+                verbose=(0 if live_output else args.verbose),
+                log_interval=(
+                    None if live_output else args.log_interval
+                ),
+                progress_bar=(
+                    False if live_output else args.progress_bar
+                ),
+                progress_reporter=progress_reporter,
+            )
 
     except KeyboardInterrupt as error:
         print(
@@ -311,10 +367,16 @@ def execute_training_cli(
         if engine is not None:
             engine.dispose()
 
-    _print_success(
-        result,
-        stream=stdout,
-    )
+    if live_output:
+        _print_live_success(
+            result,
+            stream=stdout,
+        )
+    else:
+        _print_success(
+            result,
+            stream=stdout,
+        )
     return 0
 
 

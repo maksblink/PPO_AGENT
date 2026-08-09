@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -236,6 +237,8 @@ def run_ppo_evaluation(
     seed: int,
     threshold_action: int | None = None,
     probability_threshold: float | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    progress_interval_steps: int = 128,
 ) -> EvaluationRunResult:
     """
     Evaluate one PPO model over one exact execution range.
@@ -361,6 +364,11 @@ def run_ppo_evaluation(
 
     expected_steps = end - start
     lookback_start = start - lookback
+    resolved_progress_interval = _integer(
+        progress_interval_steps,
+        name="progress_interval_steps",
+        minimum=1,
+    )
 
     agent_equity: list[float] = []
     always_long_equity: list[float] = []
@@ -626,6 +634,16 @@ def run_ppo_evaluation(
         )
 
         final_agent_info = agent_info
+
+        completed_steps = step_offset + 1
+        if (
+            progress_callback is not None
+            and (
+                completed_steps == expected_steps
+                or completed_steps % resolved_progress_interval == 0
+            )
+        ):
+            progress_callback(completed_steps, expected_steps)
 
     if final_agent_info is None:
         raise EvaluationRunnerError(

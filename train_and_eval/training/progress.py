@@ -52,6 +52,14 @@ class TrainingProgressReporter(Protocol):
         run_step: int,
         checkpoint_id: int,
         trigger: str,
+        expected_steps: int,
+    ) -> None: ...
+
+    def validation_update(
+        self,
+        *,
+        completed_steps: int,
+        expected_steps: int,
     ) -> None: ...
 
     def validation_completed(
@@ -88,6 +96,11 @@ class LiveTrainingProgress:
     _training_metrics: dict[str, Number] = field(default_factory=dict, init=False)
     _validation_metrics: ValidationMetricSnapshot | None = field(default=None, init=False)
     _validation_status: str = field(default="not run yet", init=False)
+    _validation_completed_steps: int = field(default=0, init=False)
+    _validation_expected_steps: int = field(default=0, init=False)
+    _validation_started_at: float | None = field(default=None, init=False)
+    _validation_elapsed_total: float = field(default=0.0, init=False)
+    _last_validation_duration: float | None = field(default=None, init=False)
     _phase: str = field(default="INITIALIZING", init=False)
     _started_at: float | None = field(default=None, init=False)
     _last_render_at: float = field(default=0.0, init=False)
@@ -134,23 +147,51 @@ class LiveTrainingProgress:
         run_step: int,
         checkpoint_id: int,
         trigger: str,
+        expected_steps: int,
     ) -> None:
         self._completed_steps = int(run_step)
+        self._validation_completed_steps = 0
+        self._validation_expected_steps = max(0, int(expected_steps))
+        self._validation_started_at = time.monotonic()
+        self._last_validation_duration = None
         self._validation_status = (
             f"running ({trigger}, checkpoint {checkpoint_id})"
         )
         self._phase = "VALIDATION"
         self._render(force=True)
 
+    def validation_update(
+        self,
+        *,
+        completed_steps: int,
+        expected_steps: int,
+    ) -> None:
+        self._validation_completed_steps = max(0, int(completed_steps))
+        self._validation_expected_steps = max(0, int(expected_steps))
+        self._phase = "VALIDATION"
+        self._render()
+
     def validation_completed(
         self,
         metrics: ValidationMetricSnapshot,
     ) -> None:
+        now = time.monotonic()
+        if self._validation_started_at is not None:
+            duration = max(0.0, now - self._validation_started_at)
+            self._validation_elapsed_total += duration
+            self._last_validation_duration = duration
+            self._validation_started_at = None
+
+        self._validation_completed_steps = self._validation_expected_steps
         self._validation_metrics = metrics
         self._validation_status = (
             f"completed ({metrics.trigger}, evaluation {metrics.evaluation_id})"
         )
-        self._phase = "TRAINING"
+        self._phase = (
+            "VALIDATION"
+            if metrics.trigger == "final"
+            else "TRAINING"
+        )
         self._render(force=True)
 
     def finish(
@@ -210,25 +251,47 @@ class LiveTrainingProgress:
 
         return f"{numeric:.{digits}f}"
 
-    def _progress_line(self) -> str:
-        total = max(1, self._requested_steps)
-        done = min(max(0, self._completed_steps), total)
-        fraction = done / total
+    @staticmethod
+    def _bar_line(done: int, total: int) -> str:
+        resolved_total = max(1, int(total))
+        resolved_done = min(max(0, int(done)), resolved_total)
+        fraction = resolved_done / resolved_total
         percent = 100.0 * fraction
         columns = shutil.get_terminal_size((110, 24)).columns
         width = min(44, max(18, columns - 68))
         filled = int(round(width * fraction))
         bar = "█" * filled + "░" * (width - filled)
-        remaining = max(0, total - done)
+        remaining = max(0, int(total) - int(done))
 
         return (
             f"[{bar}] {percent:6.2f}%  "
-            f"{done:,}/{total:,}  remaining {remaining:,}"
+            f"{int(done):,}/{int(total):,}  remaining {remaining:,}"
         )
 
-    def _timing_line(self) -> str:
+    def _wall_elapsed(self, now: float) -> float | None:
+        if self._started_at is None:
+            return None
+        return max(0.0, now - self._started_at)
+
+    def _current_validation_elapsed(self, now: float) -> float:
+        if self._validation_started_at is None:
+            return 0.0
+        return max(0.0, now - self._validation_started_at)
+
+    def _training_elapsed(self, now: float) -> float | None:
+        wall = self._wall_elapsed(now)
+        if wall is None:
+            return None
+        return max(
+            0.0,
+            wall
+            - self._validation_elapsed_total
+            - self._current_validation_elapsed(now),
+        )
+
+    def _training_timing_line(self) -> str:
         now = time.monotonic()
-        elapsed = None if self._started_at is None else now - self._started_at
+        elapsed = self._training_elapsed(now)
         rate = 0.0
         if elapsed is not None and elapsed > 0:
             rate = self._completed_steps / elapsed
@@ -237,17 +300,29 @@ class LiveTrainingProgress:
         eta = None if rate <= 0 else remaining / rate
 
         return (
-            f"Elapsed {self._format_duration(elapsed)}  |  "
+            f"Training {self._format_duration(elapsed)}  |  "
             f"ETA {self._format_duration(eta)}  |  "
             f"{rate:,.1f} steps/s  |  "
             f"rollouts {self._rollouts_completed:,}  |  "
             f"model step {self._model_steps:,}"
         )
 
+    def _run_timing_line(self) -> str:
+        now = time.monotonic()
+        wall = self._wall_elapsed(now)
+        validation = (
+            self._validation_elapsed_total
+            + self._current_validation_elapsed(now)
+        )
+        return (
+            f"Run wall {self._format_duration(wall)}  |  "
+            f"validation time {self._format_duration(validation)}"
+        )
+
     def _training_lines(self) -> list[str]:
         m = self._training_metrics
         return [
-            "TRAIN (latest PPO update)",
+            "TRAIN — latest PPO update",
             (
                 "  ep_reward " + self._metric_text(m.get("ep_rew_mean"))
                 + "  ep_len " + self._metric_text(m.get("ep_len_mean"))
@@ -268,11 +343,55 @@ class LiveTrainingProgress:
 
     def _validation_lines(self) -> list[str]:
         metrics = self._validation_metrics
-        lines = [f"VALIDATION: {self._validation_status}"]
+
+        if self._validation_status == "not run yet":
+            return [
+                "VALIDATION",
+                "  not run yet",
+                "",
+                "  balanced_score n/a  agent_return n/a  max_drawdown n/a  profit_factor n/a",
+                "  win_rate n/a  exposure n/a  round_trips n/a  always_long n/a",
+            ]
+
+        expected = max(0, self._validation_expected_steps)
+        done = min(max(0, self._validation_completed_steps), expected)
+        now = time.monotonic()
+
+        if self._validation_started_at is not None:
+            elapsed = self._current_validation_elapsed(now)
+            rate = done / elapsed if elapsed > 0 else 0.0
+            remaining = max(0, expected - done)
+            eta = None if rate <= 0 else remaining / rate
+            timing = (
+                f"  Elapsed {self._format_duration(elapsed)}  |  "
+                f"ETA {self._format_duration(eta)}  |  "
+                f"{rate:,.1f} steps/s"
+            )
+        else:
+            duration = self._last_validation_duration
+            rate = (
+                expected / duration
+                if duration is not None and duration > 0
+                else 0.0
+            )
+            timing = (
+                f"  Completed in {self._format_duration(duration)}  |  "
+                f"avg {rate:,.1f} steps/s"
+            )
+
+        lines = [
+            f"VALIDATION — {self._validation_status}",
+            "  " + self._bar_line(done, expected),
+            timing,
+        ]
 
         if metrics is None:
-            lines.append("  balanced_score n/a  agent_return n/a  max_drawdown n/a  profit_factor n/a")
-            lines.append("  win_rate n/a  exposure n/a  round_trips n/a  always_long n/a")
+            lines.append(
+                "  balanced_score n/a  agent_return n/a  max_drawdown n/a  profit_factor n/a"
+            )
+            lines.append(
+                "  win_rate n/a  exposure n/a  round_trips n/a  always_long n/a"
+            )
             return lines
 
         lines.append(
@@ -293,8 +412,11 @@ class LiveTrainingProgress:
         return [
             f"PPO RUN #{self._run_id}  {self._run_name}",
             f"Phase: {self._phase}",
-            self._progress_line(),
-            self._timing_line(),
+            "",
+            "TRAINING",
+            self._bar_line(self._completed_steps, self._requested_steps),
+            self._training_timing_line(),
+            self._run_timing_line(),
             "",
             *self._training_lines(),
             "",
@@ -313,14 +435,23 @@ class LiveTrainingProgress:
             return
 
         lines = self._lines()
+        previous_lines = self._rendered_lines
 
-        if self._rendered_lines:
-            self.stream.write(f"\x1b[{self._rendered_lines}A")
+        if previous_lines:
+            self.stream.write(f"\x1b[{previous_lines}A")
 
         for line in lines:
             self.stream.write("\x1b[2K\r")
             self.stream.write(line)
             self.stream.write("\n")
+
+        for _ in range(max(0, previous_lines - len(lines))):
+            self.stream.write("\x1b[2K\r\n")
+
+        if previous_lines > len(lines):
+            self.stream.write(
+                f"\x1b[{previous_lines - len(lines)}A"
+            )
 
         self.stream.flush()
         self._rendered_lines = len(lines)

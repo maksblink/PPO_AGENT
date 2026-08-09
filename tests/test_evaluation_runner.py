@@ -374,3 +374,28 @@ def test_benchmarks_include_open_and_close_fees() -> None:
     assert result.metrics.flat_exposure == pytest.approx(
         1.0
     )
+
+
+def test_runner_reports_real_evaluation_progress() -> None:
+    updates: list[tuple[int, int]] = []
+
+    result = run_ppo_evaluation(
+        _model(
+            "long_only",
+            logits=[0.0, 2.0],
+        ),
+        _market_frame(),
+        _environment_config("long_only"),
+        evaluation_start_index=4,
+        evaluation_end_index=8,
+        lookback_rows=2,
+        policy_mode="deterministic_argmax",
+        seed=123,
+        progress_callback=lambda done, total: updates.append(
+            (done, total)
+        ),
+        progress_interval_steps=2,
+    )
+
+    assert result.steps_completed == 4
+    assert updates == [(2, 4), (4, 4)]

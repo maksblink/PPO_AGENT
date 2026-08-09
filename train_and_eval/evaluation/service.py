@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -335,6 +336,8 @@ def evaluate_run_validation_checkpoint(
     artifacts_directory: str | Path = (
         DEFAULT_ARTIFACTS_DIRECTORY
     ),
+    progress_callback: Callable[[int, int], None] | None = None,
+    progress_interval_steps: int = 128,
 ) -> PersistedEvaluationState:
     """
     Evaluate one persisted checkpoint on its archived validation range.
@@ -503,6 +506,8 @@ def evaluate_run_validation_checkpoint(
             probability_threshold=(
                 probability_threshold
             ),
+            progress_callback=progress_callback,
+            progress_interval_steps=progress_interval_steps,
         )
 
         return complete_evaluation(

@@ -511,13 +511,14 @@ def test_tty_uses_live_dashboard_and_suppresses_native_sb3_logs(
         train,
     )
 
+    stdout = TTYStringIO()
     exit_code = cli.execute_training_cli(
         _args(
             verbose=2,
             log_interval=9,
             progress_bar=True,
         ),
-        stdout=TTYStringIO(),
+        stdout=stdout,
         stderr=StringIO(),
     )
 
@@ -529,3 +530,7 @@ def test_tty_uses_live_dashboard_and_suppresses_native_sb3_logs(
         captured["progress_reporter"],
         cli.LiveTrainingProgress,
     )
+    output = stdout.getvalue()
+    assert "✓ Run #" in output
+    assert "Best balanced_score" in output
+    assert "Training run: OK" not in output

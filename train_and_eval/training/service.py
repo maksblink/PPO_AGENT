@@ -659,6 +659,17 @@ def train_ppo_run(
             model_steps_before=model_steps_before,
         )
 
+        def report_validation_update(
+            validation_steps_completed: int,
+            validation_steps_expected: int,
+        ) -> None:
+            _progress_call(
+                progress_reporter,
+                "validation_update",
+                completed_steps=validation_steps_completed,
+                expected_steps=validation_steps_expected,
+            )
+
         for event in schedule:
             segment_steps = (
                 int(event.run_step)
@@ -801,6 +812,7 @@ def train_ppo_run(
                     run_step=completed_steps,
                     checkpoint_id=checkpoint.checkpoint_id,
                     trigger=evaluation_trigger,
+                    expected_steps=int(split.validation_rows),
                 )
 
                 evaluation = (
@@ -825,6 +837,12 @@ def train_ppo_run(
                         seed=int(
                             config.run.seed
                         ),
+                        progress_callback=(
+                            report_validation_update
+                            if progress_reporter is not None
+                            else None
+                        ),
+                        progress_interval_steps=128,
                         project_root=root,
                         data_directory=(
                             data_directory
@@ -915,6 +933,7 @@ def train_ppo_run(
                             final_checkpoint.checkpoint_id
                         ),
                         trigger="final",
+                        expected_steps=int(split.validation_rows),
                     )
 
                     final_evaluation = (
@@ -940,6 +959,12 @@ def train_ppo_run(
                             seed=int(
                                 config.run.seed
                             ),
+                            progress_callback=(
+                                report_validation_update
+                                if progress_reporter is not None
+                                else None
+                            ),
+                            progress_interval_steps=128,
                             project_root=root,
                             data_directory=(
                                 data_directory

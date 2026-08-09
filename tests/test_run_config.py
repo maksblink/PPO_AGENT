@@ -987,3 +987,77 @@ def test_accepts_dynamic_long_short_threshold_policy(
         loaded.config.evaluation.threshold_action
         is None
     )
+
+
+def test_logging_progress_defaults_are_stable(
+    tmp_path: Path,
+) -> None:
+    path = _write_config(
+        tmp_path / "run.yml",
+        _valid_config(),
+    )
+
+    loaded = load_run_config(
+        path,
+        verify_data=False,
+    )
+
+    assert (
+        loaded.config.logging.training_progress_every_steps
+        == 10_000
+    )
+    assert (
+        loaded.config.logging.validation_progress_every_steps
+        == 2_000
+    )
+
+
+def test_logging_progress_intervals_are_configurable(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["logging"] = {
+        "training_progress_every_steps": 25_000,
+        "validation_progress_every_steps": 5_000,
+    }
+    path = _write_config(
+        tmp_path / "run.yml",
+        config,
+    )
+
+    loaded = load_run_config(
+        path,
+        verify_data=False,
+    )
+
+    assert (
+        loaded.config.logging.training_progress_every_steps
+        == 25_000
+    )
+    assert (
+        loaded.config.logging.validation_progress_every_steps
+        == 5_000
+    )
+
+
+def test_logging_progress_intervals_must_be_positive(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["logging"] = {
+        "training_progress_every_steps": 0,
+        "validation_progress_every_steps": 2_000,
+    }
+    path = _write_config(
+        tmp_path / "run.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="training_progress_every_steps",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )

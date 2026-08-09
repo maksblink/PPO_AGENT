@@ -659,6 +659,16 @@ def train_ppo_run(
             model_steps_before=model_steps_before,
         )
 
+        training_progress_every_steps = int(
+            config.logging.training_progress_every_steps
+        )
+        next_training_progress_step = (
+            training_progress_every_steps
+        )
+        validation_progress_every_steps = int(
+            config.logging.validation_progress_every_steps
+        )
+
         def report_validation_update(
             validation_steps_completed: int,
             validation_steps_expected: int,
@@ -686,13 +696,34 @@ def train_ppo_run(
             def report_training_update(
                 update: PPOTrainingUpdate,
             ) -> None:
+                nonlocal next_training_progress_step
+
+                run_steps_completed = (
+                    segment_completed_before
+                    + update.local_steps_completed
+                )
+                segment_finished = (
+                    run_steps_completed >= int(event.run_step)
+                )
+
+                if (
+                    run_steps_completed < next_training_progress_step
+                    and not segment_finished
+                ):
+                    return
+
+                while (
+                    next_training_progress_step
+                    <= run_steps_completed
+                ):
+                    next_training_progress_step += (
+                        training_progress_every_steps
+                    )
+
                 _progress_call(
                     progress_reporter,
                     "training_update",
-                    completed_steps=(
-                        segment_completed_before
-                        + update.local_steps_completed
-                    ),
+                    completed_steps=run_steps_completed,
                     model_steps=update.model_steps,
                     rollouts_completed=(
                         rollout_count_before
@@ -842,7 +873,9 @@ def train_ppo_run(
                             if progress_reporter is not None
                             else None
                         ),
-                        progress_interval_steps=128,
+                        progress_interval_steps=(
+                            validation_progress_every_steps
+                        ),
                         project_root=root,
                         data_directory=(
                             data_directory
@@ -964,7 +997,9 @@ def train_ppo_run(
                                 if progress_reporter is not None
                                 else None
                             ),
-                            progress_interval_steps=128,
+                            progress_interval_steps=(
+                                validation_progress_every_steps
+                            ),
                             project_root=root,
                             data_directory=(
                                 data_directory

@@ -29,6 +29,7 @@ from train_and_eval.run_config import (
 )
 from train_and_eval.training.execution import (
     ExactPPOTrainingResult,
+    PPOTrainingUpdate,
 )
 from train_and_eval.training.persistence import (
     PersistedRunState,
@@ -1716,3 +1717,200 @@ def test_final_evaluation_can_become_best_checkpoint(
     assert final.improved is True
     assert final.best_checkpoint_id == 2
     assert final.best_evaluation_id == 12
+
+
+def test_live_progress_uses_configured_step_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    loaded = _loaded_config(
+        checkpoint_every_steps=25_000,
+        eval_every_steps=25_000,
+    )
+    raw = loaded.config.model_dump(mode="json")
+    raw["training"]["duration_amount"] = 25_000
+    raw["logging"] = {
+        "training_progress_every_steps": 10_000,
+        "validation_progress_every_steps": 2_000,
+    }
+    config = RunConfig.model_validate(raw)
+    loaded = replace(
+        loaded,
+        config=config,
+        normalized_json=normalize_config(config),
+    )
+    _patch_preflight(
+        monkeypatch,
+        tmp_path,
+        events,
+        loaded=loaded,
+    )
+
+    model = FakeModel(num_timesteps=0)
+    monkeypatch.setattr(
+        service,
+        "create_pending_run",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.PENDING,
+            requested=25_000,
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "mark_run_running",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.RUNNING,
+            requested=25_000,
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "TradingEnvironment",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        service,
+        "create_ppo_model",
+        lambda *args, **kwargs: model,
+    )
+
+    def train(*args, **kwargs):
+        callback = kwargs["update_callback"]
+        assert callback is not None
+
+        update_steps = [
+            2_048,
+            10_240,
+            12_288,
+            20_480,
+            25_000,
+        ]
+        previous = 0
+        for iteration, step in enumerate(
+            update_steps,
+            start=1,
+        ):
+            model.num_timesteps = step
+            callback(
+                PPOTrainingUpdate(
+                    model_steps=step,
+                    local_steps_completed=step,
+                    rollout_iteration=iteration,
+                    rollout_size=step - previous,
+                    metrics={
+                        "n_updates": iteration * 10,
+                    },
+                )
+            )
+            previous = step
+
+        return ExactPPOTrainingResult(
+            model_steps_before=0,
+            model_steps_after=25_000,
+            local_steps_requested=25_000,
+            local_steps_completed=25_000,
+            rollout_sizes=(25_000,),
+            stopped_early=False,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "learn_ppo_exact_timesteps",
+        train,
+    )
+    monkeypatch.setattr(
+        service,
+        "update_run_progress",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.RUNNING,
+            requested=25_000,
+            completed=kwargs[
+                "training_steps_completed"
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "persist_ppo_checkpoint",
+        lambda *args, **kwargs: _checkpoint(
+            save_reason=kwargs["save_reason"],
+            run_step=kwargs["run_step"],
+            model_step=model.num_timesteps,
+        ),
+    )
+
+    evaluation_intervals: list[int] = []
+
+    def evaluate(*args, **kwargs):
+        evaluation_intervals.append(
+            kwargs["progress_interval_steps"]
+        )
+        return SimpleNamespace(
+            evaluation_id=301,
+            checkpoint_id=kwargs["checkpoint_id"],
+            balanced_score=0.25,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "evaluate_run_validation_checkpoint",
+        evaluate,
+    )
+    monkeypatch.setattr(
+        service,
+        "_validation_progress_metrics",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        service,
+        "complete_run",
+        lambda *args, **kwargs: _run_state(
+            RunStatus.COMPLETED,
+            requested=25_000,
+            completed=25_000,
+        ),
+    )
+
+    class Reporter:
+        def __init__(self) -> None:
+            self.training_steps: list[int] = []
+
+        def start(self, **kwargs) -> None:
+            pass
+
+        def training_update(self, **kwargs) -> None:
+            self.training_steps.append(
+                kwargs["completed_steps"]
+            )
+
+        def validation_started(self, **kwargs) -> None:
+            pass
+
+        def validation_update(self, **kwargs) -> None:
+            pass
+
+        def validation_completed(self, *args, **kwargs) -> None:
+            pass
+
+        def finish(self, **kwargs) -> None:
+            pass
+
+        def fail(self, *args, **kwargs) -> None:
+            pass
+
+    reporter = Reporter()
+
+    service.train_ppo_run(
+        object(),
+        config_path="run.yml",
+        project_root=tmp_path,
+        progress_reporter=reporter,
+    )
+
+    assert reporter.training_steps == [
+        10_240,
+        20_480,
+        25_000,
+    ]
+    assert evaluation_intervals == [2_000]

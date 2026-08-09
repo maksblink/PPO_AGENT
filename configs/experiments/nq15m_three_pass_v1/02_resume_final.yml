@@ -18,6 +18,10 @@ data:
 training:
   duration_unit: data_epochs
   duration_amount: 1
+logging:
+  training_progress_every_steps: 10000
+  validation_progress_every_steps: 2000
+
 environment:
   window: 40
   context: baseline_multiscale_v1
@@ -58,7 +62,7 @@ ppo:
   max_grad_norm: 0.5
   target_kl: null
 evaluation:
-  eval_every_steps: 1000000000
+  eval_every_steps: 100000
   checkpoint_every_steps: 50000
   policy_mode: deterministic_argmax
   threshold_action: null

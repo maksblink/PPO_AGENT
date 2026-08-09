@@ -204,6 +204,17 @@ class TrainingSection(StrictConfigModel):
         return self.duration_amount
 
 
+class LoggingSection(StrictConfigModel):
+    """Terminal progress-display cadence.
+
+    These settings affect only how often the live dashboard is refreshed.
+    They do not change PPO training, checkpointing, evaluation, or metrics.
+    """
+
+    training_progress_every_steps: PositiveInt = 10_000
+    validation_progress_every_steps: PositiveInt = 2_000
+
+
 class EnvironmentSection(StrictConfigModel):
     window: PositiveInt
     context: str
@@ -436,6 +447,7 @@ class RunConfig(StrictConfigModel):
     continuation: ContinuationSection
     data: DataSection
     training: TrainingSection
+    logging: LoggingSection = Field(default_factory=LoggingSection)
     environment: EnvironmentSection
     ppo: PPOSection
     evaluation: EvaluationSection

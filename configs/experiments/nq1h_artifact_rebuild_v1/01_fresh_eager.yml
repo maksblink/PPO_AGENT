@@ -2,8 +2,6 @@ config_schema_version: 1
 run:
   name: nq1h_artifact_rebuild_v1_fresh_eager
   seed: 7
-  description: '1h artifact test: fresh run with eager training metrics, validation
-    trajectories and plots.'
 continuation:
   mode: fresh
 data:

@@ -2,8 +2,6 @@ config_schema_version: 1
 run:
   name: nq1h_artifact_rebuild_v1_resume_offline
   seed: 7
-  description: '1h artifact test: resume run collecting only lightweight training
-    history; validation trajectories and plots rebuilt offline afterwards.'
 continuation:
   mode: resume
   source_run: nq1h_artifact_rebuild_v1_fresh_eager

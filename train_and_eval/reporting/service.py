@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import fields
 import math
 from pathlib import Path
+import warnings
 
 from sqlalchemy import select
 
@@ -116,16 +117,28 @@ def generate_run_report(
             directory / "metrics.json",
         )
         if not all(path.exists() for path in source_paths):
-            result = replay_run_validation_checkpoint(
-                session_factory=session_factory,
-                checkpoint_id=int(checkpoint.id),
-                project_root=root,
-                artifacts_directory=artifacts_directory,
-                policy_mode=evaluation.policy_mode,
-                threshold_action=evaluation.threshold_action,
-                probability_threshold=evaluation.probability_threshold,
-                seed=int(evaluation.seed),
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=(
+                        "You are trying to run PPO on the GPU.*"
+                    ),
+                    category=UserWarning,
+                    module=(
+                        "stable_baselines3\\.common"
+                        "\\.on_policy_algorithm"
+                    ),
+                )
+                result = replay_run_validation_checkpoint(
+                    session_factory=session_factory,
+                    checkpoint_id=int(checkpoint.id),
+                    project_root=root,
+                    artifacts_directory=artifacts_directory,
+                    policy_mode=evaluation.policy_mode,
+                    threshold_action=evaluation.threshold_action,
+                    probability_threshold=evaluation.probability_threshold,
+                    seed=int(evaluation.seed),
+                )
             _assert_replay_matches_evaluation(result, evaluation)
             directory = persist_evaluation_source_artifacts(
                 result,

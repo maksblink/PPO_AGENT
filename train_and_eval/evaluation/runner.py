@@ -448,19 +448,17 @@ def run_ppo_evaluation(
 
         (
             _,
-            _,
             long_terminated,
             long_truncated,
             long_info,
-        ) = always_long_environment.step(1)
+        ) = always_long_environment.step_without_observation(1)
 
         (
-            _,
             _,
             short_terminated,
             short_truncated,
             short_info,
-        ) = always_short_environment.step(1)
+        ) = always_short_environment.step_without_observation(1)
 
         if (
             agent_truncated

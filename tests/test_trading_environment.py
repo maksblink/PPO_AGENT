@@ -542,3 +542,90 @@ def test_complete_context_is_reused_after_every_episode_reset() -> None:
 
     # Every later data epoch starts from the same complete context.
     assert second_reset_info["observation_index"] == 6144
+
+
+def test_step_without_observation_matches_regular_step() -> None:
+    frame = _market_frame(
+        opens=[
+            100.0,
+            101.0,
+            102.0,
+            103.0,
+            104.0,
+            105.0,
+        ],
+        closes=[
+            100.5,
+            101.5,
+            101.0,
+            104.0,
+            103.5,
+            106.0,
+        ],
+    )
+
+    config = _config(
+        position_side="long_only",
+        fee_bps=1.0,
+        swap_bps=3.0,
+    )
+
+    regular = TradingEnvironment(
+        frame,
+        config,
+    )
+    fast = TradingEnvironment(
+        frame,
+        config,
+    )
+
+    regular.reset(seed=123)
+    fast.reset(seed=123)
+
+    (
+        _observation,
+        regular_reward,
+        regular_terminated,
+        regular_truncated,
+        regular_info,
+    ) = regular.step(1)
+
+    (
+        fast_reward,
+        fast_terminated,
+        fast_truncated,
+        fast_info,
+    ) = fast.step_without_observation(1)
+
+    assert fast_reward == pytest.approx(
+        regular_reward
+    )
+    assert (
+        fast_terminated
+        == regular_terminated
+    )
+    assert (
+        fast_truncated
+        == regular_truncated
+    )
+
+    assert fast_info.keys() == regular_info.keys()
+
+    for key in regular_info:
+        regular_value = regular_info[key]
+        fast_value = fast_info[key]
+
+        if isinstance(
+            regular_value,
+            float,
+        ):
+            assert fast_value == pytest.approx(
+                regular_value
+            )
+        else:
+            assert fast_value == regular_value
+
+    assert (
+        fast.get_debug_state()
+        == regular.get_debug_state()
+    )

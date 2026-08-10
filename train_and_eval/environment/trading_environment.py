@@ -768,6 +768,70 @@ class TradingEnvironment(
         bool,
         dict[str, Any],
     ]:
+        (
+            observation,
+            reward,
+            terminated,
+            truncated,
+            info,
+        ) = self._step_core(
+            action,
+            build_observation=True,
+        )
+
+        if observation is None:
+            raise TradingEnvironmentError(
+                "Regular step() did not produce "
+                "an observation."
+            )
+
+        return (
+            observation,
+            reward,
+            terminated,
+            truncated,
+            info,
+        )
+
+    def step_without_observation(
+        self,
+        action: int,
+    ) -> tuple[
+        float,
+        bool,
+        bool,
+        dict[str, Any],
+    ]:
+        (
+            _,
+            reward,
+            terminated,
+            truncated,
+            info,
+        ) = self._step_core(
+            action,
+            build_observation=False,
+        )
+
+        return (
+            reward,
+            terminated,
+            truncated,
+            info,
+        )
+
+    def _step_core(
+        self,
+        action: int,
+        *,
+        build_observation: bool,
+    ) -> tuple[
+        np.ndarray | None,
+        float,
+        bool,
+        bool,
+        dict[str, Any],
+    ]:
         if self._terminated:
             raise TradingEnvironmentError(
                 "step() called after the episode "
@@ -929,7 +993,11 @@ class TradingEnvironment(
             fee_cost + swap_cost
         )
 
-        observation = self._observation()
+        observation = (
+            self._observation()
+            if build_observation
+            else None
+        )
 
         info: dict[str, Any] = {
             "observation_index": (

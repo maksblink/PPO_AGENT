@@ -106,7 +106,8 @@ def _normalized_config() -> dict[str, Any]:
     config["environment"][
         "position_side"
     ] = "long_only"
-    config["ppo"]["device"] = "cpu"
+    config["ppo"]["device"] = "cuda"
+    config["evaluation"]["device"] = "cpu"
 
     return config
 
@@ -299,13 +300,15 @@ def test_runs_complete_validation_evaluation_service(
             )
         ),
     )
+    def load_model(*args, **kwargs):
+        events.append("load_model")
+        assert kwargs["device"] == "cpu"
+        return model
+
     monkeypatch.setattr(
         service,
         "load_persisted_ppo_checkpoint",
-        lambda *args, **kwargs: (
-            events.append("load_model")
-            or model
-        ),
+        load_model,
     )
 
     def run_evaluation(

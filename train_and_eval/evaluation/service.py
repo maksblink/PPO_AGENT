@@ -491,7 +491,7 @@ def evaluate_run_validation_checkpoint(
         model = load_persisted_ppo_checkpoint(
             source,
             environment=None,
-            device=config.ppo.device,
+            device=config.evaluation.device,
             project_root=root,
             artifacts_directory=artifacts_directory,
         )
@@ -610,7 +610,7 @@ def replay_run_validation_checkpoint(
         config.evaluation.probability_threshold if policy_mode is None else probability_threshold
     )
     model = load_persisted_ppo_checkpoint(
-        source, environment=None, device=config.ppo.device, project_root=root,
+        source, environment=None, device=config.evaluation.device, project_root=root,
         artifacts_directory=artifacts_directory,
     )
     return run_ppo_evaluation(

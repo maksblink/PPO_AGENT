@@ -434,6 +434,8 @@ class EvaluationSection(StrictConfigModel):
     eval_every_steps: PositiveInt
     checkpoint_every_steps: PositiveInt
 
+    device: Literal["auto", "cpu", "cuda"] = "cpu"
+
     policy_mode: Literal[
         "deterministic_argmax",
         "stochastic_sample",

@@ -1118,3 +1118,19 @@ def test_rejects_unknown_validation_trajectory_mode(tmp_path: Path) -> None:
             _write_config(tmp_path / "bad-artifacts.yml", config),
             verify_data=False,
         )
+
+
+def test_evaluation_device_defaults_to_cpu(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+
+    assert "device" not in config["evaluation"]
+
+    loaded = _load_without_data_verification(
+        tmp_path,
+        "evaluation_device_default.yml",
+        config,
+    )
+
+    assert loaded.config.evaluation.device == "cpu"

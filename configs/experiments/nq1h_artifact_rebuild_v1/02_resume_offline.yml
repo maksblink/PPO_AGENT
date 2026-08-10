@@ -55,6 +55,7 @@ ppo:
   max_grad_norm: 0.5
   target_kl: null
 evaluation:
+  device: cpu
   eval_every_steps: 20000
   checkpoint_every_steps: 10000
   policy_mode: deterministic_argmax

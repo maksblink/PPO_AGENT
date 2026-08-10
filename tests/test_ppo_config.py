@@ -141,12 +141,12 @@ def test_rejects_nonpositive_target_kl() -> None:
 def test_experiment_yamls_define_all_ppo_fields() -> None:
     config_paths = [
         PROJECT_ROOT
-        / "configs"
-        / "experiments"
+        / "tests"
+        / "fixtures"
         / "example_5m_data_epochs.yml",
         PROJECT_ROOT
-        / "configs"
-        / "experiments"
+        / "tests"
+        / "fixtures"
         / "example_5m_timesteps.yml",
     ]
 

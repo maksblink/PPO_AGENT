@@ -52,7 +52,7 @@ def _loaded_config(
     eval_every_steps: int = 50_000,
 ) -> LoadedRunConfig:
     loaded = load_run_config(
-        "configs/experiments/"
+        "tests/fixtures/"
         "example_5m_timesteps.yml",
         verify_data=False,
     )

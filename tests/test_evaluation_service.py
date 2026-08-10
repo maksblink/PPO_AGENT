@@ -88,7 +88,7 @@ class FakeSessionFactory:
 def _normalized_config() -> dict[str, Any]:
     loaded = load_run_config(
         (
-            "configs/experiments/"
+            "tests/fixtures/"
             "example_5m_timesteps.yml"
         ),
         verify_data=False,

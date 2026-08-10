@@ -118,7 +118,7 @@ class FakeSessionFactory:
 
 def _loaded_config() -> LoadedRunConfig:
     loaded = load_run_config(
-        "configs/experiments/example_5m_timesteps.yml",
+        "tests/fixtures/example_5m_timesteps.yml",
         verify_data=False,
     )
     total_rows = 8000
@@ -196,7 +196,7 @@ def test_creates_pending_run_from_verified_inputs() -> None:
 def test_rejects_unverified_loaded_config() -> None:
     session = FakeSession()
     loaded = load_run_config(
-        "configs/experiments/example_5m_timesteps.yml",
+        "tests/fixtures/example_5m_timesteps.yml",
         verify_data=False,
     )
 

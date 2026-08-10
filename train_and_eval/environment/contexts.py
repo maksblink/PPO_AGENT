@@ -143,6 +143,8 @@ class PreparedContext:
 
     frame: pd.DataFrame
     definition: ContextDefinition
+    window_values: np.ndarray
+    context_values: np.ndarray
 
 
 class MarketContext:
@@ -300,9 +302,25 @@ class MarketContext:
                 frame[column]
             )
 
+        definition = self.definition()
+
         return PreparedContext(
             frame=frame,
-            definition=self.definition(),
+            definition=definition,
+            window_values=frame.loc[
+                :,
+                list(definition.window_features),
+            ].to_numpy(
+                dtype=np.float32,
+                copy=True,
+            ),
+            context_values=frame.loc[
+                :,
+                list(definition.context_features),
+            ].to_numpy(
+                dtype=np.float32,
+                copy=True,
+            ),
         )
 
 
@@ -1091,20 +1109,16 @@ def build_observation(
     definition = prepared.definition
 
     market_window = (
-        prepared.frame.loc[
-            first_index:current_index,
-            list(definition.window_features),
+        prepared.window_values[
+            first_index:current_index + 1
         ]
-        .to_numpy(dtype=np.float32)
         .reshape(-1)
     )
 
     current_context = (
-        prepared.frame.loc[
-            current_index,
-            list(definition.context_features),
+        prepared.context_values[
+            current_index
         ]
-        .to_numpy(dtype=np.float32)
     )
 
     state = np.asarray(

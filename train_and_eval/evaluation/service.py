@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import warnings
 
 import pandas as pd
 from pydantic import ValidationError
@@ -32,7 +33,13 @@ from train_and_eval.evaluation.persistence import (
     mark_evaluation_running,
 )
 from train_and_eval.evaluation.runner import (
+    EvaluationRunResult,
     run_ppo_evaluation,
+)
+from train_and_eval.reporting.artifacts import (
+    evaluation_artifact_directory,
+    persist_evaluation_source_artifacts,
+    render_evaluation_result_plots,
 )
 from train_and_eval.market_data.load_market_data import (
     DATA_DIRECTORY,
@@ -89,6 +96,8 @@ class CheckpointEvaluationSource:
     split_index: int
     train_rows: int
     validation_rows: int
+    run_git_commit: str
+    run_git_branch: str
 
 
 def _nonnegative_integer(
@@ -215,6 +224,8 @@ def _load_source(
             validation_rows=int(
                 run.validation_rows
             ),
+            run_git_commit=str(run.git_commit),
+            run_git_branch=str(run.git_branch),
         )
 
 
@@ -338,6 +349,8 @@ def evaluate_run_validation_checkpoint(
     ),
     progress_callback: Callable[[int, int], None] | None = None,
     progress_interval_steps: int = 128,
+    persist_trajectory: bool = False,
+    render_plots: bool = False,
 ) -> PersistedEvaluationState:
     """
     Evaluate one persisted checkpoint on its archived validation range.
@@ -475,42 +488,30 @@ def evaluate_run_validation_checkpoint(
             evaluation_id=evaluation_id,
         )
 
-        model = (
-            load_persisted_ppo_checkpoint(
-                source,
-                environment=None,
-                device=config.ppo.device,
-                project_root=root,
-                artifacts_directory=(
-                    artifacts_directory
-                ),
-            )
+        model = load_persisted_ppo_checkpoint(
+            source,
+            environment=None,
+            device=config.ppo.device,
+            project_root=root,
+            artifacts_directory=artifacts_directory,
         )
 
         result = run_ppo_evaluation(
             model,
             market_data,
             config.environment,
-            evaluation_start_index=(
-                evaluation_start_index
-            ),
-            evaluation_end_index=(
-                evaluation_end_index
-            ),
+            evaluation_start_index=evaluation_start_index,
+            evaluation_end_index=evaluation_end_index,
             lookback_rows=lookback_rows,
             policy_mode=policy_mode,
             seed=resolved_seed,
-            threshold_action=(
-                threshold_action
-            ),
-            probability_threshold=(
-                probability_threshold
-            ),
+            threshold_action=threshold_action,
+            probability_threshold=probability_threshold,
             progress_callback=progress_callback,
             progress_interval_steps=progress_interval_steps,
         )
 
-        return complete_evaluation(
+        persisted = complete_evaluation(
             session_factory,
             evaluation_id=evaluation_id,
             result=result,
@@ -520,17 +521,102 @@ def evaluate_run_validation_checkpoint(
         try:
             fail_evaluation(
                 session_factory,
-                evaluation_id=(
-                    evaluation_id
-                ),
+                evaluation_id=evaluation_id,
                 error=error,
             )
         except BaseException as failure_error:
             error.add_note(
-                "Additionally, persisting the "
-                "failed evaluation state failed: "
-                f"{type(failure_error).__name__}: "
-                f"{failure_error}"
+                "Additionally, persisting the failed evaluation state failed: "
+                f"{type(failure_error).__name__}: {failure_error}"
             )
-
         raise
+
+    # Derived validation artifacts are explicitly non-critical: their
+    # failure must never invalidate a completed evaluation or training run.
+    try:
+        directory = evaluation_artifact_directory(
+            root, artifacts_directory, source.run_id, evaluation_id
+        )
+        if persist_trajectory:
+            directory = persist_evaluation_source_artifacts(
+                result,
+                project_root=root,
+                artifacts_directory=artifacts_directory,
+                run_id=source.run_id,
+                evaluation_id=evaluation_id,
+                checkpoint_id=source.id,
+                metadata={
+                    "git_commit": source.run_git_commit,
+                    "git_branch": source.run_git_branch,
+                    "data_sha256": source.data_sha256,
+                    "checkpoint_sha256": source.sha256,
+                },
+            )
+        if render_plots:
+            render_evaluation_result_plots(
+                result,
+                directory=directory,
+            )
+    except Exception as artifact_error:
+        warnings.warn(
+            "Validation artifact generation failed and can be retried "
+            f"offline: {type(artifact_error).__name__}: {artifact_error}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    return persisted
+
+
+def replay_run_validation_checkpoint(
+    *,
+    checkpoint_id: int,
+    project_root: str | Path = PROJECT_ROOT,
+    data_directory: str | Path = DATA_DIRECTORY,
+    manifest_path: str | Path = MANIFEST_PATH,
+    artifacts_directory: str | Path = DEFAULT_ARTIFACTS_DIRECTORY,
+    session_factory,
+    policy_mode: EvaluationPolicyMode | str | None = None,
+    threshold_action: int | None = None,
+    probability_threshold: float | None = None,
+    seed: int | None = None,
+) -> EvaluationRunResult:
+    """Replay archived run-validation without inserting an Evaluation row.
+
+    The repository must be clean, but it may be a later commit. The offline
+    report layer verifies every replayed metric against the persisted
+    Evaluation row before accepting regenerated artifacts.
+    """
+    root = Path(project_root).expanduser().resolve()
+    require_clean_git(root)
+    source = _load_source(
+        session_factory,
+        checkpoint_id=_positive_integer(checkpoint_id, name="checkpoint_id"),
+    )
+    config = _source_config(source)
+    market_data = _load_source_market_data(
+        source, data_directory=data_directory, manifest_path=manifest_path
+    )
+    start = source.split_index
+    end = len(market_data)
+    definition = get_context_definition(config.environment.context)
+    lookback = definition.required_history_rows(int(config.environment.window))
+    resolved_seed = source.run_seed if seed is None else _nonnegative_integer(seed, name="seed")
+    resolved_policy_mode = config.evaluation.policy_mode if policy_mode is None else policy_mode
+    resolved_threshold_action = (
+        config.evaluation.threshold_action if policy_mode is None else threshold_action
+    )
+    resolved_probability_threshold = (
+        config.evaluation.probability_threshold if policy_mode is None else probability_threshold
+    )
+    model = load_persisted_ppo_checkpoint(
+        source, environment=None, device=config.ppo.device, project_root=root,
+        artifacts_directory=artifacts_directory,
+    )
+    return run_ppo_evaluation(
+        model, market_data, config.environment,
+        evaluation_start_index=start, evaluation_end_index=end,
+        lookback_rows=lookback, policy_mode=resolved_policy_mode, seed=resolved_seed,
+        threshold_action=resolved_threshold_action,
+        probability_threshold=resolved_probability_threshold,
+    )

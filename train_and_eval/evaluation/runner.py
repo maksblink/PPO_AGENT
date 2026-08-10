@@ -54,6 +54,28 @@ class EvaluationPolicyTrace:
 
 
 @dataclass(frozen=True, slots=True)
+class EvaluationTrajectory:
+    """Per-step validation data sufficient to regenerate diagnostic plots."""
+
+    execution_indices: tuple[int, ...]
+    execution_timestamps: tuple[pd.Timestamp, ...]
+    execution_prices: tuple[float, ...]
+    close_prices: tuple[float, ...]
+    actions: tuple[int, ...]
+    positions: tuple[int, ...]
+    agent_equity: tuple[float, ...]
+    always_long_equity: tuple[float, ...]
+    always_short_equity: tuple[float, ...]
+    shaped_rewards: tuple[float, ...]
+    fee_costs: tuple[float, ...]
+    swap_costs: tuple[float, ...]
+    trade_costs: tuple[float, ...]
+    drawdowns: tuple[float, ...]
+    hold_bars: tuple[int, ...]
+    selected_action_probabilities: tuple[float, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationRunResult:
     """Complete in-memory result of one PPO evaluation."""
 
@@ -65,6 +87,8 @@ class EvaluationRunResult:
     lookback_rows: int
 
     policy_trace: EvaluationPolicyTrace
+    trajectory: EvaluationTrajectory
+    trade_events: tuple[dict[str, Any], ...]
 
 
 def _integer(
@@ -378,6 +402,12 @@ def run_ppo_evaluation(
     shaped_rewards: list[float] = []
     step_swap_costs: list[float] = []
     step_swap_events: list[int] = []
+    execution_prices: list[float] = []
+    close_prices: list[float] = []
+    fee_costs: list[float] = []
+    trade_costs: list[float] = []
+    drawdowns: list[float] = []
+    hold_bars: list[int] = []
 
     execution_indices: list[int] = []
     execution_timestamps: list[
@@ -612,6 +642,12 @@ def run_ppo_evaluation(
                 ]
             )
         )
+        execution_prices.append(float(agent_info["execution_price"]))
+        close_prices.append(float(agent_info["close_price"]))
+        fee_costs.append(float(agent_info["fee_cost"]))
+        trade_costs.append(float(agent_info["trade_cost"]))
+        drawdowns.append(float(agent_info["drawdown"]))
+        hold_bars.append(int(agent_info["hold_bars"]))
 
         execution_indices.append(
             global_execution_index
@@ -689,23 +725,30 @@ def run_ppo_evaluation(
         evaluation_end_index=end,
         lookback_rows=lookback,
         policy_trace=EvaluationPolicyTrace(
-            execution_indices=tuple(
-                execution_indices
-            ),
-            execution_timestamps=tuple(
-                execution_timestamps
-            ),
+            execution_indices=tuple(execution_indices),
+            execution_timestamps=tuple(execution_timestamps),
             actions=tuple(actions),
-            probabilities=tuple(
-                probabilities
-            ),
-            selected_action_probabilities=(
-                tuple(
-                    selected_probabilities
-                )
-            ),
-            threshold_met=tuple(
-                threshold_results
-            ),
+            probabilities=tuple(probabilities),
+            selected_action_probabilities=tuple(selected_probabilities),
+            threshold_met=tuple(threshold_results),
         ),
+        trajectory=EvaluationTrajectory(
+            execution_indices=tuple(execution_indices),
+            execution_timestamps=tuple(execution_timestamps),
+            execution_prices=tuple(execution_prices),
+            close_prices=tuple(close_prices),
+            actions=tuple(actions),
+            positions=tuple(positions),
+            agent_equity=tuple(agent_equity),
+            always_long_equity=tuple(always_long_equity),
+            always_short_equity=tuple(always_short_equity),
+            shaped_rewards=tuple(shaped_rewards),
+            fee_costs=tuple(fee_costs),
+            swap_costs=tuple(step_swap_costs),
+            trade_costs=tuple(trade_costs),
+            drawdowns=tuple(drawdowns),
+            hold_bars=tuple(hold_bars),
+            selected_action_probabilities=tuple(selected_probabilities),
+        ),
+        trade_events=tuple(dict(event) for event in agent_environment.trade_events),
     )

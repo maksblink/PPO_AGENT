@@ -192,6 +192,12 @@ def test_runner_uses_exact_execution_range() -> None:
         1,
     )
 
+    assert result.trajectory.execution_indices == (4, 5, 6, 7)
+    assert result.trajectory.actions == (1, 1, 1, 1)
+    assert len(result.trajectory.agent_equity) == 4
+    assert len(result.trajectory.fee_costs) == 4
+    assert isinstance(result.trade_events, tuple)
+
     assert (
         result.metrics.agent_return
         == pytest.approx(

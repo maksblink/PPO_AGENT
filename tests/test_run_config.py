@@ -1061,3 +1061,60 @@ def test_logging_progress_intervals_must_be_positive(
             path,
             verify_data=False,
         )
+
+
+def test_artifact_settings_are_independent_from_logging(tmp_path: Path) -> None:
+    config = _valid_config()
+    config["logging"] = {
+        "training_progress_every_steps": 20_000,
+        "validation_progress_every_steps": 5_000,
+    }
+    config["artifacts"] = {
+        "training_metrics": {
+            "enabled": True,
+            "every_steps": 2_048,
+        },
+        "validation_trajectory": {
+            "mode": "final_only",
+        },
+        "plots": {
+            "during_run": True,
+        },
+    }
+    loaded = load_run_config(
+        _write_config(tmp_path / "artifacts.yml", config),
+        verify_data=False,
+    )
+
+    assert loaded.config.logging.training_progress_every_steps == 20_000
+    assert loaded.config.artifacts.training_metrics.every_steps == 2_048
+    assert loaded.config.artifacts.training_metrics.enabled is True
+    assert loaded.config.artifacts.validation_trajectory.mode == "final_only"
+    assert loaded.config.artifacts.plots.during_run is True
+
+
+def test_artifact_settings_have_safe_defaults(tmp_path: Path) -> None:
+    loaded = load_run_config(
+        _write_config(tmp_path / "defaults.yml", _valid_config()),
+        verify_data=False,
+    )
+
+    assert loaded.config.artifacts.training_metrics.enabled is False
+    assert loaded.config.artifacts.training_metrics.every_steps == 10_000
+    assert loaded.config.artifacts.validation_trajectory.mode == "disabled"
+    assert loaded.config.artifacts.plots.during_run is False
+
+
+def test_rejects_unknown_validation_trajectory_mode(tmp_path: Path) -> None:
+    config = _valid_config()
+    config["artifacts"] = {
+        "training_metrics": {"enabled": True, "every_steps": 10_000},
+        "validation_trajectory": {"mode": "sometimes"},
+        "plots": {"during_run": False},
+    }
+
+    with pytest.raises(RunConfigError, match="validation_trajectory"):
+        load_run_config(
+            _write_config(tmp_path / "bad-artifacts.yml", config),
+            verify_data=False,
+        )

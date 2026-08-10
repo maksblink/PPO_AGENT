@@ -1736,6 +1736,14 @@ def test_live_progress_uses_configured_step_cadence(
         "training_progress_every_steps": 10_000,
         "validation_progress_every_steps": 2_000,
     }
+    raw["artifacts"] = {
+        "training_metrics": {
+            "enabled": True,
+            "every_steps": 6_000,
+        },
+        "validation_trajectory": {"mode": "disabled"},
+        "plots": {"during_run": False},
+    }
     config = RunConfig.model_validate(raw)
     loaded = replace(
         loaded,
@@ -1842,6 +1850,13 @@ def test_live_progress_uses_configured_step_cadence(
         ),
     )
 
+    metric_steps: list[int] = []
+    monkeypatch.setattr(
+        service,
+        "persist_training_metric",
+        lambda *args, **kwargs: metric_steps.append(kwargs["run_step"]),
+    )
+
     evaluation_intervals: list[int] = []
 
     def evaluate(*args, **kwargs):
@@ -1912,6 +1927,12 @@ def test_live_progress_uses_configured_step_cadence(
 
     assert reporter.training_steps == [
         10_240,
+        20_480,
+        25_000,
+    ]
+    assert metric_steps == [
+        10_240,
+        12_288,
         20_480,
         25_000,
     ]

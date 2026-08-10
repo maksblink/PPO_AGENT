@@ -30,6 +30,7 @@ from train_and_eval.evaluation.persistence import (
 from train_and_eval.evaluation.runner import (
     EvaluationPolicyTrace,
     EvaluationRunResult,
+    EvaluationTrajectory,
 )
 
 
@@ -191,27 +192,27 @@ def _result() -> EvaluationRunResult:
         policy_trace=EvaluationPolicyTrace(
             execution_indices=(4, 5),
             execution_timestamps=(
-                pd.Timestamp(
-                    "2026-01-05 14:20:00+00:00"
-                ),
-                pd.Timestamp(
-                    "2026-01-05 14:25:00+00:00"
-                ),
+                pd.Timestamp("2026-01-05 14:20:00+00:00"),
+                pd.Timestamp("2026-01-05 14:25:00+00:00"),
             ),
-            actions=(0, 0),
-            probabilities=(
-                (1.0, 0.0),
-                (1.0, 0.0),
-            ),
-            selected_action_probabilities=(
-                1.0,
-                1.0,
-            ),
-            threshold_met=(
-                None,
-                None,
-            ),
+            actions=(0, 0), probabilities=((1.0, 0.0), (1.0, 0.0)),
+            selected_action_probabilities=(1.0, 1.0), threshold_met=(None, None),
         ),
+        trajectory=EvaluationTrajectory(
+            execution_indices=(4, 5),
+            execution_timestamps=(
+                pd.Timestamp("2026-01-05 14:20:00+00:00"),
+                pd.Timestamp("2026-01-05 14:25:00+00:00"),
+            ),
+            execution_prices=(100.0, 101.0), close_prices=(100.5, 101.5),
+            actions=(0, 0), positions=(0, 0), agent_equity=(0.0, 0.0),
+            always_long_equity=(0.0, 0.0), always_short_equity=(0.0, 0.0),
+            shaped_rewards=(0.0, 0.0), fee_costs=(0.0, 0.0),
+            swap_costs=(0.0, 0.0), trade_costs=(0.0, 0.0),
+            drawdowns=(0.0, 0.0), hold_bars=(0, 0),
+            selected_action_probabilities=(1.0, 1.0),
+        ),
+        trade_events=(),
     )
 
 

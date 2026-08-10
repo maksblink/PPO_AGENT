@@ -136,6 +136,8 @@ def _session_factory() -> FakeSessionFactory:
         split_index=4,
         train_rows=4,
         validation_rows=4,
+        git_commit="c" * 40,
+        git_branch="master",
     )
 
     return FakeSessionFactory(

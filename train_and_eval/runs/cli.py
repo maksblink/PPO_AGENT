@@ -26,6 +26,9 @@ from train_and_eval.runs.queries import (
     load_run,
     load_runs,
 )
+from train_and_eval.reporting.service import (
+    generate_run_report,
+)
 
 
 def _positive_integer(value: str) -> int:
@@ -64,8 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m train_and_eval.runs",
         description=(
-            "Inspect persisted PPO runs, checkpoints, and evaluations. "
-            "All commands are read-only."
+            "Inspect persisted PPO runs and rebuild derived report artifacts. "
+            "Report generation never inserts or modifies database evaluations."
         ),
     )
     parser.add_argument(
@@ -146,6 +149,21 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Print every persisted evaluation column in a vertical view."
         ),
+    )
+
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Regenerate plot and trajectory artifacts for one run.",
+        description=(
+            "Build run-level plots from persisted metrics and replay missing "
+            "validation trajectories from immutable checkpoints."
+        ),
+    )
+    _add_run_id(report_parser)
+    report_parser.add_argument(
+        "--evaluation-id",
+        type=_positive_integer,
+        help="Only rebuild one completed evaluation from this run.",
     )
 
     return parser
@@ -231,12 +249,22 @@ def execute_runs_cli(
     try:
         engine = create_database_engine()
         session_factory = create_session_factory(engine)
-        with session_factory() as session:
-            _dispatch(
-                args,
-                session=session,
-                stdout=stdout,
+        if args.command == "report":
+            paths = generate_run_report(
+                session_factory,
+                run_id=args.run_id,
+                evaluation_id=args.evaluation_id,
             )
+            print(f"Run #{args.run_id} report: OK", file=stdout)
+            for path in paths:
+                print(f"  {path}", file=stdout)
+        else:
+            with session_factory() as session:
+                _dispatch(
+                    args,
+                    session=session,
+                    stdout=stdout,
+                )
     except Exception as error:
         print("Run registry query: FAILED", file=stderr)
         print(f"Error type: {type(error).__name__}", file=stderr)

@@ -138,6 +138,15 @@ def _latest_training_metrics(model: PPO) -> dict[str, int | float]:
         if value is not None:
             metrics[output_name] = value
 
+    rollout_buffer = getattr(model, "rollout_buffer", None)
+    rollout_rewards = getattr(rollout_buffer, "rewards", None)
+    if rollout_rewards is not None:
+        try:
+            metrics["rollout_reward_mean"] = float(rollout_rewards.mean())
+            metrics["rollout_reward_sum"] = float(rollout_rewards.sum())
+        except (TypeError, ValueError, AttributeError):
+            pass
+
     episode_buffer = getattr(model, "ep_info_buffer", None)
     if episode_buffer:
         rewards = [

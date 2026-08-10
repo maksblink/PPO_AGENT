@@ -496,3 +496,32 @@ def test_parser_rejects_nonpositive_identifiers() -> None:
 
     with pytest.raises(SystemExit):
         parser.parse_args(["list", "--limit", "0"])
+
+
+def test_report_command_calls_offline_report_generator(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    expected = (
+        tmp_path / "training_curves.png",
+        tmp_path / "validation_curves.png",
+    )
+    calls = []
+
+    def fake_generate(session_factory, **kwargs):
+        calls.append(kwargs)
+        return expected
+
+    monkeypatch.setattr(cli, "generate_run_report", fake_generate)
+    code, output, errors, engine = _execute(
+        monkeypatch,
+        ["report", "--run-id", "51"],
+    )
+
+    assert code == 0
+    assert errors == ""
+    assert engine.dispose_calls == 1
+    assert calls == [{"run_id": 51, "evaluation_id": None}]
+    assert "Run #51 report: OK" in output
+    assert "training_curves.png" in output
+    assert "validation_curves.png" in output

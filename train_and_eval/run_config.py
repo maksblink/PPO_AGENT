@@ -215,6 +215,47 @@ class LoggingSection(StrictConfigModel):
     validation_progress_every_steps: PositiveInt = 2_000
 
 
+class TrainingMetricsArtifactSection(StrictConfigModel):
+    """Persistent PPO-training metric snapshots."""
+
+    enabled: bool = False
+    every_steps: PositiveInt = 10_000
+
+
+class ValidationTrajectoryArtifactSection(StrictConfigModel):
+    """Persistence policy for full validation trajectories."""
+
+    mode: Literal[
+        "disabled",
+        "final_only",
+        "all",
+    ] = "disabled"
+
+
+class PlotArtifactSection(StrictConfigModel):
+    """Control eager rendering of derived plot artifacts."""
+
+    during_run: bool = False
+
+
+class ArtifactsSection(StrictConfigModel):
+    """Artifact collection and eager-rendering settings.
+
+    This section is intentionally independent from ``logging``. Terminal
+    refresh cadence must never implicitly change persisted experiment data.
+    """
+
+    training_metrics: TrainingMetricsArtifactSection = Field(
+        default_factory=TrainingMetricsArtifactSection
+    )
+    validation_trajectory: ValidationTrajectoryArtifactSection = Field(
+        default_factory=ValidationTrajectoryArtifactSection
+    )
+    plots: PlotArtifactSection = Field(
+        default_factory=PlotArtifactSection
+    )
+
+
 class EnvironmentSection(StrictConfigModel):
     window: PositiveInt
     context: str
@@ -448,6 +489,7 @@ class RunConfig(StrictConfigModel):
     data: DataSection
     training: TrainingSection
     logging: LoggingSection = Field(default_factory=LoggingSection)
+    artifacts: ArtifactsSection = Field(default_factory=ArtifactsSection)
     environment: EnvironmentSection
     ppo: PPOSection
     evaluation: EvaluationSection

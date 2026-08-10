@@ -524,6 +524,15 @@ class Run(Base):
         nullable=True,
     )
 
+    training_metrics: Mapped[
+        list["TrainingMetric"]
+    ] = relationship(
+        "TrainingMetric",
+        back_populates="run",
+        foreign_keys="TrainingMetric.run_id",
+        cascade="all, delete-orphan",
+    )
+
     checkpoints: Mapped[
         list["Checkpoint"]
     ] = relationship(
@@ -573,6 +582,94 @@ class Run(Base):
 
         self.description = description
         self.modified_at = timestamp
+
+
+class TrainingMetric(Base):
+    """One lightweight snapshot of PPO training diagnostics."""
+
+    __tablename__ = "training_metrics"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "run_step",
+            name="uq_training_metrics_run_id_run_step",
+        ),
+        CheckConstraint(
+            "run_step >= 1",
+            name="run_step_positive",
+        ),
+        CheckConstraint(
+            "model_step >= run_step",
+            name="model_step_not_less_than_run_step",
+        ),
+        CheckConstraint(
+            "rollout_number >= 1",
+            name="rollout_number_positive",
+        ),
+        Index(
+            "ix_training_metrics_run_id_model_step",
+            "run_id",
+            "model_step",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    run_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "runs.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+
+    run_step: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+    model_step: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+    rollout_number: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    ep_reward: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ep_len: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rollout_reward_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rollout_reward_sum: Mapped[float | None] = mapped_column(Float, nullable=True)
+    approx_kl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clip_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clip_range: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entropy_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    explained_variance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    learning_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_updates: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    policy_gradient_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+
+    run: Mapped["Run"] = relationship(
+        "Run",
+        back_populates="training_metrics",
+        foreign_keys=[run_id],
+    )
 
 
 class Checkpoint(Base):

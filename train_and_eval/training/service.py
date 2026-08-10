@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import warnings
 
 import pandas as pd
 from pydantic import ValidationError
@@ -76,6 +77,12 @@ from train_and_eval.training.persistence import (
     fail_run,
     mark_run_running,
     update_run_progress,
+)
+from train_and_eval.training.metrics_persistence import (
+    persist_training_metric,
+)
+from train_and_eval.reporting.artifacts import (
+    render_run_level_artifacts,
 )
 from train_and_eval.training.scheduling import (
     build_training_schedule,
@@ -489,6 +496,15 @@ def _validation_progress_metrics(
         )
 
 
+def _persist_validation_trajectory(config: RunConfig, trigger: str) -> bool:
+    mode = config.artifacts.validation_trajectory.mode
+    if mode == "all":
+        return True
+    if mode == "final_only":
+        return trigger == "final"
+    return False
+
+
 def train_ppo_run(
     session_factory,
     *,
@@ -673,6 +689,15 @@ def train_ppo_run(
         validation_progress_every_steps = int(
             config.logging.validation_progress_every_steps
         )
+        training_metrics_enabled = bool(
+            config.artifacts.training_metrics.enabled
+        )
+        training_metrics_every_steps = int(
+            config.artifacts.training_metrics.every_steps
+        )
+        next_training_metric_step = training_metrics_every_steps
+        last_training_metric_step = 0
+        latest_training_update: PPOTrainingUpdate | None = None
 
         def report_validation_update(
             validation_steps_completed: int,
@@ -702,38 +727,59 @@ def train_ppo_run(
                 update: PPOTrainingUpdate,
             ) -> None:
                 nonlocal next_training_progress_step
+                nonlocal next_training_metric_step
+                nonlocal last_training_metric_step
+                nonlocal latest_training_update
 
                 run_steps_completed = (
                     segment_completed_before
                     + update.local_steps_completed
                 )
+                rollouts_completed = (
+                    rollout_count_before + update.rollout_iteration
+                )
                 segment_finished = (
                     run_steps_completed >= int(event.run_step)
                 )
+                latest_training_update = PPOTrainingUpdate(
+                    model_steps=update.model_steps,
+                    local_steps_completed=run_steps_completed,
+                    rollout_iteration=rollouts_completed,
+                    rollout_size=update.rollout_size,
+                    metrics=update.metrics,
+                )
 
+                if training_metrics_enabled and (
+                    run_steps_completed >= next_training_metric_step
+                    or event.final and segment_finished
+                ):
+                    persist_training_metric(
+                        session_factory,
+                        run_id=run_id,
+                        run_step=run_steps_completed,
+                        model_step=update.model_steps,
+                        rollout_number=rollouts_completed,
+                        metrics=update.metrics,
+                    )
+                    last_training_metric_step = run_steps_completed
+                    while next_training_metric_step <= run_steps_completed:
+                        next_training_metric_step += training_metrics_every_steps
+
+                if progress_reporter is None:
+                    return
                 if (
                     run_steps_completed < next_training_progress_step
                     and not segment_finished
                 ):
                     return
-
-                while (
-                    next_training_progress_step
-                    <= run_steps_completed
-                ):
-                    next_training_progress_step += (
-                        training_progress_every_steps
-                    )
-
+                while next_training_progress_step <= run_steps_completed:
+                    next_training_progress_step += training_progress_every_steps
                 _progress_call(
                     progress_reporter,
                     "training_update",
                     completed_steps=run_steps_completed,
                     model_steps=update.model_steps,
-                    rollouts_completed=(
-                        rollout_count_before
-                        + update.rollout_iteration
-                    ),
+                    rollouts_completed=rollouts_completed,
                     metrics=update.metrics,
                 )
 
@@ -755,7 +801,7 @@ def train_ppo_run(
                     ),
                     update_callback=(
                         report_training_update
-                        if progress_reporter is not None
+                        if (progress_reporter is not None or training_metrics_enabled)
                         else None
                     ),
                 )
@@ -891,6 +937,10 @@ def train_ppo_run(
                         artifacts_directory=(
                             artifacts_directory
                         ),
+                        persist_trajectory=_persist_validation_trajectory(
+                            config, evaluation_trigger
+                        ),
+                        render_plots=bool(config.artifacts.plots.during_run),
                     )
                 )
                 persisted_evaluations.append(
@@ -1015,6 +1065,10 @@ def train_ppo_run(
                             artifacts_directory=(
                                 artifacts_directory
                             ),
+                            persist_trajectory=_persist_validation_trajectory(
+                                config, "final"
+                            ),
+                            render_plots=bool(config.artifacts.plots.during_run),
                         )
                     )
                     persisted_evaluations.append(
@@ -1139,12 +1193,42 @@ def train_ppo_run(
                 "validation evaluation."
             )
 
+        if (
+            training_metrics_enabled
+            and latest_training_update is not None
+            and completed_steps > last_training_metric_step
+        ):
+            persist_training_metric(
+                session_factory,
+                run_id=run_id,
+                run_step=completed_steps,
+                model_step=int(model.num_timesteps),
+                rollout_number=len(rollout_sizes),
+                metrics=latest_training_update.metrics,
+            )
+
         completed = complete_run(
             session_factory,
             run_id=run_id,
             stopped_early=stopped_early,
             early_stop_reason=early_stop_reason,
         )
+
+        if config.artifacts.plots.during_run:
+            try:
+                render_run_level_artifacts(
+                    session_factory,
+                    run_id=run_id,
+                    project_root=root,
+                    artifacts_directory=artifacts_directory,
+                )
+            except Exception as artifact_error:
+                warnings.warn(
+                    "Run-level plot generation failed and can be retried "
+                    f"offline: {type(artifact_error).__name__}: {artifact_error}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         _progress_call(
             progress_reporter,

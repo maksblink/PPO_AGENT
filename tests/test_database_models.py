@@ -643,3 +643,37 @@ def test_checkpoint_step_uniqueness_includes_save_reason() -> None:
         "run_step",
         "save_reason",
     ]
+
+
+def test_training_metrics_table_contains_required_columns() -> None:
+    table = Base.metadata.tables["training_metrics"]
+    assert set(table.columns.keys()) == {
+        "id",
+        "run_id",
+        "run_step",
+        "model_step",
+        "rollout_number",
+        "ep_reward",
+        "ep_len",
+        "rollout_reward_mean",
+        "rollout_reward_sum",
+        "approx_kl",
+        "clip_fraction",
+        "clip_range",
+        "entropy_loss",
+        "explained_variance",
+        "learning_rate",
+        "loss",
+        "n_updates",
+        "policy_gradient_loss",
+        "value_loss",
+        "created_at",
+    }
+
+
+def test_training_metrics_use_cascade_run_foreign_key() -> None:
+    table = Base.metadata.tables["training_metrics"]
+    foreign_keys = list(table.c.run_id.foreign_keys)
+    assert len(foreign_keys) == 1
+    assert foreign_keys[0].target_fullname == "runs.id"
+    assert foreign_keys[0].ondelete == "CASCADE"

@@ -96,6 +96,7 @@ class TinyEnvironment(gym.Env):
 def _ppo_config(
     *,
     activation: str = "relu",
+    value_head_init_scale: float = 1.0,
 ) -> PPOSection:
     return PPOSection.model_validate(
         {
@@ -106,6 +107,7 @@ def _ppo_config(
                 16,
             ],
             "activation": activation,
+            "value_head_init_scale": value_head_init_scale,
             "n_steps": 8,
             "batch_size": 4,
             "n_epochs": 2,
@@ -196,6 +198,44 @@ def test_creates_ppo_from_explicit_config() -> None:
     )
     assert model.gae_lambda == pytest.approx(
         0.95
+    )
+
+
+def test_scales_value_head_initialization() -> None:
+    baseline = create_ppo_model(
+        TinyEnvironment(),
+        _ppo_config(
+            value_head_init_scale=1.0,
+        ),
+        seed=17,
+    )
+
+    scaled = create_ppo_model(
+        TinyEnvironment(),
+        _ppo_config(
+            value_head_init_scale=0.003,
+        ),
+        seed=17,
+    )
+
+    baseline_weight = (
+        baseline.policy.value_net.weight
+        .detach()
+        .cpu()
+        .numpy()
+    )
+    scaled_weight = (
+        scaled.policy.value_net.weight
+        .detach()
+        .cpu()
+        .numpy()
+    )
+
+    np.testing.assert_allclose(
+        scaled_weight,
+        baseline_weight * 0.003,
+        rtol=1e-6,
+        atol=1e-8,
     )
 
 

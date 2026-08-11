@@ -364,6 +364,37 @@ def test_resume_rejects_changed_hidden_sizes(
         )
 
 
+def test_resume_rejects_changed_value_head_init_scale(
+    tmp_path: Path,
+) -> None:
+    source_config = _valid_config()
+    source_config["run"]["name"] = "source_run"
+    source_config["ppo"]["value_head_init_scale"] = 0.003
+
+    current_config = _resume_config()
+    current_config["ppo"]["value_head_init_scale"] = 1.0
+
+    source = _load_without_data_verification(
+        tmp_path,
+        "source.yml",
+        source_config,
+    )
+    current = _load_without_data_verification(
+        tmp_path,
+        "current.yml",
+        current_config,
+    )
+
+    with pytest.raises(
+        ResumeCompatibilityError,
+        match="ppo.value_head_init_scale",
+    ):
+        validate_resume_compatibility(
+            current.config,
+            source.config,
+        )
+
+
 @pytest.mark.parametrize(
     ("section", "field", "new_value", "expected_message"),
     [

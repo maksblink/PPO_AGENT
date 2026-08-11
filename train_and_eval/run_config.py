@@ -348,6 +348,7 @@ class PPOSection(StrictConfigModel):
         min_length=1,
     )
     activation: Literal["tanh", "relu"]
+    value_head_init_scale: PositiveFloat = 1.0
 
     n_steps: int = Field(
         strict=True,
@@ -531,6 +532,7 @@ RESUME_IMMUTABLE_FIELDS = (
     "ppo.policy",
     "ppo.hidden_sizes",
     "ppo.activation",
+    "ppo.value_head_init_scale",
 )
 
 

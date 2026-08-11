@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from gymnasium import Env
 from stable_baselines3 import PPO
+import torch
 from torch import nn
 
 from train_and_eval.run_config import PPOSection
@@ -182,7 +183,7 @@ def create_ppo_model(
         config.policy
     ]
 
-    return PPO(
+    model = PPO(
         policy_name,
         environment,
         **ppo_constructor_kwargs(
@@ -191,6 +192,23 @@ def create_ppo_model(
             verbose=verbose,
         ),
     )
+
+    scale = float(
+        config.value_head_init_scale
+    )
+
+    if scale != 1.0:
+        with torch.no_grad():
+            model.policy.value_net.weight.mul_(
+                scale
+            )
+
+            if model.policy.value_net.bias is not None:
+                model.policy.value_net.bias.mul_(
+                    scale
+                )
+
+    return model
 
 
 def save_ppo_model_file(

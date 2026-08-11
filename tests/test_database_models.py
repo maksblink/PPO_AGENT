@@ -674,6 +674,13 @@ def test_training_metrics_table_contains_required_columns() -> None:
         "value_error_mean",
         "value_error_std",
         "value_target_prediction_corr",
+        "post_train_value_prediction_mean",
+        "post_train_value_prediction_std",
+        "post_train_value_error_mean",
+        "post_train_value_error_std",
+        "post_train_value_mse",
+        "post_train_explained_variance",
+        "post_train_value_target_prediction_corr",
         "created_at",
     }
 

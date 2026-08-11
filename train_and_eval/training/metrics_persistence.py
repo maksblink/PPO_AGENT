@@ -136,6 +136,27 @@ def persist_training_metric(
         value_target_prediction_corr=_optional_float(
             metrics, "value_target_prediction_corr"
         ),
+        post_train_value_prediction_mean=_optional_float(
+            metrics, "post_train_value_prediction_mean"
+        ),
+        post_train_value_prediction_std=_optional_float(
+            metrics, "post_train_value_prediction_std"
+        ),
+        post_train_value_error_mean=_optional_float(
+            metrics, "post_train_value_error_mean"
+        ),
+        post_train_value_error_std=_optional_float(
+            metrics, "post_train_value_error_std"
+        ),
+        post_train_value_mse=_optional_float(
+            metrics, "post_train_value_mse"
+        ),
+        post_train_explained_variance=_optional_float(
+            metrics, "post_train_explained_variance"
+        ),
+        post_train_value_target_prediction_corr=_optional_float(
+            metrics, "post_train_value_target_prediction_corr"
+        ),
         )
         session.add(record)
         session.commit()

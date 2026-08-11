@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 import numpy as np
+import torch
 import stable_baselines3
 from stable_baselines3 import PPO
 from stable_baselines3.common.buffers import RolloutBuffer
@@ -207,6 +208,122 @@ def _latest_training_metrics(model: PPO) -> dict[str, int | float]:
                         metrics[
                             "value_target_prediction_corr"
                         ] = correlation
+
+                rollout_observations = getattr(
+                    rollout_buffer,
+                    "observations",
+                    None,
+                )
+                if rollout_observations is not None:
+                    observation_tensor, _ = (
+                        model.policy.obs_to_tensor(
+                            rollout_observations
+                        )
+                    )
+
+                    with torch.no_grad():
+                        post_train_predictions = (
+                            model.policy.predict_values(
+                                observation_tensor
+                            )
+                            .detach()
+                            .cpu()
+                            .numpy()
+                            .reshape(-1)
+                            .astype(np.float64, copy=False)
+                        )
+
+                    if (
+                        post_train_predictions.shape
+                        == value_targets.shape
+                        and np.all(
+                            np.isfinite(
+                                post_train_predictions
+                            )
+                        )
+                    ):
+                        post_train_errors = (
+                            value_targets
+                            - post_train_predictions
+                        )
+
+                        metrics[
+                            "post_train_value_prediction_mean"
+                        ] = float(
+                            np.mean(
+                                post_train_predictions
+                            )
+                        )
+                        metrics[
+                            "post_train_value_prediction_std"
+                        ] = float(
+                            np.std(
+                                post_train_predictions
+                            )
+                        )
+                        metrics[
+                            "post_train_value_error_mean"
+                        ] = float(
+                            np.mean(post_train_errors)
+                        )
+                        metrics[
+                            "post_train_value_error_std"
+                        ] = float(
+                            np.std(post_train_errors)
+                        )
+                        metrics[
+                            "post_train_value_mse"
+                        ] = float(
+                            np.mean(
+                                np.square(
+                                    post_train_errors
+                                )
+                            )
+                        )
+
+                        target_variance = float(
+                            np.var(value_targets)
+                        )
+                        if target_variance > 0.0:
+                            metrics[
+                                "post_train_explained_variance"
+                            ] = float(
+                                1.0
+                                - (
+                                    np.var(
+                                        post_train_errors
+                                    )
+                                    / target_variance
+                                )
+                            )
+
+                        post_train_prediction_std = (
+                            float(
+                                np.std(
+                                    post_train_predictions
+                                )
+                            )
+                        )
+                        if (
+                            value_targets.size > 1
+                            and target_std > 0.0
+                            and post_train_prediction_std
+                            > 0.0
+                        ):
+                            post_train_correlation = (
+                                float(
+                                    np.corrcoef(
+                                        value_targets,
+                                        post_train_predictions,
+                                    )[0, 1]
+                                )
+                            )
+                            if np.isfinite(
+                                post_train_correlation
+                            ):
+                                metrics[
+                                    "post_train_value_target_prediction_corr"
+                                ] = post_train_correlation
 
         except (TypeError, ValueError, AttributeError):
             pass

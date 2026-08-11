@@ -675,6 +675,35 @@ class TrainingMetric(Base):
         nullable=True,
     )
 
+    post_train_value_prediction_mean: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    post_train_value_prediction_std: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    post_train_value_error_mean: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    post_train_value_error_std: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    post_train_value_mse: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    post_train_explained_variance: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    post_train_value_target_prediction_corr: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

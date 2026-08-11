@@ -292,4 +292,20 @@ def test_reports_latest_training_metrics_after_each_rollout() -> None:
         "explained_variance" in update.metrics
         for update in updates
     )
+
+    critic_diagnostic_keys = (
+        "value_target_mean",
+        "value_target_std",
+        "value_prediction_mean",
+        "value_prediction_std",
+        "value_error_mean",
+        "value_error_std",
+        "value_target_prediction_corr",
+    )
+    assert all(
+        key in update.metrics
+        for update in updates
+        for key in critic_diagnostic_keys
+    )
+
     assert updates[-1].metrics["n_updates"] == 2

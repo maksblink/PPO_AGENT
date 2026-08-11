@@ -115,6 +115,27 @@ def persist_training_metric(
                 metrics, "policy_gradient_loss"
             ),
             value_loss=_optional_float(metrics, "value_loss"),
+        value_target_mean=_optional_float(
+            metrics, "value_target_mean"
+        ),
+        value_target_std=_optional_float(
+            metrics, "value_target_std"
+        ),
+        value_prediction_mean=_optional_float(
+            metrics, "value_prediction_mean"
+        ),
+        value_prediction_std=_optional_float(
+            metrics, "value_prediction_std"
+        ),
+        value_error_mean=_optional_float(
+            metrics, "value_error_mean"
+        ),
+        value_error_std=_optional_float(
+            metrics, "value_error_std"
+        ),
+        value_target_prediction_corr=_optional_float(
+            metrics, "value_target_prediction_corr"
+        ),
         )
         session.add(record)
         session.commit()

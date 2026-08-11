@@ -658,6 +658,23 @@ class TrainingMetric(Base):
     policy_gradient_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
     value_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    value_target_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_target_std: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_prediction_mean: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    value_prediction_std: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+    value_error_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_error_std: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_target_prediction_corr: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

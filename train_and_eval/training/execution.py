@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from collections.abc import Callable, Mapping
 from typing import Any
 
+import numpy as np
 import stable_baselines3
 from stable_baselines3 import PPO
 from stable_baselines3.common.buffers import RolloutBuffer
@@ -144,6 +145,69 @@ def _latest_training_metrics(model: PPO) -> dict[str, int | float]:
         try:
             metrics["rollout_reward_mean"] = float(rollout_rewards.mean())
             metrics["rollout_reward_sum"] = float(rollout_rewards.sum())
+        except (TypeError, ValueError, AttributeError):
+            pass
+
+    rollout_returns = getattr(rollout_buffer, "returns", None)
+    rollout_values = getattr(rollout_buffer, "values", None)
+
+    if rollout_returns is not None and rollout_values is not None:
+        try:
+            value_targets = np.asarray(
+                rollout_returns,
+                dtype=np.float64,
+            ).reshape(-1)
+            value_predictions = np.asarray(
+                rollout_values,
+                dtype=np.float64,
+            ).reshape(-1)
+
+            if (
+                value_targets.size > 0
+                and value_targets.shape == value_predictions.shape
+                and np.all(np.isfinite(value_targets))
+                and np.all(np.isfinite(value_predictions))
+            ):
+                value_errors = value_targets - value_predictions
+
+                metrics["value_target_mean"] = float(
+                    np.mean(value_targets)
+                )
+                metrics["value_target_std"] = float(
+                    np.std(value_targets)
+                )
+                metrics["value_prediction_mean"] = float(
+                    np.mean(value_predictions)
+                )
+                metrics["value_prediction_std"] = float(
+                    np.std(value_predictions)
+                )
+                metrics["value_error_mean"] = float(
+                    np.mean(value_errors)
+                )
+                metrics["value_error_std"] = float(
+                    np.std(value_errors)
+                )
+
+                target_std = float(np.std(value_targets))
+                prediction_std = float(np.std(value_predictions))
+
+                if (
+                    value_targets.size > 1
+                    and target_std > 0.0
+                    and prediction_std > 0.0
+                ):
+                    correlation = float(
+                        np.corrcoef(
+                            value_targets,
+                            value_predictions,
+                        )[0, 1]
+                    )
+                    if np.isfinite(correlation):
+                        metrics[
+                            "value_target_prediction_corr"
+                        ] = correlation
+
         except (TypeError, ValueError, AttributeError):
             pass
 

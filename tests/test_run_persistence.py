@@ -164,6 +164,7 @@ def _create_pending(session: FakeSession):
         loaded_config=loaded,
         split=split,
         git_state=_git_state(),
+        training_steps_requested=499_712,
     )
 
 
@@ -174,7 +175,7 @@ def test_creates_pending_run_from_verified_inputs() -> None:
 
     assert state.run_id == 51
     assert state.status == RunStatus.PENDING
-    assert state.training_steps_requested == 500000
+    assert state.training_steps_requested == 499712
     assert state.training_steps_completed == 0
     assert state.data_epochs_completed == Decimal("0")
     assert state.stopped_early is False
@@ -209,6 +210,7 @@ def test_rejects_unverified_loaded_config() -> None:
             loaded_config=loaded,
             split=_split(_loaded_config()),
             git_state=_git_state(),
+            training_steps_requested=499_712,
         )
 
     assert session.run is None
@@ -241,6 +243,7 @@ def test_resume_requires_existing_matching_checkpoint() -> None:
             loaded_config=resumed_loaded,
             split=_split(resumed_loaded),
             git_state=_git_state(),
+            training_steps_requested=499_712,
             source_checkpoint_id=8,
         )
 
@@ -262,6 +265,7 @@ def test_resume_requires_existing_matching_checkpoint() -> None:
             loaded_config=resumed_loaded,
             split=_split(resumed_loaded),
             git_state=_git_state(),
+            training_steps_requested=499_712,
             source_checkpoint_id=8,
         )
 
@@ -299,7 +303,7 @@ def test_running_progress_and_completion_lifecycle() -> None:
     final_progress = update_run_progress(
         FakeSessionFactory(session),
         run_id=51,
-        training_steps_completed=500000,
+        training_steps_completed=499712,
     )
     completed = complete_run(
         FakeSessionFactory(session),
@@ -307,11 +311,11 @@ def test_running_progress_and_completion_lifecycle() -> None:
     )
 
     assert final_progress.data_epochs_completed == Decimal(
-        "1960.78431373"
+        "1959.65490196"
     )
     assert completed.status == RunStatus.COMPLETED
     assert completed.finished_at is not None
-    assert completed.training_steps_completed == 500000
+    assert completed.training_steps_completed == 499712
 
 
 def test_progress_must_be_monotonic_and_within_request() -> None:

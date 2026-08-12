@@ -43,6 +43,61 @@ def _positive_integer(
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class PeriodicIntervalResolution:
+    requested_steps: int
+    rollout_steps: int
+    rollout_count: int
+    resolved_steps: int
+    trimmed_steps: int
+
+
+def resolve_periodic_interval(
+    *,
+    requested_steps: int,
+    rollout_steps: int,
+    name: str,
+) -> PeriodicIntervalResolution:
+    resolved_requested = _positive_integer(
+        requested_steps,
+        name=name,
+    )
+    resolved_rollout = _positive_integer(
+        rollout_steps,
+        name="rollout_steps",
+    )
+
+    rollout_count = (
+        resolved_requested
+        // resolved_rollout
+    )
+
+    if rollout_count < 1:
+        raise TrainingScheduleError(
+            f"{name}={resolved_requested}; "
+            f"floor({resolved_requested} / {resolved_rollout}) "
+            f"= {rollout_count} complete rollouts. "
+            "At least one complete PPO rollout is required. "
+            f"Minimum valid value: {resolved_rollout} steps."
+        )
+
+    resolved_steps = (
+        rollout_count
+        * resolved_rollout
+    )
+
+    return PeriodicIntervalResolution(
+        requested_steps=resolved_requested,
+        rollout_steps=resolved_rollout,
+        rollout_count=rollout_count,
+        resolved_steps=resolved_steps,
+        trimmed_steps=(
+            resolved_requested
+            - resolved_steps
+        ),
+    )
+
+
 def build_training_schedule(
     *,
     total_steps: int,
@@ -72,29 +127,22 @@ def build_training_schedule(
     )
 
     if rollout_steps is not None:
-        resolved_rollout_steps = _positive_integer(
-            rollout_steps,
-            name="rollout_steps",
+        checkpoint_resolution = resolve_periodic_interval(
+            requested_steps=resolved_checkpoint_interval,
+            rollout_steps=rollout_steps,
+            name="checkpoint_every_steps",
+        )
+        evaluation_resolution = resolve_periodic_interval(
+            requested_steps=resolved_eval_interval,
+            rollout_steps=rollout_steps,
+            name="eval_every_steps",
         )
 
-        def align_interval(interval: int) -> int:
-            rollout_count = max(
-                1,
-                round(
-                    interval
-                    / resolved_rollout_steps
-                ),
-            )
-            return (
-                rollout_count
-                * resolved_rollout_steps
-            )
-
-        resolved_checkpoint_interval = align_interval(
-            resolved_checkpoint_interval
+        resolved_checkpoint_interval = (
+            checkpoint_resolution.resolved_steps
         )
-        resolved_eval_interval = align_interval(
-            resolved_eval_interval
+        resolved_eval_interval = (
+            evaluation_resolution.resolved_steps
         )
 
     checkpoint_steps = set(

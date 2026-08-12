@@ -115,6 +115,11 @@ def _split() -> SimpleNamespace:
         validation_rows=1000,
         split_index=7000,
         steps_per_data_epoch=856,
+        requested_training_steps=lambda training: (
+            training.resolve_training_steps(
+                steps_per_data_epoch=856,
+            )
+        ),
     )
 
 
@@ -224,6 +229,7 @@ def _patch_preflight(
             or (
                 pd.DataFrame(),
                 _split(),
+            0,
             )
         ),
     )
@@ -1968,3 +1974,119 @@ def test_batch_aligned_training_window_is_noop_when_already_aligned() -> None:
     assert trim == 0
     assert start_index == 6_144
     assert steps_per_epoch == 68_608
+
+
+def test_batch_aligns_requested_training_steps_downward() -> None:
+    trimmed, resolved = service._batch_aligned_training_steps(
+        requested_steps=500_000,
+        batch_size=1_024,
+    )
+
+    assert trimmed == 288
+    assert resolved == 499_712
+
+
+def test_batch_aligned_training_steps_is_noop_when_already_aligned() -> None:
+    trimmed, resolved = service._batch_aligned_training_steps(
+        requested_steps=68_608,
+        batch_size=1_024,
+    )
+
+    assert trimmed == 0
+    assert resolved == 68_608
+
+
+def test_preflight_receives_exact_resolved_training_plan(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    _patch_preflight(
+        monkeypatch,
+        tmp_path,
+        events,
+        loaded=_loaded_config(
+            checkpoint_every_steps=9,
+            eval_every_steps=7,
+        ),
+    )
+
+    snapshots: list[Any] = []
+
+    class Reporter:
+        def preflight(self, snapshot) -> None:
+            snapshots.append(snapshot)
+
+    reporter = Reporter()
+
+    stop = RuntimeError("stop after preflight")
+
+    monkeypatch.setattr(
+        service,
+        "create_pending_run",
+        lambda *args, **kwargs: (
+            (_ for _ in ()).throw(stop)
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="stop after preflight",
+    ):
+        service.train_ppo_run(
+            object(),
+            config_path="run.yml",
+            project_root=tmp_path,
+            progress_reporter=reporter,
+        )
+
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+
+    assert snapshot.n_steps == 2
+    assert snapshot.batch_size == 2
+
+    assert snapshot.original_steps_per_data_epoch == 856
+    assert snapshot.trimmed_training_data_steps == 0
+    assert snapshot.effective_steps_per_data_epoch == 856
+
+    assert snapshot.duration_unit == "timesteps"
+    assert snapshot.duration_amount == 10
+    assert snapshot.raw_requested_steps == 10
+    assert snapshot.trimmed_requested_steps == 0
+    assert snapshot.resolved_requested_steps == 10
+
+    assert snapshot.checkpoint_requested_steps == 9
+    assert snapshot.checkpoint_rollout_count == 4
+    assert snapshot.checkpoint_resolved_steps == 8
+    assert snapshot.checkpoint_trimmed_steps == 1
+
+    assert snapshot.evaluation_requested_steps == 7
+    assert snapshot.evaluation_rollout_count == 3
+    assert snapshot.evaluation_resolved_steps == 6
+    assert snapshot.evaluation_trimmed_steps == 1
+
+    assert snapshot.schedule_event_steps == (
+        6,
+        8,
+        10,
+    )
+    assert snapshot.periodic_checkpoint_writes == 2
+    assert snapshot.periodic_evaluations == 1
+    assert snapshot.total_checkpoint_writes == 3
+    assert snapshot.training_segment_count == 3
+    assert snapshot.all_segments_batch_aligned is True
+
+
+def test_short_training_duration_error_shows_floor_calculation() -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"floor\(20 / 1024\) = 0 complete batches"
+        ),
+    ):
+        service._batch_aligned_training_steps(
+            requested_steps=20,
+            batch_size=1_024,
+        )

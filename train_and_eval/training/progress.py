@@ -11,6 +11,40 @@ Number = int | float
 
 
 @dataclass(frozen=True, slots=True)
+class TrainingPreflightSnapshot:
+    n_steps: int
+    batch_size: int
+
+    original_steps_per_data_epoch: int
+    trimmed_training_data_steps: int
+    effective_steps_per_data_epoch: int
+
+    duration_unit: str
+    duration_amount: int
+    raw_requested_steps: int
+    trimmed_requested_steps: int
+    resolved_requested_steps: int
+    training_batch_count: int
+
+    checkpoint_requested_steps: int
+    checkpoint_rollout_count: int
+    checkpoint_resolved_steps: int
+    checkpoint_trimmed_steps: int
+
+    evaluation_requested_steps: int
+    evaluation_rollout_count: int
+    evaluation_resolved_steps: int
+    evaluation_trimmed_steps: int
+
+    schedule_event_steps: tuple[int, ...]
+    periodic_checkpoint_writes: int
+    periodic_evaluations: int
+    total_checkpoint_writes: int
+    training_segment_count: int
+    all_segments_batch_aligned: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ValidationMetricSnapshot:
     evaluation_id: int
     checkpoint_id: int
@@ -28,6 +62,11 @@ class ValidationMetricSnapshot:
 
 
 class TrainingProgressReporter(Protocol):
+    def preflight(
+        self,
+        snapshot: TrainingPreflightSnapshot,
+    ) -> None: ...
+
     def start(
         self,
         *,
@@ -106,6 +145,164 @@ class LiveTrainingProgress:
     _last_render_at: float = field(default=0.0, init=False)
     _rendered_lines: int = field(default=0, init=False)
     _closed: bool = field(default=False, init=False)
+
+    @staticmethod
+    def _event_steps_text(
+        steps: tuple[int, ...],
+    ) -> str:
+        if len(steps) <= 20:
+            return ", ".join(
+                f"{step:,}"
+                for step in steps
+            )
+
+        head = steps[:10]
+        tail = steps[-10:]
+        omitted = len(steps) - len(head) - len(tail)
+
+        return (
+            ", ".join(
+                f"{step:,}"
+                for step in head
+            )
+            + f", ... {omitted} events omitted ..., "
+            + ", ".join(
+                f"{step:,}"
+                for step in tail
+            )
+        )
+
+    def preflight(
+        self,
+        snapshot: TrainingPreflightSnapshot,
+    ) -> None:
+        lines = [
+            "PPO TRAINING RESOLUTION",
+            "",
+            "Rollout",
+            f"  n_steps: {snapshot.n_steps:,}",
+            f"  batch_size: {snapshot.batch_size:,}",
+            "",
+            "Training data",
+            (
+                "  original scored TRAIN steps: "
+                f"{snapshot.original_steps_per_data_epoch:,}"
+            ),
+            (
+                "  "
+                f"{snapshot.original_steps_per_data_epoch:,} % "
+                f"{snapshot.batch_size:,} = "
+                f"{snapshot.trimmed_training_data_steps:,}"
+            ),
+            (
+                "  trimmed oldest TRAIN steps: "
+                f"{snapshot.trimmed_training_data_steps:,}"
+            ),
+            (
+                "  effective steps/data epoch: "
+                f"{snapshot.effective_steps_per_data_epoch:,}"
+            ),
+            "",
+            "Training duration",
+            (
+                "  configured: "
+                f"{snapshot.duration_amount:,} "
+                f"{snapshot.duration_unit}"
+            ),
+            (
+                "  raw requested steps: "
+                f"{snapshot.raw_requested_steps:,}"
+            ),
+            (
+                "  floor("
+                f"{snapshot.raw_requested_steps:,} / "
+                f"{snapshot.batch_size:,}) = "
+                f"{snapshot.training_batch_count:,} complete batches"
+            ),
+            (
+                "  trimmed steps: "
+                f"{snapshot.trimmed_requested_steps:,}"
+            ),
+            (
+                "  resolved steps: "
+                f"{snapshot.resolved_requested_steps:,}"
+            ),
+            "",
+            "Checkpoint cadence",
+            (
+                "  requested: "
+                f"{snapshot.checkpoint_requested_steps:,}"
+            ),
+            (
+                "  floor("
+                f"{snapshot.checkpoint_requested_steps:,} / "
+                f"{snapshot.n_steps:,}) = "
+                f"{snapshot.checkpoint_rollout_count:,}"
+            ),
+            (
+                "  trimmed: "
+                f"{snapshot.checkpoint_trimmed_steps:,}"
+            ),
+            (
+                "  resolved: "
+                f"{snapshot.checkpoint_resolved_steps:,}"
+            ),
+            "",
+            "Evaluation cadence",
+            (
+                "  requested: "
+                f"{snapshot.evaluation_requested_steps:,}"
+            ),
+            (
+                "  floor("
+                f"{snapshot.evaluation_requested_steps:,} / "
+                f"{snapshot.n_steps:,}) = "
+                f"{snapshot.evaluation_rollout_count:,}"
+            ),
+            (
+                "  trimmed: "
+                f"{snapshot.evaluation_trimmed_steps:,}"
+            ),
+            (
+                "  resolved: "
+                f"{snapshot.evaluation_resolved_steps:,}"
+            ),
+            "",
+            "Resolved execution plan",
+            (
+                "  periodic checkpoint writes: "
+                f"{snapshot.periodic_checkpoint_writes:,}"
+            ),
+            (
+                "  periodic evaluations: "
+                f"{snapshot.periodic_evaluations:,}"
+            ),
+            (
+                "  total checkpoint writes: "
+                f"{snapshot.total_checkpoint_writes:,}"
+            ),
+            (
+                "  training segments: "
+                f"{snapshot.training_segment_count:,}"
+            ),
+            (
+                "  all segments batch-aligned: "
+                f"{'YES' if snapshot.all_segments_batch_aligned else 'NO'}"
+            ),
+            (
+                "  event steps: "
+                + self._event_steps_text(
+                    snapshot.schedule_event_steps
+                )
+            ),
+            "",
+        ]
+
+        self.stream.write(
+            "\n".join(lines)
+        )
+        self.stream.write("\n")
+        self.stream.flush()
 
     def start(
         self,

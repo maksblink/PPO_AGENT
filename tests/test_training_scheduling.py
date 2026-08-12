@@ -5,6 +5,7 @@ import pytest
 from train_and_eval.training.scheduling import (
     TrainingScheduleError,
     build_training_schedule,
+    resolve_periodic_interval,
 )
 
 
@@ -102,12 +103,17 @@ def test_aligns_periodic_boundaries_to_rollout_steps() -> None:
         event.run_step
         for event in schedule
     ] == [
-        10_240,
-        20_480,
-        30_720,
+        8_192,
+        16_384,
+        18_432,
+        24_576,
+        32_768,
+        36_864,
         40_960,
-        51_200,
-        61_440,
+        49_152,
+        55_296,
+        57_344,
+        65_536,
         68_608,
     ]
 
@@ -115,3 +121,66 @@ def test_aligns_periodic_boundaries_to_rollout_steps() -> None:
         event.run_step % 2_048 == 0
         for event in schedule[:-1]
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "checkpoint_steps", "eval_steps", "expected"),
+    [
+        (
+            "checkpoint_every_steps",
+            20,
+            20_000,
+            "checkpoint_every_steps=20",
+        ),
+        (
+            "eval_every_steps",
+            10_000,
+            20,
+            "eval_every_steps=20",
+        ),
+    ],
+)
+def test_rejects_cadence_shorter_than_one_rollout(
+    field: str,
+    checkpoint_steps: int,
+    eval_steps: int,
+    expected: str,
+) -> None:
+    with pytest.raises(
+        TrainingScheduleError,
+        match=expected,
+    ):
+        build_training_schedule(
+            total_steps=68_608,
+            checkpoint_every_steps=checkpoint_steps,
+            eval_every_steps=eval_steps,
+            rollout_steps=2_048,
+        )
+
+
+def test_resolves_periodic_interval_down_to_complete_rollouts() -> None:
+    resolution = resolve_periodic_interval(
+        requested_steps=10_000,
+        rollout_steps=2_048,
+        name="checkpoint_every_steps",
+    )
+
+    assert resolution.requested_steps == 10_000
+    assert resolution.rollout_steps == 2_048
+    assert resolution.rollout_count == 4
+    assert resolution.resolved_steps == 8_192
+    assert resolution.trimmed_steps == 1_808
+
+
+def test_short_periodic_interval_error_shows_floor_calculation() -> None:
+    with pytest.raises(
+        TrainingScheduleError,
+        match=(
+            r"floor\(20 / 2048\) = 0 complete rollouts"
+        ),
+    ):
+        resolve_periodic_interval(
+            requested_steps=20,
+            rollout_steps=2_048,
+            name="eval_every_steps",
+        )

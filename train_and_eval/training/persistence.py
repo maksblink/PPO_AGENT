@@ -200,6 +200,7 @@ def create_pending_run(
     loaded_config: LoadedRunConfig,
     split: ChronologicalMarketDataSplit,
     git_state: CleanGitState,
+    training_steps_requested: int,
     source_checkpoint_id: int | None = None,
 ) -> PersistedRunState:
     """Create one pending training run from verified immutable inputs."""
@@ -242,8 +243,10 @@ def create_pending_run(
             "Chronological split_index must equal train_rows."
         )
 
-    training_steps_requested = split.requested_training_steps(
-        config.training
+    resolved_training_steps_requested = _integer_value(
+        training_steps_requested,
+        name="training_steps_requested",
+        minimum=1,
     )
 
     normalized_config_json = json.loads(
@@ -353,9 +356,9 @@ def create_pending_run(
                     split.steps_per_data_epoch
                 ),
                 training_steps_requested=int(
-                    training_steps_requested
-                ),
-                training_steps_completed=0,
+                resolved_training_steps_requested
+            ),
+            training_steps_completed=0,
                 data_epochs_completed=Decimal("0"),
                 stopped_early=False,
                 early_stop_reason=None,

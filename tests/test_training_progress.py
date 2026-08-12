@@ -7,6 +7,7 @@ import pytest
 import train_and_eval.training.progress as progress_module
 from train_and_eval.training.progress import (
     LiveTrainingProgress,
+    TrainingPreflightSnapshot,
     ValidationMetricSnapshot,
 )
 
@@ -146,3 +147,90 @@ def test_live_progress_renders_completed_validation_metrics(
     assert "Run wall 00:30" in output
     assert "validation time 00:20" in output
     assert "\x1b[" in output
+
+
+def test_live_progress_renders_training_preflight() -> None:
+    stream = StringIO()
+    progress = LiveTrainingProgress(
+        stream,
+        minimum_refresh_seconds=0.0,
+    )
+
+    progress.preflight(
+        TrainingPreflightSnapshot(
+            n_steps=2_048,
+            batch_size=1_024,
+            original_steps_per_data_epoch=69_243,
+            trimmed_training_data_steps=635,
+            effective_steps_per_data_epoch=68_608,
+            duration_unit="data_epochs",
+            duration_amount=1,
+            raw_requested_steps=68_608,
+            trimmed_requested_steps=0,
+            resolved_requested_steps=68_608,
+            training_batch_count=67,
+            checkpoint_requested_steps=10_000,
+            checkpoint_rollout_count=4,
+            checkpoint_resolved_steps=8_192,
+            checkpoint_trimmed_steps=1_808,
+            evaluation_requested_steps=20_000,
+            evaluation_rollout_count=9,
+            evaluation_resolved_steps=18_432,
+            evaluation_trimmed_steps=1_568,
+            schedule_event_steps=(
+                8_192,
+                16_384,
+                18_432,
+                24_576,
+                32_768,
+                36_864,
+                40_960,
+                49_152,
+                55_296,
+                57_344,
+                65_536,
+                68_608,
+            ),
+            periodic_checkpoint_writes=11,
+            periodic_evaluations=3,
+            total_checkpoint_writes=12,
+            training_segment_count=12,
+            all_segments_batch_aligned=True,
+        )
+    )
+
+    output = stream.getvalue()
+
+    assert "PPO TRAINING RESOLUTION" in output
+    assert "69,243" in output
+    assert "69,243 % 1,024 = 635" in output
+    assert "68,608" in output
+    assert "floor(68,608 / 1,024) = 67 complete batches" in output
+    assert "floor(10,000 / 2,048) = 4" in output
+    assert "resolved: 8,192" in output
+    assert "floor(20,000 / 2,048) = 9" in output
+    assert "resolved: 18,432" in output
+    assert "periodic checkpoint writes: 11" in output
+    assert "periodic evaluations: 3" in output
+    assert "total checkpoint writes: 12" in output
+    assert "training segments: 12" in output
+    assert "all segments batch-aligned: YES" in output
+    assert "8,192" in output
+    assert "68,608" in output
+
+
+def test_long_event_schedule_is_compact_but_exactly_counted() -> None:
+    steps = tuple(
+        index * 2_048
+        for index in range(1, 31)
+    )
+
+    text = LiveTrainingProgress._event_steps_text(steps)
+
+    assert "2,048" in text
+    assert "20,480" in text
+    assert "43,008" in text
+    assert "61,440" in text
+    assert "10 events omitted" in text
+    assert "22,528" not in text
+    assert "40,960" not in text

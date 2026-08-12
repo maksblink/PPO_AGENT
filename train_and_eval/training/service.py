@@ -67,6 +67,7 @@ from train_and_eval.training.execution import (
     learn_ppo_exact_timesteps,
 )
 from train_and_eval.training.progress import (
+    TrainingPreflightSnapshot,
     TrainingProgressReporter,
     ValidationMetricSnapshot,
 )
@@ -86,6 +87,7 @@ from train_and_eval.reporting.artifacts import (
 )
 from train_and_eval.training.scheduling import (
     build_training_schedule,
+    resolve_periodic_interval,
 )
 from train_and_eval.checkpoints.persistence import (
     PersistedCheckpoint,
@@ -347,6 +349,43 @@ def _resolve_resume_source(
         )
 
 
+def _batch_aligned_training_steps(
+    *,
+    requested_steps: int,
+    batch_size: int,
+) -> tuple[int, int]:
+    if requested_steps < 1:
+        raise ValueError(
+            "requested_steps must be positive."
+        )
+
+    if batch_size < 1:
+        raise ValueError(
+            "batch_size must be positive."
+        )
+
+    trimmed_steps = (
+        requested_steps
+        % batch_size
+    )
+    resolved_steps = (
+        requested_steps
+        - trimmed_steps
+    )
+
+    if resolved_steps < 1:
+        batch_count = requested_steps // batch_size
+        raise ValueError(
+            f"Requested training duration={requested_steps}; "
+            f"floor({requested_steps} / {batch_size}) "
+            f"= {batch_count} complete batches. "
+            "At least one complete PPO batch is required. "
+            f"Minimum valid value: {batch_size} steps."
+        )
+
+    return trimmed_steps, resolved_steps
+
+
 def _batch_aligned_training_window(
     *,
     training_start_index: int,
@@ -404,6 +443,7 @@ def _load_and_split_data(
 ) -> tuple[
     pd.DataFrame,
     ChronologicalMarketDataSplit,
+    int,
 ]:
     config = loaded_config.config
     market_data = load_market_data(
@@ -425,7 +465,7 @@ def _load_and_split_data(
     )
 
     (
-        _,
+        trimmed_training_data_steps,
         aligned_training_start_index,
         aligned_steps_per_data_epoch,
     ) = _batch_aligned_training_window(
@@ -450,7 +490,11 @@ def _load_and_split_data(
         ),
     )
 
-    return market_data, split
+    return (
+        market_data,
+        split,
+        trimmed_training_data_steps,
+    )
 
 
 def _local_model_steps(
@@ -623,7 +667,11 @@ def train_ppo_run(
         manifest_path=manifest_path,
     )
     config = loaded_config.config
-    _, split = _load_and_split_data(
+    (
+        _,
+        split,
+        trimmed_training_data_steps,
+    ) = _load_and_split_data(
         loaded_config,
         data_directory=data_directory,
         manifest_path=manifest_path,
@@ -650,11 +698,155 @@ def train_ppo_run(
             "Unsupported continuation configuration."
         )
 
+    raw_requested_steps = split.requested_training_steps(
+        config.training
+    )
+    (
+        trimmed_requested_steps,
+        requested_steps,
+    ) = _batch_aligned_training_steps(
+        requested_steps=int(raw_requested_steps),
+        batch_size=int(config.ppo.batch_size),
+    )
+
+    checkpoint_resolution = resolve_periodic_interval(
+        requested_steps=int(
+            config.evaluation.checkpoint_every_steps
+        ),
+        rollout_steps=int(config.ppo.n_steps),
+        name="checkpoint_every_steps",
+    )
+    evaluation_resolution = resolve_periodic_interval(
+        requested_steps=int(
+            config.evaluation.eval_every_steps
+        ),
+        rollout_steps=int(config.ppo.n_steps),
+        name="eval_every_steps",
+    )
+
+    schedule = build_training_schedule(
+        total_steps=requested_steps,
+        checkpoint_every_steps=(
+            checkpoint_resolution.resolved_steps
+        ),
+        eval_every_steps=(
+            evaluation_resolution.resolved_steps
+        ),
+    )
+
+    schedule_event_steps = tuple(
+        int(event.run_step)
+        for event in schedule
+    )
+
+    previous_step = 0
+    segment_sizes: list[int] = []
+    for event_step in schedule_event_steps:
+        segment_sizes.append(
+            event_step - previous_step
+        )
+        previous_step = event_step
+
+    periodic_checkpoint_writes = sum(
+        1
+        for event in schedule
+        if event.checkpoint_due and not event.final
+    )
+    periodic_evaluations = sum(
+        1
+        for event in schedule
+        if event.evaluation_due and not event.final
+    )
+
+    _progress_call(
+        progress_reporter,
+        "preflight",
+        TrainingPreflightSnapshot(
+            n_steps=int(config.ppo.n_steps),
+            batch_size=int(config.ppo.batch_size),
+            original_steps_per_data_epoch=(
+                int(split.steps_per_data_epoch)
+                + int(trimmed_training_data_steps)
+            ),
+            trimmed_training_data_steps=int(
+                trimmed_training_data_steps
+            ),
+            effective_steps_per_data_epoch=int(
+                split.steps_per_data_epoch
+            ),
+            duration_unit=str(
+                config.training.duration_unit
+            ),
+            duration_amount=int(
+                config.training.duration_amount
+            ),
+            raw_requested_steps=int(
+                raw_requested_steps
+            ),
+            trimmed_requested_steps=int(
+                trimmed_requested_steps
+            ),
+            resolved_requested_steps=int(
+                requested_steps
+            ),
+            training_batch_count=(
+                int(requested_steps)
+                // int(config.ppo.batch_size)
+            ),
+            checkpoint_requested_steps=(
+                checkpoint_resolution.requested_steps
+            ),
+            checkpoint_rollout_count=(
+                checkpoint_resolution.rollout_count
+            ),
+            checkpoint_resolved_steps=(
+                checkpoint_resolution.resolved_steps
+            ),
+            checkpoint_trimmed_steps=(
+                checkpoint_resolution.trimmed_steps
+            ),
+            evaluation_requested_steps=(
+                evaluation_resolution.requested_steps
+            ),
+            evaluation_rollout_count=(
+                evaluation_resolution.rollout_count
+            ),
+            evaluation_resolved_steps=(
+                evaluation_resolution.resolved_steps
+            ),
+            evaluation_trimmed_steps=(
+                evaluation_resolution.trimmed_steps
+            ),
+            schedule_event_steps=(
+                schedule_event_steps
+            ),
+            periodic_checkpoint_writes=(
+                periodic_checkpoint_writes
+            ),
+            periodic_evaluations=(
+                periodic_evaluations
+            ),
+            total_checkpoint_writes=(
+                periodic_checkpoint_writes + 1
+            ),
+            training_segment_count=len(
+                segment_sizes
+            ),
+            all_segments_batch_aligned=all(
+                segment_size
+                % int(config.ppo.batch_size)
+                == 0
+                for segment_size in segment_sizes
+            ),
+        ),
+    )
+
     pending = create_pending_run(
         session_factory,
         loaded_config=loaded_config,
         split=split,
         git_state=git_state,
+        training_steps_requested=requested_steps,
         source_checkpoint_id=(
             None
             if resume_source is None
@@ -662,23 +854,6 @@ def train_ppo_run(
         ),
     )
     run_id = pending.run_id
-    requested_steps = int(
-        pending.training_steps_requested
-    )
-    schedule = build_training_schedule(
-        total_steps=requested_steps,
-        checkpoint_every_steps=int(
-            config.evaluation
-            .checkpoint_every_steps
-        ),
-        eval_every_steps=int(
-            config.evaluation
-            .eval_every_steps
-        ),
-        rollout_steps=int(
-            config.ppo.n_steps
-        ),
-    )
 
     model: Any | None = None
     model_steps_before: int | None = None

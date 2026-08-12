@@ -1,6 +1,6 @@
 config_schema_version: 1
 run:
-  name: nq1h_baseline_v1_seed1_valuehead003_aligned
+  name: nq1h_search_v1_baseline_seed1
   seed: 1
 continuation:
   mode: fresh

@@ -48,6 +48,7 @@ def build_training_schedule(
     total_steps: int,
     checkpoint_every_steps: int,
     eval_every_steps: int,
+    rollout_steps: int | None = None,
 ) -> tuple[TrainingEvent, ...]:
     """
     Build exact periodic checkpoint and validation-evaluation boundaries.
@@ -69,6 +70,32 @@ def build_training_schedule(
         eval_every_steps,
         name="eval_every_steps",
     )
+
+    if rollout_steps is not None:
+        resolved_rollout_steps = _positive_integer(
+            rollout_steps,
+            name="rollout_steps",
+        )
+
+        def align_interval(interval: int) -> int:
+            rollout_count = max(
+                1,
+                round(
+                    interval
+                    / resolved_rollout_steps
+                ),
+            )
+            return (
+                rollout_count
+                * resolved_rollout_steps
+            )
+
+        resolved_checkpoint_interval = align_interval(
+            resolved_checkpoint_interval
+        )
+        resolved_eval_interval = align_interval(
+            resolved_eval_interval
+        )
 
     checkpoint_steps = set(
         range(

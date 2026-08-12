@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 import warnings
@@ -347,6 +347,55 @@ def _resolve_resume_source(
         )
 
 
+def _batch_aligned_training_window(
+    *,
+    training_start_index: int,
+    steps_per_data_epoch: int,
+    batch_size: int,
+) -> tuple[int, int, int]:
+    if training_start_index < 0:
+        raise ValueError(
+            "training_start_index cannot be negative."
+        )
+
+    if steps_per_data_epoch < 1:
+        raise ValueError(
+            "steps_per_data_epoch must be positive."
+        )
+
+    if batch_size < 1:
+        raise ValueError(
+            "batch_size must be positive."
+        )
+
+    trim_from_start = (
+        steps_per_data_epoch
+        % batch_size
+    )
+
+    aligned_start_index = (
+        training_start_index
+        + trim_from_start
+    )
+
+    aligned_steps_per_epoch = (
+        steps_per_data_epoch
+        - trim_from_start
+    )
+
+    if aligned_steps_per_epoch < 1:
+        raise ValueError(
+            "Training data is too short for one "
+            "complete PPO batch."
+        )
+
+    return (
+        trim_from_start,
+        aligned_start_index,
+        aligned_steps_per_epoch,
+    )
+
+
 def _load_and_split_data(
     loaded_config: LoadedRunConfig,
     *,
@@ -372,6 +421,32 @@ def _load_and_split_data(
         ),
         context=str(
             config.environment.context
+        ),
+    )
+
+    (
+        _,
+        aligned_training_start_index,
+        aligned_steps_per_data_epoch,
+    ) = _batch_aligned_training_window(
+        training_start_index=(
+            split.training_start_index
+        ),
+        steps_per_data_epoch=(
+            split.steps_per_data_epoch
+        ),
+        batch_size=int(
+            config.ppo.batch_size
+        ),
+    )
+
+    split = replace(
+        split,
+        training_start_index=(
+            aligned_training_start_index
+        ),
+        steps_per_data_epoch=(
+            aligned_steps_per_data_epoch
         ),
     )
 
@@ -599,6 +674,9 @@ def train_ppo_run(
         eval_every_steps=int(
             config.evaluation
             .eval_every_steps
+        ),
+        rollout_steps=int(
+            config.ppo.n_steps
         ),
     )
 

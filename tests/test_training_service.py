@@ -66,6 +66,8 @@ def _loaded_config(
     )
     raw["run"]["seed"] = 123
     raw["ppo"]["device"] = "cpu"
+    raw["ppo"]["n_steps"] = 2
+    raw["ppo"]["batch_size"] = 2
     raw["training"]["duration_unit"] = (
         "timesteps"
     )
@@ -1937,3 +1939,32 @@ def test_live_progress_uses_configured_step_cadence(
         25_000,
     ]
     assert evaluation_intervals == [2_000]
+
+
+def test_aligns_training_window_to_batch_size_from_start() -> None:
+    trim, start_index, steps_per_epoch = (
+        service._batch_aligned_training_window(
+            training_start_index=6_144,
+            steps_per_data_epoch=69_243,
+            batch_size=1_024,
+        )
+    )
+
+    assert trim == 635
+    assert start_index == 6_779
+    assert steps_per_epoch == 68_608
+    assert steps_per_epoch % 1_024 == 0
+
+
+def test_batch_aligned_training_window_is_noop_when_already_aligned() -> None:
+    trim, start_index, steps_per_epoch = (
+        service._batch_aligned_training_window(
+            training_start_index=6_144,
+            steps_per_data_epoch=68_608,
+            batch_size=1_024,
+        )
+    )
+
+    assert trim == 0
+    assert start_index == 6_144
+    assert steps_per_epoch == 68_608

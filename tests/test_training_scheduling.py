@@ -88,3 +88,30 @@ def test_rejects_nonpositive_schedule_values(
         build_training_schedule(
             **arguments
         )
+
+
+def test_aligns_periodic_boundaries_to_rollout_steps() -> None:
+    schedule = build_training_schedule(
+        total_steps=68_608,
+        checkpoint_every_steps=10_000,
+        eval_every_steps=20_000,
+        rollout_steps=2_048,
+    )
+
+    assert [
+        event.run_step
+        for event in schedule
+    ] == [
+        10_240,
+        20_480,
+        30_720,
+        40_960,
+        51_200,
+        61_440,
+        68_608,
+    ]
+
+    assert all(
+        event.run_step % 2_048 == 0
+        for event in schedule[:-1]
+    )

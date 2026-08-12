@@ -1,6 +1,6 @@
 config_schema_version: 1
 run:
-  name: nq1h_search_v1_baseline_seed1
+  name: nq1h_search_v2_baseline_seed1
   seed: 1
 continuation:
   mode: fresh
@@ -57,7 +57,7 @@ ppo:
 evaluation:
   device: cpu
   eval_every_steps: 20000
-  checkpoint_every_steps: 10000
+  checkpoint_every_steps: 20000
   policy_mode: deterministic_argmax
   threshold_action: null
   probability_threshold: null

@@ -224,6 +224,28 @@ def print_queue(configs: list[ConfigMeta], start_at: int) -> None:
     print()
 
 
+def should_echo_training_line(line: str) -> bool:
+    """Hide raw SB3 logger tables while preserving our normal training UI."""
+    stripped = line.strip()
+
+    # Stable-Baselines3 logger rows:
+    #
+    # | time/              |          |
+    # |    fps             | 1500     |
+    # | train/             |          |
+    # |    approx_kl       | ...      |
+    #
+    if stripped.startswith("|") and stripped.endswith("|"):
+        return False
+
+    # SB3 table separators such as:
+    # -----------------------------------------
+    if stripped and set(stripped) == {"-"}:
+        return False
+
+    return True
+
+
 def parse_output_line(result: RunResult, line: str) -> None:
     match = RUN_RE.search(line)
 
@@ -342,8 +364,15 @@ def run_config(
 
     try:
         for line in process.stdout:
-            print(line, end="", flush=True)
+            # Always parse the complete child-process output so the final
+            # summary still has all available metrics.
             parse_output_line(result, line)
+
+            # But keep the terminal clean: show our regular preflight,
+            # progress bars, validation output and completion summary while
+            # suppressing raw Stable-Baselines3 logger tables.
+            if should_echo_training_line(line):
+                print(line, end="", flush=True)
 
         return_code = process.wait()
 

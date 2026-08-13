@@ -1,6 +1,6 @@
 config_schema_version: 1
 run:
-  name: nq1h_search_v2_nepochs3_seed1
+  name: nq1h_search_v1_nepochs2_lr3e4_seed1
   seed: 1
 continuation:
   mode: fresh
@@ -43,7 +43,7 @@ ppo:
   value_head_init_scale: 0.003
   n_steps: 2048
   batch_size: 1024
-  n_epochs: 3
+  n_epochs: 2
   learning_rate: 0.0003
   gamma: 0.9
   gae_lambda: 0.95

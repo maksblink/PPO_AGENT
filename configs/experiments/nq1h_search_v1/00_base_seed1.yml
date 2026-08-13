@@ -1,7 +1,7 @@
 config_schema_version: 1
 run:
-  name: nq1h_search_v2_nepochs2_seed3
-  seed: 3
+  name: nq1h_search_v1_base_seed1
+  seed: 1
 continuation:
   mode: fresh
 data:

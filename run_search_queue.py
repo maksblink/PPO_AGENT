@@ -53,6 +53,13 @@ CONFIGS = [
     # GAE=.85 winner confirmation on additional seeds
     "configs/experiments/nq1h_search_v1/23_nepochs3_lr2p25e4_gamma090_gae085_seed2.yml",
     "configs/experiments/nq1h_search_v1/24_nepochs3_lr2p25e4_gamma090_gae085_seed3.yml",
+
+    # Entropy coefficient screening
+    # n_epochs=3, LR=2.25e-4, gamma=.90, GAE=.85, seed=1
+    "configs/experiments/nq1h_search_v1/25_nepochs3_lr2p25e4_gamma090_gae085_ent0_seed1.yml",
+    "configs/experiments/nq1h_search_v1/26_nepochs3_lr2p25e4_gamma090_gae085_ent1e4_seed1.yml",
+    "configs/experiments/nq1h_search_v1/27_nepochs3_lr2p25e4_gamma090_gae085_ent5e4_seed1.yml",
+    "configs/experiments/nq1h_search_v1/28_nepochs3_lr2p25e4_gamma090_gae085_ent1e3_seed1.yml",
 ]
 
 

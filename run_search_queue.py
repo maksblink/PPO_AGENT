@@ -417,6 +417,16 @@ def format_float(
     return f"{value:.{digits}f}"
 
 
+def format_scientific(
+    value: float | None,
+    digits: int = 3,
+) -> str:
+    if value is None:
+        return "-"
+
+    return f"{value:.{digits}e}"
+
+
 def format_percent(value: float | None) -> str:
     if value is None:
         return "-"
@@ -704,7 +714,7 @@ def print_summary(results: list[RunResult]) -> None:
             f"{format_percent(result.exposure):>9} "
             f"{str(result.round_trips if result.round_trips is not None else '-'):>7} "
             f"{format_float(result.best_score, 5):>10} "
-            f"{format_float(result.approx_kl, 3):>10} "
+            f"{format_scientific(result.approx_kl, 3):>10} "
             f"{format_float(result.clip_fraction, 4):>8} "
             f"{format_seconds(result.wall_seconds):>6} "
             f"{result.status:>12}"

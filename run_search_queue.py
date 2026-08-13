@@ -37,6 +37,12 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/12_nepochs2_lr2p5e4_seed3.yml",
     "configs/experiments/nq1h_search_v1/13_nepochs3_lr2p25e4_seed2.yml",
     "configs/experiments/nq1h_search_v1/14_nepochs3_lr2p25e4_seed3.yml",
+
+    # Gamma screening — n_epochs=3, LR=2.25e-4, seed=1
+    "configs/experiments/nq1h_search_v1/15_nepochs3_lr2p25e4_gamma085_seed1.yml",
+    "configs/experiments/nq1h_search_v1/16_nepochs3_lr2p25e4_gamma095_seed1.yml",
+    "configs/experiments/nq1h_search_v1/17_nepochs3_lr2p25e4_gamma097_seed1.yml",
+    "configs/experiments/nq1h_search_v1/18_nepochs3_lr2p25e4_gamma099_seed1.yml",
 ]
 
 

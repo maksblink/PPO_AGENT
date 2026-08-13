@@ -31,6 +31,12 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/08_nepochs3_lr2p75e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/09_nepochs3_lr3e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/10_nepochs3_lr4e4_seed1.yml",
+
+    # Winner confirmation on additional seeds
+    "configs/experiments/nq1h_search_v1/11_nepochs2_lr2p5e4_seed2.yml",
+    "configs/experiments/nq1h_search_v1/12_nepochs2_lr2p5e4_seed3.yml",
+    "configs/experiments/nq1h_search_v1/13_nepochs3_lr2p25e4_seed2.yml",
+    "configs/experiments/nq1h_search_v1/14_nepochs3_lr2p25e4_seed3.yml",
 ]
 
 
@@ -428,6 +434,228 @@ def format_seconds(value: float | None) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+
+DB_NULL = "__NULL__"
+
+
+def _db_float(value: str) -> float | None:
+    if value == DB_NULL:
+        return None
+    return float(value)
+
+
+def _db_int(value: str) -> int | None:
+    if value == DB_NULL:
+        return None
+    return int(value)
+
+
+def load_results_from_database(
+    configs: list[ConfigMeta],
+) -> list[RunResult]:
+    """
+    Load search results from PostgreSQL.
+
+    PostgreSQL is the source of truth for the final summary.
+    Terminal output is presentation only.
+    """
+
+    sql = """
+SELECT
+    r.id,
+    r.name,
+    r.status,
+    EXTRACT(EPOCH FROM (r.finished_at - r.started_at)),
+
+    final_eval.balanced_score,
+    final_eval.agent_return,
+    final_eval.agent_max_drawdown,
+    final_eval.profit_factor,
+    final_eval.win_rate,
+    final_eval.market_exposure,
+    final_eval.round_trips,
+    final_eval.always_long_return,
+
+    best_eval.best_score,
+
+    latest_tm.approx_kl,
+    latest_tm.clip_fraction,
+    latest_tm.entropy_loss,
+    latest_tm.explained_variance
+
+FROM runs AS r
+
+LEFT JOIN LATERAL (
+    SELECT
+        e.balanced_score,
+        e.agent_return,
+        e.agent_max_drawdown,
+        e.profit_factor,
+        e.win_rate,
+        e.market_exposure,
+        e.round_trips,
+        e.always_long_return
+    FROM evaluations AS e
+    JOIN checkpoints AS c
+        ON c.id = e.checkpoint_id
+    WHERE
+        c.run_id = r.id
+        AND e.status = 'completed'
+        AND e.trigger = 'final'
+    ORDER BY e.id DESC
+    LIMIT 1
+) AS final_eval ON TRUE
+
+LEFT JOIN LATERAL (
+    SELECT
+        MAX(e.balanced_score) AS best_score
+    FROM evaluations AS e
+    JOIN checkpoints AS c
+        ON c.id = e.checkpoint_id
+    WHERE
+        c.run_id = r.id
+        AND e.status = 'completed'
+) AS best_eval ON TRUE
+
+LEFT JOIN LATERAL (
+    SELECT
+        tm.approx_kl,
+        tm.clip_fraction,
+        tm.entropy_loss,
+        tm.explained_variance
+    FROM training_metrics AS tm
+    WHERE tm.run_id = r.id
+    ORDER BY
+        tm.run_step DESC,
+        tm.id DESC
+    LIMIT 1
+) AS latest_tm ON TRUE
+
+ORDER BY r.id;
+"""
+
+    command = [
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "postgres",
+        "psql",
+        "-U",
+        "ppo_agent",
+        "-d",
+        "ppo_agent",
+        "-A",
+        "-t",
+        "-F",
+        "\t",
+        "-P",
+        f"null={DB_NULL}",
+        "-c",
+        sql,
+    ]
+
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Could not load search results from PostgreSQL:\n"
+            + completed.stderr
+        )
+
+    config_by_name = {
+        config.name: (index, config)
+        for index, config in enumerate(configs, start=1)
+    }
+
+    result_by_name: dict[str, RunResult] = {}
+
+    for raw_line in completed.stdout.splitlines():
+        if not raw_line.strip():
+            continue
+
+        fields = raw_line.split("\t")
+
+        if len(fields) != 17:
+            raise RuntimeError(
+                "Unexpected PostgreSQL result shape: "
+                f"expected 17 fields, got {len(fields)}\n"
+                f"{raw_line}"
+            )
+
+        (
+            run_id,
+            run_name,
+            status,
+            wall_seconds,
+            balanced_score,
+            agent_return,
+            max_drawdown,
+            profit_factor,
+            win_rate,
+            exposure,
+            round_trips,
+            always_long,
+            best_score,
+            approx_kl,
+            clip_fraction,
+            entropy_loss,
+            explained_variance,
+        ) = fields
+
+        config_entry = config_by_name.get(run_name)
+
+        # Ignore database runs that are not part of this queue.
+        if config_entry is None:
+            continue
+
+        queue_index, config = config_entry
+
+        result_by_name[run_name] = RunResult(
+            queue_index=queue_index,
+            config=config,
+            status=status.upper(),
+            run_id=int(run_id),
+            run_name=run_name,
+            balanced_score=_db_float(balanced_score),
+            agent_return=_db_float(agent_return),
+            max_drawdown=_db_float(max_drawdown),
+            profit_factor=_db_float(profit_factor),
+            win_rate=_db_float(win_rate),
+            exposure=_db_float(exposure),
+            round_trips=_db_int(round_trips),
+            always_long=_db_float(always_long),
+            best_score=_db_float(best_score),
+            approx_kl=_db_float(approx_kl),
+            clip_fraction=_db_float(clip_fraction),
+            entropy_loss=_db_float(entropy_loss),
+            explained_variance=_db_float(explained_variance),
+            wall_seconds=_db_float(wall_seconds),
+        )
+
+    results: list[RunResult] = []
+
+    for queue_index, config in enumerate(configs, start=1):
+        result = result_by_name.get(config.name)
+
+        if result is None:
+            result = RunResult(
+                queue_index=queue_index,
+                config=config,
+                status="NOT_FOUND",
+            )
+
+        results.append(result)
+
+    return results
+
+
 def print_summary(results: list[RunResult]) -> None:
     if not results:
         print()
@@ -583,6 +811,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help=(
+            "Read existing queue results from PostgreSQL and "
+            "print the final summary without starting training."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -598,6 +835,11 @@ def main() -> int:
         raise SystemExit(
             f"--start-at must be between 1 and {len(configs)}"
         )
+
+    if args.summary_only:
+        database_results = load_results_from_database(configs)
+        print_summary(database_results)
+        return 0
 
     print_queue(configs, args.start_at)
 
@@ -633,7 +875,19 @@ def main() -> int:
         print("Queue interrupted.")
 
     finally:
-        print_summary(results)
+        try:
+            database_results = load_results_from_database(configs)
+        except Exception as exc:
+            print()
+            print(
+                "WARNING: could not build summary from PostgreSQL:"
+            )
+            print(exc)
+            print()
+            print("Falling back to in-process parsed results.")
+            print_summary(results)
+        else:
+            print_summary(database_results)
 
     failed = any(
         result.status != "COMPLETED"

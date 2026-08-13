@@ -192,7 +192,7 @@ def test_calculates_mixed_trade_metrics() -> None:
         0.01
     )
     assert metrics.balanced_score == pytest.approx(
-        0.03
+        0.0
     )
 
     assert metrics.net_exposure == pytest.approx(

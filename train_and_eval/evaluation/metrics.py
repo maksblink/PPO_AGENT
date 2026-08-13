@@ -945,8 +945,8 @@ def calculate_evaluation_metrics(
     )
 
     balanced_score = (
-        agent_vs_always_long_return
-        + drawdown_improvement
+        agent_return
+        + agent_max_drawdown
     )
 
     long_exposure = float(

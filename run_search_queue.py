@@ -76,6 +76,12 @@ CONFIGS = [
     # Active-policy exposure penalty confirmation
     "configs/experiments/nq1h_search_v1/36_nepochs3_lr2p25e4_gamma090_gae085_exp1p5em5_seed2.yml",
     "configs/experiments/nq1h_search_v1/37_nepochs3_lr2p25e4_gamma090_gae085_exp1p5em5_seed3.yml",
+
+    # Exposure-penalty x seed behavior map
+    "configs/experiments/nq1h_search_v1/38_nepochs3_lr2p25e4_gamma090_gae085_exp1p25em5_seed2.yml",
+    "configs/experiments/nq1h_search_v1/39_nepochs3_lr2p25e4_gamma090_gae085_exp1p25em5_seed3.yml",
+    "configs/experiments/nq1h_search_v1/40_nepochs3_lr2p25e4_gamma090_gae085_exp1p75em5_seed2.yml",
+    "configs/experiments/nq1h_search_v1/41_nepochs3_lr2p25e4_gamma090_gae085_exp1p75em5_seed3.yml",
 ]
 
 

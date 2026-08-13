@@ -49,6 +49,10 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/20_nepochs3_lr2p25e4_gamma090_gae090_seed1.yml",
     "configs/experiments/nq1h_search_v1/21_nepochs3_lr2p25e4_gamma090_gae098_seed1.yml",
     "configs/experiments/nq1h_search_v1/22_nepochs3_lr2p25e4_gamma090_gae100_seed1.yml",
+
+    # GAE=.85 winner confirmation on additional seeds
+    "configs/experiments/nq1h_search_v1/23_nepochs3_lr2p25e4_gamma090_gae085_seed2.yml",
+    "configs/experiments/nq1h_search_v1/24_nepochs3_lr2p25e4_gamma090_gae085_seed3.yml",
 ]
 
 

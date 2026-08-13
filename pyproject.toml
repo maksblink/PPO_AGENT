@@ -21,6 +21,8 @@ dependencies = [
     "alembic>=1.15,<2",
     "python-dotenv>=1.0,<2",
     "matplotlib>=3.9,<4",
+    "streamlit>=1.49,<2",
+    "plotly>=6,<7",
 ]
 
 [project.optional-dependencies]

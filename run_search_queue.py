@@ -60,6 +60,13 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/26_nepochs3_lr2p25e4_gamma090_gae085_ent1e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/27_nepochs3_lr2p25e4_gamma090_gae085_ent5e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/28_nepochs3_lr2p25e4_gamma090_gae085_ent1e3_seed1.yml",
+
+    # Exposure penalty screening
+    # n_epochs=3, LR=2.25e-4, gamma=.90, GAE=.85, ent=2e-4, seed=1
+    "configs/experiments/nq1h_search_v1/29_nepochs3_lr2p25e4_gamma090_gae085_exp2p5em6_seed1.yml",
+    "configs/experiments/nq1h_search_v1/30_nepochs3_lr2p25e4_gamma090_gae085_exp5em6_seed1.yml",
+    "configs/experiments/nq1h_search_v1/31_nepochs3_lr2p25e4_gamma090_gae085_exp1em5_seed1.yml",
+    "configs/experiments/nq1h_search_v1/32_nepochs3_lr2p25e4_gamma090_gae085_exp2em5_seed1.yml",
 ]
 
 
@@ -110,6 +117,7 @@ class ConfigMeta:
     gamma: float
     gae_lambda: float
     ent_coef: float
+    exposure_penalty: float
 
 
 @dataclass
@@ -216,6 +224,14 @@ def read_config_meta(relative_path: str) -> ConfigMeta:
         )
     )
 
+    exposure_penalty = float(
+        find_single(
+            text,
+            rf"^\s*exposure_penalty:\s*({NUMBER})\s*$",
+            "exposure_penalty",
+        )
+    )
+
     return ConfigMeta(
         path=path,
         name=name,
@@ -225,6 +241,7 @@ def read_config_meta(relative_path: str) -> ConfigMeta:
         gamma=gamma,
         gae_lambda=gae_lambda,
         ent_coef=ent_coef,
+        exposure_penalty=exposure_penalty,
     )
 
 
@@ -405,6 +422,7 @@ def run_config(
         f" | gamma={config.gamma}"
         f" | gae={config.gae_lambda}"
         f" | ent={config.ent_coef}"
+        f" | exp_pen={config.exposure_penalty}"
         f" | seed={config.seed}"
     )
     print(f"CONFIG: {config.path.relative_to(ROOT)}")
@@ -742,6 +760,7 @@ def print_summary(results: list[RunResult]) -> None:
         f"{'gamma':>6} "
         f"{'GAE':>6} "
         f"{'ent':>9} "
+        f"{'exp_pen':>9} "
         f"{'score':>10} "
         f"{'return':>9} "
         f"{'maxDD':>9} "
@@ -768,6 +787,7 @@ def print_summary(results: list[RunResult]) -> None:
             f"{result.config.gamma:>6.3f} "
             f"{result.config.gae_lambda:>6.3f} "
             f"{result.config.ent_coef:>9.2e} "
+            f"{result.config.exposure_penalty:>9.2e} "
             f"{format_float(result.balanced_score, 5):>10} "
             f"{format_percent(result.agent_return):>9} "
             f"{format_percent(result.max_drawdown):>9} "
@@ -816,6 +836,7 @@ def print_summary(results: list[RunResult]) -> None:
                 f"gamma={result.config.gamma:.3f} | "
                 f"gae={result.config.gae_lambda:.3f} | "
                 f"ent={result.config.ent_coef:.2e} | "
+                f"exp_pen={result.config.exposure_penalty:.2e} | "
                 f"run=#{result.run_id} | "
                 f"{result.config.name}"
             )
@@ -832,6 +853,9 @@ def print_summary(results: list[RunResult]) -> None:
         print(f"gamma:           {winner.config.gamma}")
         print(f"gae_lambda:      {winner.config.gae_lambda}")
         print(f"ent_coef:        {winner.config.ent_coef}")
+        print(
+            f"exposure_penalty:{winner.config.exposure_penalty:>12.6g}"
+        )
         print(f"seed:            {winner.config.seed}")
         print(
             f"balanced_score:  "

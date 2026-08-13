@@ -67,6 +67,11 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/30_nepochs3_lr2p25e4_gamma090_gae085_exp5em6_seed1.yml",
     "configs/experiments/nq1h_search_v1/31_nepochs3_lr2p25e4_gamma090_gae085_exp1em5_seed1.yml",
     "configs/experiments/nq1h_search_v1/32_nepochs3_lr2p25e4_gamma090_gae085_exp2em5_seed1.yml",
+
+    # Exposure penalty refinement for active-policy regime
+    "configs/experiments/nq1h_search_v1/33_nepochs3_lr2p25e4_gamma090_gae085_exp1p25em5_seed1.yml",
+    "configs/experiments/nq1h_search_v1/34_nepochs3_lr2p25e4_gamma090_gae085_exp1p5em5_seed1.yml",
+    "configs/experiments/nq1h_search_v1/35_nepochs3_lr2p25e4_gamma090_gae085_exp1p75em5_seed1.yml",
 ]
 
 

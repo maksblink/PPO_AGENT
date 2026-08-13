@@ -43,6 +43,12 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/16_nepochs3_lr2p25e4_gamma095_seed1.yml",
     "configs/experiments/nq1h_search_v1/17_nepochs3_lr2p25e4_gamma097_seed1.yml",
     "configs/experiments/nq1h_search_v1/18_nepochs3_lr2p25e4_gamma099_seed1.yml",
+
+    # GAE lambda screening — n_epochs=3, LR=2.25e-4, gamma=.90, seed=1
+    "configs/experiments/nq1h_search_v1/19_nepochs3_lr2p25e4_gamma090_gae085_seed1.yml",
+    "configs/experiments/nq1h_search_v1/20_nepochs3_lr2p25e4_gamma090_gae090_seed1.yml",
+    "configs/experiments/nq1h_search_v1/21_nepochs3_lr2p25e4_gamma090_gae098_seed1.yml",
+    "configs/experiments/nq1h_search_v1/22_nepochs3_lr2p25e4_gamma090_gae100_seed1.yml",
 ]
 
 
@@ -90,6 +96,9 @@ class ConfigMeta:
     seed: int
     n_epochs: int
     learning_rate: float
+    gamma: float
+    gae_lambda: float
+    ent_coef: float
 
 
 @dataclass
@@ -172,12 +181,39 @@ def read_config_meta(relative_path: str) -> ConfigMeta:
         )
     )
 
+    gamma = float(
+        find_single(
+            text,
+            rf"^\s*gamma:\s*({NUMBER})\s*$",
+            "gamma",
+        )
+    )
+
+    gae_lambda = float(
+        find_single(
+            text,
+            rf"^\s*gae_lambda:\s*({NUMBER})\s*$",
+            "gae_lambda",
+        )
+    )
+
+    ent_coef = float(
+        find_single(
+            text,
+            rf"^\s*ent_coef:\s*({NUMBER})\s*$",
+            "ent_coef",
+        )
+    )
+
     return ConfigMeta(
         path=path,
         name=name,
         seed=seed,
         n_epochs=n_epochs,
         learning_rate=learning_rate,
+        gamma=gamma,
+        gae_lambda=gae_lambda,
+        ent_coef=ent_coef,
     )
 
 
@@ -355,6 +391,9 @@ def run_config(
         f"QUEUE {queue_index}/{len(CONFIGS)}"
         f" | n_epochs={config.n_epochs}"
         f" | lr={config.learning_rate}"
+        f" | gamma={config.gamma}"
+        f" | gae={config.gae_lambda}"
+        f" | ent={config.ent_coef}"
         f" | seed={config.seed}"
     )
     print(f"CONFIG: {config.path.relative_to(ROOT)}")
@@ -689,6 +728,9 @@ def print_summary(results: list[RunResult]) -> None:
         f"{'run':>4} "
         f"{'ep':>3} "
         f"{'LR':>9} "
+        f"{'gamma':>6} "
+        f"{'GAE':>6} "
+        f"{'ent':>9} "
         f"{'score':>10} "
         f"{'return':>9} "
         f"{'maxDD':>9} "
@@ -712,6 +754,9 @@ def print_summary(results: list[RunResult]) -> None:
             f"{str(result.run_id or '-'):>4} "
             f"{result.config.n_epochs:>3} "
             f"{result.config.learning_rate:>9.6f} "
+            f"{result.config.gamma:>6.3f} "
+            f"{result.config.gae_lambda:>6.3f} "
+            f"{result.config.ent_coef:>9.2e} "
             f"{format_float(result.balanced_score, 5):>10} "
             f"{format_percent(result.agent_return):>9} "
             f"{format_percent(result.max_drawdown):>9} "
@@ -757,6 +802,9 @@ def print_summary(results: list[RunResult]) -> None:
                 f"PF={format_float(result.profit_factor, 3)} | "
                 f"epochs={result.config.n_epochs} | "
                 f"lr={result.config.learning_rate:.8f} | "
+                f"gamma={result.config.gamma:.3f} | "
+                f"gae={result.config.gae_lambda:.3f} | "
+                f"ent={result.config.ent_coef:.2e} | "
                 f"run=#{result.run_id} | "
                 f"{result.config.name}"
             )
@@ -770,6 +818,9 @@ def print_summary(results: list[RunResult]) -> None:
         print(f"Name:            {winner.config.name}")
         print(f"n_epochs:        {winner.config.n_epochs}")
         print(f"learning_rate:   {winner.config.learning_rate}")
+        print(f"gamma:           {winner.config.gamma}")
+        print(f"gae_lambda:      {winner.config.gae_lambda}")
+        print(f"ent_coef:        {winner.config.ent_coef}")
         print(f"seed:            {winner.config.seed}")
         print(
             f"balanced_score:  "

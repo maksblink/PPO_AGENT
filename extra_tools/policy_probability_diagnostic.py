@@ -439,101 +439,6 @@ def plot_overlay_histogram(
     plt.close(figure)
 
 
-def plot_individual_histogram(
-    probability_frame: pd.DataFrame,
-    source: SourceRun,
-    *,
-    bins: int,
-    output_path: Path,
-    dpi: int,
-) -> None:
-    values = probability_frame.loc[
-        probability_frame["run_id"]
-        == source.run_id,
-        "p_long",
-    ].to_numpy(dtype=float)
-
-    figure, axis = plt.subplots(
-        figsize=(10, 6)
-    )
-
-    axis.hist(
-        values,
-        bins=np.linspace(
-            0.0,
-            1.0,
-            bins + 1,
-        ),
-        density=True,
-    )
-
-    axis.axvline(
-        0.50,
-        linestyle="--",
-        linewidth=1.2,
-        label="Argmax boundary (0.50)",
-    )
-
-    mean_value = float(
-        np.mean(values)
-    )
-    median_value = float(
-        np.median(values)
-    )
-
-    axis.axvline(
-        mean_value,
-        linestyle=":",
-        linewidth=1.2,
-        label=(
-            f"Mean = {mean_value:.3f}"
-        ),
-    )
-
-    axis.axvline(
-        median_value,
-        linestyle="-.",
-        linewidth=1.2,
-        label=(
-            f"Median = {median_value:.3f}"
-        ),
-    )
-
-    axis.set_xlim(
-        0.0,
-        1.0,
-    )
-
-    axis.set_xlabel(
-        "P(LONG)"
-    )
-    axis.set_ylabel(
-        "Probability density"
-    )
-
-    axis.set_title(
-        f"Run #{source.run_id} / seed {source.seed}\n"
-        "PPO policy P(LONG) distribution"
-    )
-
-    axis.grid(
-        True,
-        alpha=0.25,
-    )
-
-    axis.legend()
-
-    figure.tight_layout()
-
-    figure.savefig(
-        output_path,
-        dpi=dpi,
-        bbox_inches="tight",
-    )
-
-    plt.close(figure)
-
-
 def plot_confidence_curve(
     probability_frame: pd.DataFrame,
     sources: list[SourceRun],
@@ -684,8 +589,8 @@ def print_summary(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Inspect P(LONG) probability distributions "
-            "for existing PPO final checkpoints."
+            "Compare P(LONG) probability distributions "
+            "across existing PPO final checkpoints."
         )
     )
 
@@ -760,6 +665,12 @@ def main() -> None:
     run_ids = parse_int_list(
         args.runs
     )
+
+    if len(run_ids) < 2:
+        raise SystemExit(
+            "Cross-run policy probability diagnostic "
+            "requires at least two runs."
+        )
 
     engine = create_database_engine()
 
@@ -872,28 +783,6 @@ def main() -> None:
         dpi=args.dpi,
     )
 
-    individual_paths: list[Path] = []
-
-    for source in sources:
-        path = (
-            output_directory
-            / (
-                "p_long_histogram_"
-                f"run{source.run_id}_"
-                f"seed{source.seed}.png"
-            )
-        )
-
-        plot_individual_histogram(
-            probability_frame,
-            source,
-            bins=args.bins,
-            output_path=path,
-            dpi=args.dpi,
-        )
-
-        individual_paths.append(path)
-
     confidence_curve_path = (
         output_directory
         / "p_long_confidence_curve.png"
@@ -914,10 +803,6 @@ def main() -> None:
     print(probabilities_path)
     print(summary_path)
     print(overlay_path)
-
-    for path in individual_paths:
-        print(path)
-
     print(confidence_curve_path)
 
 

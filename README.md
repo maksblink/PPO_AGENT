@@ -1201,10 +1201,16 @@ Typical outputs:
 policy_probabilities.csv
 probability_summary.csv
 p_long_histogram_overlay.png
-p_long_histogram_run34_seed1.png
-p_long_histogram_run36_seed2.png
-p_long_histogram_run37_seed3.png
 p_long_confidence_curve.png
+```
+
+This tool is intentionally **cross-run only**. It compares an explicitly selected set of runs.
+
+Single-run policy probability plots are generated automatically by the normal evaluation/reporting pipeline:
+
+```text
+policy_p_long_distribution.png
+policy_p_long_confidence_curve.png
 ```
 
 Useful for comparing seed behavior, saturation, and policy polarization.

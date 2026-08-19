@@ -13,6 +13,7 @@ from train_and_eval.evaluation.metrics import EvaluationMetrics
 from train_and_eval.evaluation.service import replay_run_validation_checkpoint
 from train_and_eval.reporting.artifacts import (
     evaluation_artifact_directory,
+    evaluation_trajectory_has_policy_probabilities,
     persist_evaluation_source_artifacts,
     render_evaluation_plots,
     render_run_level_artifacts,
@@ -116,7 +117,24 @@ def generate_run_report(
             directory / "trade_events.parquet",
             directory / "metrics.json",
         )
-        if not all(path.exists() for path in source_paths):
+        source_paths_complete = all(
+            path.exists()
+            for path in source_paths
+        )
+
+        legacy_probability_trace = (
+            source_paths_complete
+            and not (
+                evaluation_trajectory_has_policy_probabilities(
+                    directory
+                )
+            )
+        )
+
+        if (
+            not source_paths_complete
+            or legacy_probability_trace
+        ):
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore",

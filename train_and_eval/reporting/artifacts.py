@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 from sqlalchemy import select
 
 
@@ -64,6 +65,43 @@ def _trajectory_frame(result: EvaluationRunResult) -> pd.DataFrame:
     frame["cumulative_fee_cost"] = frame["fee_cost"].cumsum()
     frame["cumulative_swap_cost"] = frame["swap_cost"].cumsum()
     frame["cumulative_trade_cost"] = frame["trade_cost"].cumsum()
+
+    # Persist the complete categorical policy distribution rather than
+    # only the probability of the selected action.  This allows policy
+    # confidence diagnostics to be regenerated later without loading the
+    # PPO checkpoint again.
+    probabilities = result.policy_trace.probabilities
+
+    if len(probabilities) != len(frame):
+        raise ReportArtifactError(
+            "Policy probability trace length does not match "
+            "the evaluation trajectory."
+        )
+
+    action_counts = {
+        len(values)
+        for values in probabilities
+    }
+
+    if len(action_counts) > 1:
+        raise ReportArtifactError(
+            "Policy probability vectors have inconsistent lengths."
+        )
+
+    action_count = (
+        next(iter(action_counts))
+        if action_counts
+        else 0
+    )
+
+    for action_index in range(action_count):
+        frame[
+            f"policy_probability_action_{action_index}"
+        ] = [
+            float(values[action_index])
+            for values in probabilities
+        ]
+
     return frame
 
 
@@ -76,6 +114,36 @@ def _trade_events_frame(result: EvaluationRunResult) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(list(result.trade_events))
+
+
+def evaluation_trajectory_has_policy_probabilities(
+    directory: str | Path,
+) -> bool:
+    """Return whether a persisted trajectory contains full policy probabilities."""
+    trajectory_path = (
+        Path(directory)
+        / "trajectory.parquet"
+    )
+
+    if not trajectory_path.exists():
+        return False
+
+    try:
+        columns = set(
+            pq.read_schema(
+                trajectory_path
+            ).names
+        )
+    except Exception as error:
+        raise ReportArtifactError(
+            f"Could not inspect trajectory schema: "
+            f"{trajectory_path}"
+        ) from error
+
+    return (
+        "policy_probability_action_1"
+        in columns
+    )
 
 
 def persist_evaluation_source_artifacts(
@@ -227,6 +295,229 @@ def _mark_best_and_final(
             zorder=5,
             label="FINAL" if label_markers else None,
         )
+
+
+
+def _render_policy_probability_frames(
+    frame: pd.DataFrame,
+    directory: Path,
+) -> tuple[Path, ...]:
+    """
+    Render diagnostics for action-1 confidence.
+
+    In the current LONG/FLAT policy encoding action 1 is LONG.
+    Full action probabilities remain stored generically in
+    trajectory.parquet so future policy layouts can add their own
+    diagnostics without changing the persisted representation.
+    """
+    column = "policy_probability_action_1"
+
+    if column not in frame.columns:
+        return ()
+
+    values = (
+        pd.to_numeric(
+            frame[column],
+            errors="coerce",
+        )
+        .dropna()
+        .to_numpy(dtype=float)
+    )
+
+    values = values[
+        np.isfinite(values)
+    ]
+
+    if values.size == 0:
+        return ()
+
+    if np.any(values < 0.0) or np.any(
+        values > 1.0
+    ):
+        raise ReportArtifactError(
+            "Persisted policy probabilities must "
+            "be between 0 and 1."
+        )
+
+    directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    plt = _pyplot()
+    outputs: list[Path] = []
+
+    # --------------------------------------------------------
+    # P(LONG) distribution
+    # --------------------------------------------------------
+
+    mean_probability = float(
+        np.mean(values)
+    )
+
+    median_probability = float(
+        np.median(values)
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(10, 6)
+    )
+
+    ax.hist(
+        values,
+        bins=np.linspace(
+            0.0,
+            1.0,
+            51,
+        ),
+        density=True,
+    )
+
+    ax.axvline(
+        0.50,
+        linestyle="--",
+        linewidth=1.2,
+        label="Argmax boundary (0.50)",
+    )
+
+    ax.axvline(
+        mean_probability,
+        linestyle=":",
+        linewidth=1.2,
+        label=(
+            "Mean "
+            f"{mean_probability:.3f}"
+        ),
+    )
+
+    ax.axvline(
+        median_probability,
+        linestyle="-.",
+        linewidth=1.2,
+        label=(
+            "Median "
+            f"{median_probability:.3f}"
+        ),
+    )
+
+    ax.set_xlim(
+        0.0,
+        1.0,
+    )
+
+    ax.set_title(
+        "Policy P(LONG) distribution"
+    )
+
+    ax.set_xlabel(
+        "P(LONG)"
+    )
+
+    ax.set_ylabel(
+        "probability density"
+    )
+
+    ax.grid(
+        True,
+        alpha=0.25,
+    )
+
+    ax.legend()
+
+    path = (
+        directory
+        / "policy_p_long_distribution.png"
+    )
+
+    _save_figure(
+        fig,
+        path,
+    )
+
+    outputs.append(path)
+
+    # --------------------------------------------------------
+    # P(LONG) confidence survival curve
+    # --------------------------------------------------------
+
+    thresholds = np.linspace(
+        0.0,
+        1.0,
+        201,
+    )
+
+    fractions = np.asarray(
+        [
+            np.mean(
+                values >= threshold
+            )
+            for threshold in thresholds
+        ],
+        dtype=float,
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(10, 6)
+    )
+
+    ax.plot(
+        thresholds,
+        fractions,
+        linewidth=2.0,
+    )
+
+    ax.axvline(
+        0.50,
+        linestyle="--",
+        linewidth=1.2,
+        label="Argmax boundary (0.50)",
+    )
+
+    ax.set_xlim(
+        0.0,
+        1.0,
+    )
+
+    ax.set_ylim(
+        0.0,
+        1.0,
+    )
+
+    ax.set_title(
+        "Policy P(LONG) confidence curve"
+    )
+
+    ax.set_xlabel(
+        "minimum P(LONG) required"
+    )
+
+    ax.set_ylabel(
+        "observations with P(LONG) >= threshold"
+    )
+
+    _format_x_axis_as_percent(ax)
+    _format_axis_as_percent(ax)
+
+    ax.grid(
+        True,
+        alpha=0.25,
+    )
+
+    ax.legend()
+
+    path = (
+        directory
+        / "policy_p_long_confidence_curve.png"
+    )
+
+    _save_figure(
+        fig,
+        path,
+    )
+
+    outputs.append(path)
+
+    return tuple(outputs)
 
 
 def _render_evaluation_frames(
@@ -401,6 +692,13 @@ def _render_evaluation_frames(
             path = directory / "holding_times.png"
             _save_figure(fig, path)
             outputs.append(path)
+
+    outputs.extend(
+        _render_policy_probability_frames(
+            frame,
+            directory,
+        )
+    )
 
     return tuple(outputs)
 

@@ -534,7 +534,7 @@ def plot_individual_histogram(
     plt.close(figure)
 
 
-def plot_threshold_curve(
+def plot_confidence_curve(
     probability_frame: pd.DataFrame,
     sources: list[SourceRun],
     *,
@@ -618,7 +618,7 @@ def plot_threshold_curve(
     )
 
     axis.set_title(
-        "PPO policy threshold sensitivity"
+        "PPO policy P(LONG) confidence curve"
     )
 
     axis.grid(
@@ -894,16 +894,16 @@ def main() -> None:
 
         individual_paths.append(path)
 
-    threshold_curve_path = (
+    confidence_curve_path = (
         output_directory
-        / "p_long_threshold_curve.png"
+        / "p_long_confidence_curve.png"
     )
 
-    plot_threshold_curve(
+    plot_confidence_curve(
         probability_frame,
         sources,
         curve_points=args.curve_points,
-        output_path=threshold_curve_path,
+        output_path=confidence_curve_path,
         dpi=args.dpi,
     )
 
@@ -918,7 +918,7 @@ def main() -> None:
     for path in individual_paths:
         print(path)
 
-    print(threshold_curve_path)
+    print(confidence_curve_path)
 
 
 if __name__ == "__main__":

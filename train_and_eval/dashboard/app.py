@@ -10,6 +10,9 @@ from train_and_eval.dashboard.data import (
     DashboardData,
     load_dashboard_data,
 )
+from train_and_eval.dashboard.pareto import (
+    pareto_mask,
+)
 
 
 st.set_page_config(
@@ -795,6 +798,428 @@ def activity_tab(
     )
 
 
+
+def pareto_tab(
+    frame: pd.DataFrame,
+) -> None:
+    st.subheader("Pareto Explorer")
+
+    numeric = numeric_columns(frame)
+
+    if len(numeric) < 2:
+        st.warning(
+            "Not enough numeric columns "
+            "for Pareto analysis."
+        )
+        return
+
+    default_x = find_column(
+        frame.columns,
+        "eval.agent_max_drawdown",
+    )
+
+    default_y = find_column(
+        frame.columns,
+        "eval.agent_return",
+    )
+
+    default_color = find_column(
+        frame.columns,
+        "run.seed",
+        ".seed",
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    x = c1.selectbox(
+        "X metric",
+        numeric,
+        index=column_index(
+            numeric,
+            default_x,
+            0,
+        ),
+        format_func=display_name,
+        key="pareto_x_metric",
+    )
+
+    x_objective = c2.selectbox(
+        "X objective",
+        (
+            "Maximize",
+            "Minimize",
+        ),
+        index=0,
+        key="pareto_x_objective",
+    )
+
+    y = c3.selectbox(
+        "Y metric",
+        numeric,
+        index=column_index(
+            numeric,
+            default_y,
+            1,
+        ),
+        format_func=display_name,
+        key="pareto_y_metric",
+    )
+
+    y_objective = c4.selectbox(
+        "Y objective",
+        (
+            "Maximize",
+            "Minimize",
+        ),
+        index=0,
+        key="pareto_y_objective",
+    )
+
+    color_options = (
+        ["None"]
+        + usable_columns(frame)
+    )
+
+    color = st.selectbox(
+        "Color",
+        color_options,
+        index=(
+            color_options.index(
+                default_color
+            )
+            if default_color
+            in color_options
+            else 0
+        ),
+        format_func=lambda value: (
+            "None"
+            if value == "None"
+            else display_name(value)
+        ),
+        key="pareto_color",
+    )
+
+    required = [
+        x,
+        y,
+    ]
+
+    if color != "None":
+        required.append(color)
+
+    plot_frame = frame.dropna(
+        subset=required,
+    ).copy()
+
+    if plot_frame.empty:
+        st.warning(
+            "No rows remain for Pareto analysis."
+        )
+        return
+
+    plot_frame[x] = pd.to_numeric(
+        plot_frame[x],
+        errors="coerce",
+    )
+
+    plot_frame[y] = pd.to_numeric(
+        plot_frame[y],
+        errors="coerce",
+    )
+
+    plot_frame = plot_frame.dropna(
+        subset=[
+            x,
+            y,
+        ]
+    ).copy()
+
+    if plot_frame.empty:
+        st.warning(
+            "Selected Pareto metrics contain "
+            "no usable numeric values."
+        )
+        return
+
+    if (
+        color != "None"
+        and is_seed_column(color)
+    ):
+        plot_frame[color] = (
+            pd.to_numeric(
+                plot_frame[color],
+                errors="coerce",
+            )
+            .astype("Int64")
+            .astype("string")
+        )
+
+    mask = pareto_mask(
+        plot_frame,
+        x_column=x,
+        y_column=y,
+        maximize_x=(
+            x_objective == "Maximize"
+        ),
+        maximize_y=(
+            y_objective == "Maximize"
+        ),
+    )
+
+    plot_frame[
+        "__pareto"
+    ] = mask
+
+    pareto_frame = (
+        plot_frame.loc[
+            plot_frame["__pareto"]
+        ]
+        .copy()
+        .sort_values(
+            x,
+            ascending=True,
+        )
+    )
+
+    dominated_count = (
+        len(plot_frame)
+        - len(pareto_frame)
+    )
+
+    m1, m2, m3 = st.columns(3)
+
+    m1.metric(
+        "Compared runs",
+        len(plot_frame),
+    )
+
+    m2.metric(
+        "Pareto-optimal",
+        len(pareto_frame),
+    )
+
+    m3.metric(
+        "Dominated",
+        dominated_count,
+    )
+
+    run_name = find_column(
+        frame.columns,
+        "run.name",
+    )
+
+    seed = find_column(
+        frame.columns,
+        "run.seed",
+        ".seed",
+    )
+
+    score = find_column(
+        frame.columns,
+        "eval.balanced_score",
+    )
+
+    agent_return = find_column(
+        frame.columns,
+        "eval.agent_return",
+    )
+
+    max_drawdown = find_column(
+        frame.columns,
+        "eval.agent_max_drawdown",
+    )
+
+    exposure = find_column(
+        frame.columns,
+        "eval.market_exposure",
+    )
+
+    trips = find_column(
+        frame.columns,
+        "eval.round_trips",
+    )
+
+    profit_factor = find_column(
+        frame.columns,
+        "eval.profit_factor",
+    )
+
+    hover_columns = [
+        column
+        for column in (
+            "run_id",
+            run_name,
+            seed,
+            score,
+            agent_return,
+            max_drawdown,
+            exposure,
+            trips,
+            profit_factor,
+        )
+        if (
+            column is not None
+            and column
+            in plot_frame.columns
+        )
+    ]
+
+    hover_data = {
+        column: hover_format(column)
+        for column in hover_columns
+    }
+
+    figure = px.scatter(
+        plot_frame,
+        x=x,
+        y=y,
+        color=(
+            None
+            if color == "None"
+            else color
+        ),
+        hover_data=hover_data,
+        labels=plotly_labels(
+            plot_frame.columns
+        ),
+    )
+
+    if not pareto_frame.empty:
+        figure.add_scatter(
+            x=pareto_frame[x],
+            y=pareto_frame[y],
+            mode="lines+markers",
+            name="Pareto front",
+            marker={
+                "size": 14,
+                "symbol": "circle-open",
+            },
+            line={
+                "width": 2,
+            },
+            hoverinfo="skip",
+        )
+
+    if is_percent_column(x):
+        figure.update_xaxes(
+            tickformat=".0%",
+        )
+
+    if is_percent_column(y):
+        figure.update_yaxes(
+            tickformat=".0%",
+        )
+
+    figure.update_layout(
+        legend_title_text=(
+            ""
+            if color == "None"
+            else display_name(color)
+        )
+    )
+
+    st.plotly_chart(
+        figure,
+        width="stretch",
+    )
+
+    if (
+        x.endswith(
+            "agent_max_drawdown"
+        )
+        and x_objective == "Maximize"
+    ):
+        st.caption(
+            "Max drawdown is stored as a negative "
+            "return. Therefore Maximize means "
+            "closer to 0% is better."
+        )
+
+    st.caption(
+        "Pareto status is computed only across "
+        "runs currently visible after sidebar "
+        "filters. A Pareto-optimal run is not "
+        "dominated by another visible run in "
+        "both selected objectives."
+    )
+
+    st.markdown(
+        "#### Pareto-optimal runs"
+    )
+
+    table_columns: list[str] = []
+
+    for column in (
+        "run_id",
+        run_name,
+        seed,
+        x,
+        y,
+        score,
+        profit_factor,
+        exposure,
+        trips,
+    ):
+        if (
+            column is not None
+            and column
+            in pareto_frame.columns
+            and column
+            not in table_columns
+        ):
+            table_columns.append(
+                column
+            )
+
+    if not table_columns:
+        st.info(
+            "No Pareto table columns available."
+        )
+        return
+
+    table = (
+        pareto_frame[
+            table_columns
+        ]
+        .copy()
+    )
+
+    # Human-readable percentages in the
+    # Pareto summary table.
+    rename_map: dict[
+        str,
+        str,
+    ] = {}
+
+    for column in table_columns:
+        label = display_name(column)
+
+        if is_percent_column(column):
+            table[column] = (
+                pd.to_numeric(
+                    table[column],
+                    errors="coerce",
+                )
+                * 100.0
+            )
+
+            label = (
+                f"{label} (%)"
+            )
+
+        rename_map[column] = label
+
+    table = table.rename(
+        columns=rename_map
+    )
+
+    st.dataframe(
+        table,
+        width="stretch",
+        hide_index=True,
+    )
+
+
 def group_comparison_tab(
     frame: pd.DataFrame,
 ) -> None:
@@ -1202,6 +1627,7 @@ tabs = st.tabs(
         "Run Explorer",
         "Scatter Explorer",
         "Activity Map",
+        "Pareto Explorer",
         "Group Comparison",
         "Run Detail",
     ]
@@ -1217,7 +1643,10 @@ with tabs[2]:
     activity_tab(filtered)
 
 with tabs[3]:
-    group_comparison_tab(filtered)
+    pareto_tab(filtered)
 
 with tabs[4]:
+    group_comparison_tab(filtered)
+
+with tabs[5]:
     run_detail_tab(data, filtered)

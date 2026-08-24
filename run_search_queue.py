@@ -109,6 +109,10 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/53_resume51_ckpt204_lr7p5e5_seed1.yml",
     "configs/experiments/nq1h_search_v1/54_resume51_ckpt204_lr1e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/55_resume51_ckpt204_lr1p5e4_seed1.yml",
+
+    # Checkpoint #204 continuation confirmation on additional seeds
+    "configs/experiments/nq1h_search_v1/56_resume51_ckpt204_lr1p5e4_seed2.yml",
+    "configs/experiments/nq1h_search_v1/57_resume51_ckpt204_lr1p5e4_seed3.yml",
 ]
 
 

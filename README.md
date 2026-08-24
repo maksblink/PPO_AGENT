@@ -1217,6 +1217,53 @@ Useful for comparing seed behavior, saturation, and policy polarization.
 
 ---
 
+## Checkpoint-by-checkpoint policy evolution
+
+Tool:
+
+```text
+extra_tools/policy_probability_evolution.py
+```
+
+Example:
+
+```bash
+python -m extra_tools.policy_probability_evolution \
+  --runs 34,36,37 \
+  --output-dir /tmp/ppo_policy_probability_evolution
+```
+
+The tool:
+
+- resolves periodic and final checkpoints through PostgreSQL
+- preserves the exact run -> checkpoint -> evaluation mapping
+- replays every selected immutable checkpoint on run validation
+- compares the complete `P(LONG)` distribution across training checkpoints
+- quantifies checkpoint-to-checkpoint distribution shifts
+- joins checkpoints to exact-step PPO and critic training diagnostics
+- does not retrain
+- does not create new evaluation rows
+- finishes all replays before writing output artifacts
+
+Typical outputs:
+
+```text
+policy_probabilities.csv
+probability_summary.csv
+probability_transitions.csv
+training_metrics.csv
+checkpoint_diagnostics.csv
+p_long_histogram_grid.png
+p_long_confidence_curve_grid.png
+p_long_evolution.png
+ppo_diagnostics.png
+critic_diagnostics.png
+```
+
+Historical replay requires a clean Git repository.
+
+---
+
 ## Probability-threshold sweep
 
 Tool:

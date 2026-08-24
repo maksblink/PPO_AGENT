@@ -103,6 +103,12 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/49_resume48_ckpt192_lr2p25e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/50_resume48_ckpt192_lr3e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/51_resume48_ckpt192_lr4e4_seed1.yml",
+
+    # Resume phase 2: checkpoint #204 low learning-rate screening
+    "configs/experiments/nq1h_search_v1/52_resume51_ckpt204_lr5e5_seed1.yml",
+    "configs/experiments/nq1h_search_v1/53_resume51_ckpt204_lr7p5e5_seed1.yml",
+    "configs/experiments/nq1h_search_v1/54_resume51_ckpt204_lr1e4_seed1.yml",
+    "configs/experiments/nq1h_search_v1/55_resume51_ckpt204_lr1p5e4_seed1.yml",
 ]
 
 

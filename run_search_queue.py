@@ -97,6 +97,12 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/45_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed1.yml",
     "configs/experiments/nq1h_search_v1/46_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed2.yml",
     "configs/experiments/nq1h_search_v1/47_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed3.yml",
+
+    # Resume phase: checkpoint #192 learning-rate screening
+    "configs/experiments/nq1h_search_v1/48_resume48_ckpt192_lr1p5e4_seed1.yml",
+    "configs/experiments/nq1h_search_v1/49_resume48_ckpt192_lr2p25e4_seed1.yml",
+    "configs/experiments/nq1h_search_v1/50_resume48_ckpt192_lr3e4_seed1.yml",
+    "configs/experiments/nq1h_search_v1/51_resume48_ckpt192_lr4e4_seed1.yml",
 ]
 
 

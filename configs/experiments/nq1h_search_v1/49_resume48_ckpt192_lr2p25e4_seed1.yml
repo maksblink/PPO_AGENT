@@ -1,0 +1,76 @@
+config_schema_version: 1
+run:
+  name: nq1h_finetune_v1_src48_ckpt192_lr2p25e4_seed1
+  seed: 1
+continuation:
+  mode: resume
+  source_run: nq1h_search_v1_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed1
+  checkpoint: "192"
+data:
+  path: data/NQ_CONTINUOUS_1h_WEEKDAYS_2010-06-07_00-00_2026-06-24_23-00_20260625_234320.parquet
+  train_ratio: 0.8
+training:
+  duration_unit: data_epochs
+  duration_amount: 1
+logging:
+  training_progress_every_steps: 10000
+  validation_progress_every_steps: 2000
+environment:
+  window: 40
+  context: baseline_multiscale_v1
+  position_side: long_only
+  market_timezone: America/New_York
+  rth_open: 09:30
+  rth_close: '16:00'
+  stake_pln: 1000.0
+  fee_bps: 1.0
+  swap_bps: 3.0
+  swap_time: '17:00'
+  swap_timezone: America/New_York
+  force_close_on_done: true
+  reward_scale: 1.0
+  exposure_penalty: 0.0
+  turnover_penalty: 0.0
+  drawdown_penalty: 0.0
+  profit_reward_mult: 1.0
+  loss_reward_mult: 1.0
+ppo:
+  policy: mlp
+  device: cuda
+  hidden_sizes:
+  - 384
+  - 384
+  - 384
+  activation: tanh
+  value_head_init_scale: 0.003
+  initial_long_probability: 0.55
+  n_steps: 2048
+  batch_size: 1024
+  n_epochs: 3
+  learning_rate: 0.000225
+  gamma: 0.9
+  gae_lambda: 0.85
+  clip_range: 0.2
+  clip_range_vf: null
+  normalize_advantage: true
+  ent_coef: 0.0002
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: null
+evaluation:
+  device: cpu
+  eval_every_steps: 20000
+  checkpoint_every_steps: 20000
+  policy_mode: deterministic_argmax
+  threshold_action: null
+  probability_threshold: null
+  best_metric: balanced_score
+  early_stop_patience_evals: 5
+artifacts:
+  training_metrics:
+    enabled: true
+    every_steps: 2048
+  validation_trajectory:
+    mode: all
+  plots:
+    during_run: false

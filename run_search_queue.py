@@ -82,6 +82,21 @@ CONFIGS = [
     "configs/experiments/nq1h_search_v1/39_nepochs3_lr2p25e4_gamma090_gae085_exp1p25em5_seed3.yml",
     "configs/experiments/nq1h_search_v1/40_nepochs3_lr2p25e4_gamma090_gae085_exp1p75em5_seed2.yml",
     "configs/experiments/nq1h_search_v1/41_nepochs3_lr2p25e4_gamma090_gae085_exp1p75em5_seed3.yml",
+
+    # Exposure-free seed ablation
+    "configs/experiments/nq1h_search_v1/38_nepochs3_lr2p25e4_gamma090_gae085_exp0_seed1.yml",
+    "configs/experiments/nq1h_search_v1/39_nepochs3_lr2p25e4_gamma090_gae085_exp0_seed2.yml",
+    "configs/experiments/nq1h_search_v1/40_nepochs3_lr2p25e4_gamma090_gae085_exp0_seed3.yml",
+
+    # Turnover-penalty seed ablation
+    "configs/experiments/nq1h_search_v1/42_nepochs3_lr2p25e4_gamma090_gae085_exp0_turn5em5_seed1.yml",
+    "configs/experiments/nq1h_search_v1/43_nepochs3_lr2p25e4_gamma090_gae085_exp0_turn5em5_seed2.yml",
+    "configs/experiments/nq1h_search_v1/44_nepochs3_lr2p25e4_gamma090_gae085_exp0_turn5em5_seed3.yml",
+
+    # LONG initialization prior seed ablation
+    "configs/experiments/nq1h_search_v1/45_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed1.yml",
+    "configs/experiments/nq1h_search_v1/46_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed2.yml",
+    "configs/experiments/nq1h_search_v1/47_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed3.yml",
 ]
 
 

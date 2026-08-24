@@ -70,6 +70,49 @@ def _integer_value(
     return result
 
 
+def _initialize_long_action_probability(
+    model: PPO,
+    probability: float,
+) -> None:
+    """Initialize action 1 with one explicit categorical prior."""
+    action_bias = model.policy.action_net.bias
+
+    if action_bias is None:
+        raise PPOAdapterError(
+            "PPO action head must expose a bias vector."
+        )
+
+    action_count = int(
+        action_bias.numel()
+    )
+
+    if action_count < 2:
+        raise PPOAdapterError(
+            "LONG action initialization requires at least "
+            "two discrete actions."
+        )
+
+    other_probability = (
+        1.0 - float(probability)
+    ) / float(action_count - 1)
+
+    with torch.no_grad():
+        probabilities = torch.full_like(
+            action_bias,
+            other_probability,
+        )
+        probabilities[1] = float(
+            probability
+        )
+
+        logits = torch.log(
+            probabilities
+        )
+        logits -= logits.mean()
+
+        action_bias.copy_(logits)
+
+
 def ppo_constructor_kwargs(
     config: PPOSection,
     *,
@@ -207,6 +250,16 @@ def create_ppo_model(
                 model.policy.value_net.bias.mul_(
                     scale
                 )
+
+    initial_long_probability = (
+        config.initial_long_probability
+    )
+
+    if initial_long_probability is not None:
+        _initialize_long_action_probability(
+            model,
+            float(initial_long_probability),
+        )
 
     return model
 

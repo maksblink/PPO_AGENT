@@ -349,6 +349,11 @@ class PPOSection(StrictConfigModel):
     )
     activation: Literal["tanh", "relu"]
     value_head_init_scale: PositiveFloat = 1.0
+    initial_long_probability: float | None = Field(
+        default=None,
+        gt=0.0,
+        lt=1.0,
+    )
 
     n_steps: int = Field(
         strict=True,
@@ -498,6 +503,19 @@ class RunConfig(StrictConfigModel):
     evaluation: EvaluationSection
 
     @model_validator(mode="after")
+    def validate_initial_long_probability(self) -> Self:
+        if (
+            self.ppo.initial_long_probability is not None
+            and self.environment.position_side == "short_only"
+        ):
+            raise ValueError(
+                "initial_long_probability is not available "
+                "for short_only environments"
+            )
+
+        return self
+
+    @model_validator(mode="after")
     def validate_evaluation_action_space(self) -> Self:
         evaluation = self.evaluation
 
@@ -533,6 +551,7 @@ RESUME_IMMUTABLE_FIELDS = (
     "ppo.hidden_sizes",
     "ppo.activation",
     "ppo.value_head_init_scale",
+    "ppo.initial_long_probability",
 )
 
 

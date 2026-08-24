@@ -25,7 +25,11 @@ from train_and_eval.run_config import (
 class TinyEnvironment(gym.Env):
     metadata: dict[str, Any] = {}
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        action_count: int = 2,
+    ) -> None:
         super().__init__()
 
         self.observation_space = gym.spaces.Box(
@@ -35,7 +39,7 @@ class TinyEnvironment(gym.Env):
             dtype=np.float32,
         )
         self.action_space = gym.spaces.Discrete(
-            2
+            action_count
         )
         self.steps = 0
 
@@ -97,6 +101,7 @@ def _ppo_config(
     *,
     activation: str = "relu",
     value_head_init_scale: float = 1.0,
+    initial_long_probability: float | None = None,
 ) -> PPOSection:
     return PPOSection.model_validate(
         {
@@ -108,6 +113,9 @@ def _ppo_config(
             ],
             "activation": activation,
             "value_head_init_scale": value_head_init_scale,
+            "initial_long_probability": (
+                initial_long_probability
+            ),
             "n_steps": 8,
             "batch_size": 4,
             "n_epochs": 2,
@@ -236,6 +244,90 @@ def test_scales_value_head_initialization() -> None:
         baseline_weight * 0.003,
         rtol=1e-6,
         atol=1e-8,
+    )
+
+
+def test_initializes_long_action_probability() -> None:
+    baseline = create_ppo_model(
+        TinyEnvironment(),
+        _ppo_config(),
+        seed=23,
+    )
+
+    initialized = create_ppo_model(
+        TinyEnvironment(),
+        _ppo_config(
+            initial_long_probability=0.55,
+        ),
+        seed=23,
+    )
+
+    baseline_weight = (
+        baseline.policy.action_net.weight
+        .detach()
+        .cpu()
+        .numpy()
+    )
+    initialized_weight = (
+        initialized.policy.action_net.weight
+        .detach()
+        .cpu()
+        .numpy()
+    )
+
+    np.testing.assert_allclose(
+        initialized_weight,
+        baseline_weight,
+        rtol=0.0,
+        atol=0.0,
+    )
+
+    probabilities = (
+        initialized.policy.action_net.bias
+        .detach()
+        .softmax(dim=0)
+        .cpu()
+        .numpy()
+    )
+
+    np.testing.assert_allclose(
+        probabilities,
+        np.asarray(
+            [0.45, 0.55],
+            dtype=np.float32,
+        ),
+        rtol=1e-6,
+        atol=1e-7,
+    )
+
+
+def test_initializes_long_probability_for_three_actions() -> None:
+    model = create_ppo_model(
+        TinyEnvironment(
+            action_count=3,
+        ),
+        _ppo_config(
+            initial_long_probability=0.55,
+        ),
+        seed=29,
+    )
+
+    probabilities = (
+        model.policy.action_net.bias
+        .detach()
+        .softmax(dim=0)
+        .cpu()
+        .numpy()
+    )
+
+    np.testing.assert_allclose(
+        probabilities,
+        np.asarray(
+            [0.225, 0.55, 0.225],
+            dtype=np.float32,
+        ),
+        rtol=1e-6,
+        atol=1e-7,
     )
 
 

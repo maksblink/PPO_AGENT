@@ -114,8 +114,70 @@ def test_load_run_config_accepts_valid_config(
 
     assert loaded.config.run.name == "test_run"
     assert loaded.config.ppo.hidden_sizes == (64, 64)
+    assert (
+        loaded.config.ppo.initial_long_probability is None
+    )
     assert len(loaded.sha256) == 64
     assert '"config_schema_version":1' in loaded.normalized_json
+
+
+@pytest.mark.parametrize(
+    "probability",
+    [
+        -0.1,
+        0.0,
+        1.0,
+        1.1,
+    ],
+)
+def test_load_run_config_rejects_invalid_initial_long_probability(
+    tmp_path: Path,
+    probability: float,
+) -> None:
+    config = _valid_config()
+    config["ppo"][
+        "initial_long_probability"
+    ] = probability
+
+    path = _write_config(
+        tmp_path / "invalid-long-probability.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="initial_long_probability",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
+
+
+def test_load_run_config_rejects_long_prior_for_short_only(
+    tmp_path: Path,
+) -> None:
+    config = _valid_config()
+    config["environment"][
+        "position_side"
+    ] = "short_only"
+    config["ppo"][
+        "initial_long_probability"
+    ] = 0.55
+
+    path = _write_config(
+        tmp_path / "short-only-long-prior.yml",
+        config,
+    )
+
+    with pytest.raises(
+        RunConfigError,
+        match="initial_long_probability",
+    ):
+        load_run_config(
+            path,
+            verify_data=False,
+        )
 
 
 def test_load_run_config_rejects_unknown_field(
@@ -388,6 +450,41 @@ def test_resume_rejects_changed_value_head_init_scale(
     with pytest.raises(
         ResumeCompatibilityError,
         match="ppo.value_head_init_scale",
+    ):
+        validate_resume_compatibility(
+            current.config,
+            source.config,
+        )
+
+
+def test_resume_rejects_changed_initial_long_probability(
+    tmp_path: Path,
+) -> None:
+    source_config = _valid_config()
+    source_config["run"]["name"] = "source_run"
+    source_config["ppo"][
+        "initial_long_probability"
+    ] = 0.55
+
+    current_config = _resume_config()
+    current_config["ppo"][
+        "initial_long_probability"
+    ] = 0.60
+
+    source = _load_without_data_verification(
+        tmp_path,
+        "source.yml",
+        source_config,
+    )
+    current = _load_without_data_verification(
+        tmp_path,
+        "current.yml",
+        current_config,
+    )
+
+    with pytest.raises(
+        ResumeCompatibilityError,
+        match="ppo.initial_long_probability",
     ):
         validate_resume_compatibility(
             current.config,

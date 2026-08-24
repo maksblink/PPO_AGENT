@@ -124,10 +124,14 @@ NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS = [
 ]
 
 
-CONFIGS = [
-    *NQ1H_SEARCH_V1_CONFIGS,
-    *NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS,
-]
+QUEUE_CONFIGS = {
+    "nq1h_search_v1": NQ1H_SEARCH_V1_CONFIGS,
+    "nq1h_lr_decay_split90_v1": (
+        NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS
+    ),
+}
+
+DEFAULT_QUEUE = "nq1h_search_v1"
 
 
 NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
@@ -456,6 +460,7 @@ def parse_output_line(result: RunResult, line: str) -> None:
 
 def run_config(
     queue_index: int,
+    queue_total: int,
     config: ConfigMeta,
 ) -> RunResult:
     result = RunResult(
@@ -476,7 +481,7 @@ def run_config(
     print()
     print("#" * 100)
     print(
-        f"QUEUE {queue_index}/{len(CONFIGS)}"
+        f"QUEUE {queue_index}/{queue_total}"
         f" | n_epochs={config.n_epochs}"
         f" | lr={config.learning_rate}"
         f" | gamma={config.gamma}"
@@ -958,6 +963,16 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--queue",
+        choices=tuple(QUEUE_CONFIGS),
+        default=DEFAULT_QUEUE,
+        help=(
+            "Experiment queue to run. "
+            f"Default: {DEFAULT_QUEUE}"
+        ),
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the queue without starting training.",
@@ -990,7 +1005,7 @@ def main() -> int:
 
     configs = [
         read_config_meta(path)
-        for path in CONFIGS
+        for path in QUEUE_CONFIGS[args.queue]
     ]
 
     if args.start_at < 1 or args.start_at > len(configs):
@@ -1020,7 +1035,11 @@ def main() -> int:
             selected,
             start=args.start_at,
         ):
-            result = run_config(offset, config)
+            result = run_config(
+                offset,
+                len(configs),
+                config,
+            )
             results.append(result)
 
             if result.status != "COMPLETED":

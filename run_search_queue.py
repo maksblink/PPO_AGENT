@@ -124,10 +124,23 @@ NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS = [
 ]
 
 
+NQ1H_SPLIT90_EPOCH2_LR_GRID_V1_CONFIGS = [
+    "configs/experiments/nq1h_lr_decay_split90_v1/01_fresh_lr3e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/02_resume_epoch1_lr2p25e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/05_resume_epoch1_ckpt245_lr5e5_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/06_resume_epoch1_ckpt245_lr7p5e5_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/07_resume_epoch1_ckpt245_lr1e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/08_resume_epoch1_ckpt245_lr1p5e4_seed1.yml",
+]
+
+
 QUEUE_CONFIGS = {
     "nq1h_search_v1": NQ1H_SEARCH_V1_CONFIGS,
     "nq1h_lr_decay_split90_v1": (
         NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS
+    ),
+    "nq1h_split90_epoch2_lr_grid_v1": (
+        NQ1H_SPLIT90_EPOCH2_LR_GRID_V1_CONFIGS
     ),
 }
 

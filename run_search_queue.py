@@ -141,6 +141,22 @@ NQ1H_SPLIT90_FRESH_LR3E4_SEEDS_V1_CONFIGS = [
 ]
 
 
+NQ1H_SPLIT90_FRESH_LR_GRID_V1_CONFIGS = [
+    "configs/experiments/nq1h_lr_decay_split90_v1/01_fresh_lr3e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/09_fresh_lr3e4_seed2.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/10_fresh_lr3e4_seed3.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/11_fresh_lr4e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/12_fresh_lr4e4_seed2.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/13_fresh_lr4e4_seed3.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/14_fresh_lr5e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/15_fresh_lr5e4_seed2.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/16_fresh_lr5e4_seed3.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/17_fresh_lr7p5e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/18_fresh_lr7p5e4_seed2.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/19_fresh_lr7p5e4_seed3.yml",
+]
+
+
 QUEUE_CONFIGS = {
     "nq1h_search_v1": NQ1H_SEARCH_V1_CONFIGS,
     "nq1h_lr_decay_split90_v1": (
@@ -151,6 +167,9 @@ QUEUE_CONFIGS = {
     ),
     "nq1h_split90_fresh_lr3e4_seeds_v1": (
         NQ1H_SPLIT90_FRESH_LR3E4_SEEDS_V1_CONFIGS
+    ),
+    "nq1h_split90_fresh_lr_grid_v1": (
+        NQ1H_SPLIT90_FRESH_LR_GRID_V1_CONFIGS
     ),
 }
 

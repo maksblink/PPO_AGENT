@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent
 # 00_base_seed1.yml is intentionally NOT included.
 # ---------------------------------------------------------------------------
 
-CONFIGS = [
+NQ1H_SEARCH_V1_CONFIGS = [
     "configs/experiments/nq1h_search_v1/01_nepochs2_lr2p25e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/02_nepochs2_lr2p5e4_seed1.yml",
     "configs/experiments/nq1h_search_v1/03_nepochs2_lr2p75e4_seed1.yml",
@@ -113,6 +113,20 @@ CONFIGS = [
     # Checkpoint #204 continuation confirmation on additional seeds
     "configs/experiments/nq1h_search_v1/56_resume51_ckpt204_lr1p5e4_seed2.yml",
     "configs/experiments/nq1h_search_v1/57_resume51_ckpt204_lr1p5e4_seed3.yml",
+]
+
+
+NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS = [
+    "configs/experiments/nq1h_lr_decay_split90_v1/01_fresh_lr3e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/02_resume_epoch1_lr2p25e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/03_resume_epoch2_lr1p5e4_seed1.yml",
+    "configs/experiments/nq1h_lr_decay_split90_v1/04_resume_epoch3_lr1e4_seed1.yml",
+]
+
+
+CONFIGS = [
+    *NQ1H_SEARCH_V1_CONFIGS,
+    *NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS,
 ]
 
 

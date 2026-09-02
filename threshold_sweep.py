@@ -5,6 +5,10 @@ import csv
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+from train_and_eval.database.models import Checkpoint
 from train_and_eval.database.session import (
     create_database_engine,
     create_session_factory,
@@ -36,6 +40,9 @@ class SourceRun:
     name: str
     seed: int
     checkpoint_id: int
+    checkpoint_run_step: int
+    checkpoint_model_step: int
+    checkpoint_save_reason: str
 
 
 @dataclass(frozen=True)
@@ -44,6 +51,9 @@ class SweepResult:
     run_name: str
     seed: int
     checkpoint_id: int
+    checkpoint_run_step: int
+    checkpoint_model_step: int
+    checkpoint_save_reason: str
     threshold: float
 
     balanced_score: float
@@ -78,14 +88,14 @@ def parse_int_list(value: str) -> list[int]:
 
         if parsed < 1:
             raise argparse.ArgumentTypeError(
-                "Run IDs must be positive integers."
+                "IDs must be positive integers."
             )
 
         result.append(parsed)
 
     if not result:
         raise argparse.ArgumentTypeError(
-            "At least one run ID is required."
+            "At least one ID is required."
         )
 
     return result
@@ -155,6 +165,71 @@ def load_source_runs(
                     checkpoint_id=int(
                         checkpoint.id
                     ),
+                    checkpoint_run_step=int(
+                        checkpoint.run_step
+                    ),
+                    checkpoint_model_step=int(
+                        checkpoint.model_step
+                    ),
+                    checkpoint_save_reason=str(
+                        enum_value(
+                            checkpoint.save_reason
+                        )
+                    ),
+                )
+            )
+
+    return sources
+
+
+def load_source_checkpoints(
+    session_factory,
+    checkpoint_ids: list[int],
+) -> list[SourceRun]:
+    sources: list[SourceRun] = []
+
+    with session_factory() as session:
+        for checkpoint_id in checkpoint_ids:
+            statement = (
+                select(Checkpoint)
+                .options(
+                    selectinload(Checkpoint.run)
+                )
+                .where(
+                    Checkpoint.id == checkpoint_id
+                )
+            )
+            checkpoint = session.scalars(
+                statement
+            ).one_or_none()
+
+            if checkpoint is None:
+                raise RuntimeError(
+                    f"Checkpoint #{checkpoint_id} "
+                    "does not exist."
+                )
+
+            run = checkpoint.run
+
+            sources.append(
+                SourceRun(
+                    run_id=int(run.id),
+                    name=str(run.name),
+                    seed=int(run.seed),
+                    checkpoint_id=int(
+                        checkpoint.id
+                    ),
+                    checkpoint_run_step=int(
+                        checkpoint.run_step
+                    ),
+                    checkpoint_model_step=int(
+                        checkpoint.model_step
+                    ),
+                    checkpoint_save_reason=str(
+                        enum_value(
+                            checkpoint.save_reason
+                        )
+                    ),
                 )
             )
 
@@ -178,7 +253,9 @@ def run_sweep(
         print(
             f"RUN #{source.run_id} "
             f"| seed={source.seed} "
-            f"| checkpoint={source.checkpoint_id}"
+            f"| checkpoint={source.checkpoint_id} "
+            f"| run_step={source.checkpoint_run_step:,} "
+            f"| reason={source.checkpoint_save_reason}"
         )
         print(source.name)
         print("=" * 88)
@@ -190,8 +267,9 @@ def run_sweep(
             print(
                 f"[{current:02d}/{total:02d}] "
                 f"run=#{source.run_id} "
+                f"checkpoint=#{source.checkpoint_id} "
                 f"seed={source.seed} "
-                f"threshold={threshold:.2f}"
+                f"threshold={threshold:.4f}"
             )
 
             replay = replay_run_validation_checkpoint(
@@ -209,6 +287,15 @@ def run_sweep(
                 run_name=source.name,
                 seed=source.seed,
                 checkpoint_id=source.checkpoint_id,
+                checkpoint_run_step=(
+                    source.checkpoint_run_step
+                ),
+                checkpoint_model_step=(
+                    source.checkpoint_model_step
+                ),
+                checkpoint_save_reason=(
+                    source.checkpoint_save_reason
+                ),
                 threshold=threshold,
                 balanced_score=float(
                     metrics.balanced_score
@@ -271,13 +358,18 @@ def run_sweep(
 def print_summary(
     results: list[SweepResult],
 ) -> None:
+    width = 154
+
     print()
-    print("=" * 121)
+    print("=" * width)
     print("THRESHOLD SWEEP SUMMARY")
-    print("=" * 121)
+    print("=" * width)
 
     print(
         f"{'run':>4} "
+        f"{'cp':>5} "
+        f"{'run step':>10} "
+        f"{'reason':>11} "
         f"{'seed':>4} "
         f"{'threshold':>9} "
         f"{'exposure':>10} "
@@ -289,7 +381,7 @@ def print_summary(
         f"{'score':>10}"
     )
 
-    print("-" * 121)
+    print("-" * width)
 
     for row in results:
         pf_text = (
@@ -300,8 +392,11 @@ def print_summary(
 
         print(
             f"{row.run_id:>4d} "
+            f"{row.checkpoint_id:>5d} "
+            f"{row.checkpoint_run_step:>10,d} "
+            f"{row.checkpoint_save_reason:>11} "
             f"{row.seed:>4d} "
-            f"{row.threshold:>9.2f} "
+            f"{row.threshold:>9.4f} "
             f"{row.market_exposure:>9.2%} "
             f"{row.flat_exposure:>8.2%} "
             f"{row.round_trips:>7d} "
@@ -352,20 +447,32 @@ def write_csv(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Replay existing PPO final checkpoints "
+            "Replay existing PPO checkpoints "
             "over a LONG probability-threshold sweep."
         )
     )
 
-    parser.add_argument(
+    source_group = (
+        parser.add_mutually_exclusive_group()
+    )
+
+    source_group.add_argument(
         "--runs",
-        default=",".join(
-            str(value)
-            for value in DEFAULT_RUNS
-        ),
+        default=None,
         help=(
-            "Comma-separated run IDs. "
-            "Default: 34,36,37"
+            "Comma-separated run IDs; the final "
+            "checkpoint of each run is replayed. "
+            "Default when no source option is given: "
+            "34,36,37."
+        ),
+    )
+
+    source_group.add_argument(
+        "--checkpoint-ids",
+        default=None,
+        help=(
+            "Comma-separated checkpoint IDs to replay "
+            "directly. Cannot be combined with --runs."
         ),
     )
 
@@ -385,9 +492,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=Path(
-            "/tmp/"
-            "nq1h_threshold_sweep_"
-            "runs34_36_37.csv"
+            "/tmp/ppo_threshold_sweep.csv"
         ),
         help="CSV output path.",
     )
@@ -397,10 +502,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-
-    run_ids = parse_int_list(
-        args.runs
-    )
 
     thresholds = parse_float_list(
         args.thresholds
@@ -412,20 +513,42 @@ def main() -> None:
     )
 
     try:
-        sources = load_source_runs(
-            session_factory,
-            run_ids,
-        )
+        if args.checkpoint_ids is not None:
+            checkpoint_ids = parse_int_list(
+                args.checkpoint_ids
+            )
+            sources = load_source_checkpoints(
+                session_factory,
+                checkpoint_ids,
+            )
+        else:
+            runs_value = (
+                args.runs
+                if args.runs is not None
+                else ",".join(
+                    str(value)
+                    for value in DEFAULT_RUNS
+                )
+            )
+            run_ids = parse_int_list(
+                runs_value
+            )
+            sources = load_source_runs(
+                session_factory,
+                run_ids,
+            )
 
-        print("SOURCE RUNS")
-        print("-" * 88)
+        print("SOURCE CHECKPOINTS")
+        print("-" * 120)
 
         for source in sources:
             print(
                 f"run=#{source.run_id}"
                 f" | seed={source.seed}"
-                f" | final checkpoint="
-                f"{source.checkpoint_id}"
+                f" | checkpoint=#{source.checkpoint_id}"
+                f" | run_step={source.checkpoint_run_step:,}"
+                f" | model_step={source.checkpoint_model_step:,}"
+                f" | reason={source.checkpoint_save_reason}"
                 f" | {source.name}"
             )
 

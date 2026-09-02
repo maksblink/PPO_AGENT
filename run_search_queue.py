@@ -157,6 +157,22 @@ NQ1H_SPLIT90_FRESH_LR_GRID_V1_CONFIGS = [
 ]
 
 
+NQ5M_TRANSFER_NQ1H_RUN79_V1_CONFIGS = [
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/00_fresh_lr7p5e4_seed3.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/01_resume_best_lr3e4_seed3.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/02_resume_best_lr1p5e4_seed3.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/03_resume_best_lr7p5e5_seed3.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/04_fresh_lr7p5e4_seed1.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/05_resume_best_lr3e4_seed1.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/06_resume_best_lr1p5e4_seed1.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/07_resume_best_lr7p5e5_seed1.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/08_fresh_lr7p5e4_seed2.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/09_resume_best_lr3e4_seed2.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/10_resume_best_lr1p5e4_seed2.yml",
+    "configs/experiments/nq5m_transfer_nq1h_run79_v1/11_resume_best_lr7p5e5_seed2.yml",
+]
+
+
 QUEUE_CONFIGS = {
     "nq1h_search_v1": NQ1H_SEARCH_V1_CONFIGS,
     "nq1h_lr_decay_split90_v1": (
@@ -170,6 +186,9 @@ QUEUE_CONFIGS = {
     ),
     "nq1h_split90_fresh_lr_grid_v1": (
         NQ1H_SPLIT90_FRESH_LR_GRID_V1_CONFIGS
+    ),
+    "nq5m_transfer_nq1h_run79_v1": (
+        NQ5M_TRANSFER_NQ1H_RUN79_V1_CONFIGS
     ),
 }
 

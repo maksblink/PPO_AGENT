@@ -8,190 +8,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parent
 
 
-# ---------------------------------------------------------------------------
-# Experiment queue
-#
-# Order here == execution order.
-# 00_base_seed1.yml is intentionally NOT included.
-# ---------------------------------------------------------------------------
-
-NQ1H_SEARCH_V1_CONFIGS = [
-    "configs/experiments/nq1h_search_v1/01_nepochs2_lr2p25e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/02_nepochs2_lr2p5e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/03_nepochs2_lr2p75e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/04_nepochs2_lr3e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/05_nepochs2_lr4e4_seed1.yml",
-
-    "configs/experiments/nq1h_search_v1/06_nepochs3_lr2p25e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/07_nepochs3_lr2p5e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/08_nepochs3_lr2p75e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/09_nepochs3_lr3e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/10_nepochs3_lr4e4_seed1.yml",
-
-    # Winner confirmation on additional seeds
-    "configs/experiments/nq1h_search_v1/11_nepochs2_lr2p5e4_seed2.yml",
-    "configs/experiments/nq1h_search_v1/12_nepochs2_lr2p5e4_seed3.yml",
-    "configs/experiments/nq1h_search_v1/13_nepochs3_lr2p25e4_seed2.yml",
-    "configs/experiments/nq1h_search_v1/14_nepochs3_lr2p25e4_seed3.yml",
-
-    # Gamma screening — n_epochs=3, LR=2.25e-4, seed=1
-    "configs/experiments/nq1h_search_v1/15_nepochs3_lr2p25e4_gamma085_seed1.yml",
-    "configs/experiments/nq1h_search_v1/16_nepochs3_lr2p25e4_gamma095_seed1.yml",
-    "configs/experiments/nq1h_search_v1/17_nepochs3_lr2p25e4_gamma097_seed1.yml",
-    "configs/experiments/nq1h_search_v1/18_nepochs3_lr2p25e4_gamma099_seed1.yml",
-
-    # GAE lambda screening — n_epochs=3, LR=2.25e-4, gamma=.90, seed=1
-    "configs/experiments/nq1h_search_v1/19_nepochs3_lr2p25e4_gamma090_gae085_seed1.yml",
-    "configs/experiments/nq1h_search_v1/20_nepochs3_lr2p25e4_gamma090_gae090_seed1.yml",
-    "configs/experiments/nq1h_search_v1/21_nepochs3_lr2p25e4_gamma090_gae098_seed1.yml",
-    "configs/experiments/nq1h_search_v1/22_nepochs3_lr2p25e4_gamma090_gae100_seed1.yml",
-
-    # GAE=.85 winner confirmation on additional seeds
-    "configs/experiments/nq1h_search_v1/23_nepochs3_lr2p25e4_gamma090_gae085_seed2.yml",
-    "configs/experiments/nq1h_search_v1/24_nepochs3_lr2p25e4_gamma090_gae085_seed3.yml",
-
-    # Entropy coefficient screening
-    # n_epochs=3, LR=2.25e-4, gamma=.90, GAE=.85, seed=1
-    "configs/experiments/nq1h_search_v1/25_nepochs3_lr2p25e4_gamma090_gae085_ent0_seed1.yml",
-    "configs/experiments/nq1h_search_v1/26_nepochs3_lr2p25e4_gamma090_gae085_ent1e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/27_nepochs3_lr2p25e4_gamma090_gae085_ent5e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/28_nepochs3_lr2p25e4_gamma090_gae085_ent1e3_seed1.yml",
-
-    # Exposure penalty screening
-    # n_epochs=3, LR=2.25e-4, gamma=.90, GAE=.85, ent=2e-4, seed=1
-    "configs/experiments/nq1h_search_v1/29_nepochs3_lr2p25e4_gamma090_gae085_exp2p5em6_seed1.yml",
-    "configs/experiments/nq1h_search_v1/30_nepochs3_lr2p25e4_gamma090_gae085_exp5em6_seed1.yml",
-    "configs/experiments/nq1h_search_v1/31_nepochs3_lr2p25e4_gamma090_gae085_exp1em5_seed1.yml",
-    "configs/experiments/nq1h_search_v1/32_nepochs3_lr2p25e4_gamma090_gae085_exp2em5_seed1.yml",
-
-    # Exposure penalty refinement for active-policy regime
-    "configs/experiments/nq1h_search_v1/33_nepochs3_lr2p25e4_gamma090_gae085_exp1p25em5_seed1.yml",
-    "configs/experiments/nq1h_search_v1/34_nepochs3_lr2p25e4_gamma090_gae085_exp1p5em5_seed1.yml",
-    "configs/experiments/nq1h_search_v1/35_nepochs3_lr2p25e4_gamma090_gae085_exp1p75em5_seed1.yml",
-
-    # Active-policy exposure penalty confirmation
-    "configs/experiments/nq1h_search_v1/36_nepochs3_lr2p25e4_gamma090_gae085_exp1p5em5_seed2.yml",
-    "configs/experiments/nq1h_search_v1/37_nepochs3_lr2p25e4_gamma090_gae085_exp1p5em5_seed3.yml",
-
-    # Exposure-penalty x seed behavior map
-    "configs/experiments/nq1h_search_v1/38_nepochs3_lr2p25e4_gamma090_gae085_exp1p25em5_seed2.yml",
-    "configs/experiments/nq1h_search_v1/39_nepochs3_lr2p25e4_gamma090_gae085_exp1p25em5_seed3.yml",
-    "configs/experiments/nq1h_search_v1/40_nepochs3_lr2p25e4_gamma090_gae085_exp1p75em5_seed2.yml",
-    "configs/experiments/nq1h_search_v1/41_nepochs3_lr2p25e4_gamma090_gae085_exp1p75em5_seed3.yml",
-
-    # Exposure-free seed ablation
-    "configs/experiments/nq1h_search_v1/38_nepochs3_lr2p25e4_gamma090_gae085_exp0_seed1.yml",
-    "configs/experiments/nq1h_search_v1/39_nepochs3_lr2p25e4_gamma090_gae085_exp0_seed2.yml",
-    "configs/experiments/nq1h_search_v1/40_nepochs3_lr2p25e4_gamma090_gae085_exp0_seed3.yml",
-
-    # Turnover-penalty seed ablation
-    "configs/experiments/nq1h_search_v1/42_nepochs3_lr2p25e4_gamma090_gae085_exp0_turn5em5_seed1.yml",
-    "configs/experiments/nq1h_search_v1/43_nepochs3_lr2p25e4_gamma090_gae085_exp0_turn5em5_seed2.yml",
-    "configs/experiments/nq1h_search_v1/44_nepochs3_lr2p25e4_gamma090_gae085_exp0_turn5em5_seed3.yml",
-
-    # LONG initialization prior seed ablation
-    "configs/experiments/nq1h_search_v1/45_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed1.yml",
-    "configs/experiments/nq1h_search_v1/46_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed2.yml",
-    "configs/experiments/nq1h_search_v1/47_nepochs3_lr2p25e4_gamma090_gae085_exp0_initlong55_seed3.yml",
-
-    # Resume phase: checkpoint #192 learning-rate screening
-    "configs/experiments/nq1h_search_v1/48_resume48_ckpt192_lr1p5e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/49_resume48_ckpt192_lr2p25e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/50_resume48_ckpt192_lr3e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/51_resume48_ckpt192_lr4e4_seed1.yml",
-
-    # Resume phase 2: checkpoint #204 low learning-rate screening
-    "configs/experiments/nq1h_search_v1/52_resume51_ckpt204_lr5e5_seed1.yml",
-    "configs/experiments/nq1h_search_v1/53_resume51_ckpt204_lr7p5e5_seed1.yml",
-    "configs/experiments/nq1h_search_v1/54_resume51_ckpt204_lr1e4_seed1.yml",
-    "configs/experiments/nq1h_search_v1/55_resume51_ckpt204_lr1p5e4_seed1.yml",
-
-    # Checkpoint #204 continuation confirmation on additional seeds
-    "configs/experiments/nq1h_search_v1/56_resume51_ckpt204_lr1p5e4_seed2.yml",
-    "configs/experiments/nq1h_search_v1/57_resume51_ckpt204_lr1p5e4_seed3.yml",
-]
-
-
-NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS = [
-    "configs/experiments/nq1h_lr_decay_split90_v1/01_fresh_lr3e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/02_resume_epoch1_lr2p25e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/03_resume_epoch2_lr1p5e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/04_resume_epoch3_lr1e4_seed1.yml",
-]
-
-
-NQ1H_SPLIT90_EPOCH2_LR_GRID_V1_CONFIGS = [
-    "configs/experiments/nq1h_lr_decay_split90_v1/01_fresh_lr3e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/02_resume_epoch1_lr2p25e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/05_resume_epoch1_ckpt245_lr5e5_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/06_resume_epoch1_ckpt245_lr7p5e5_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/07_resume_epoch1_ckpt245_lr1e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/08_resume_epoch1_ckpt245_lr1p5e4_seed1.yml",
-]
-
-
-NQ1H_SPLIT90_FRESH_LR3E4_SEEDS_V1_CONFIGS = [
-    "configs/experiments/nq1h_lr_decay_split90_v1/01_fresh_lr3e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/09_fresh_lr3e4_seed2.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/10_fresh_lr3e4_seed3.yml",
-]
-
-
-NQ1H_SPLIT90_FRESH_LR_GRID_V1_CONFIGS = [
-    "configs/experiments/nq1h_lr_decay_split90_v1/01_fresh_lr3e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/09_fresh_lr3e4_seed2.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/10_fresh_lr3e4_seed3.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/11_fresh_lr4e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/12_fresh_lr4e4_seed2.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/13_fresh_lr4e4_seed3.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/14_fresh_lr5e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/15_fresh_lr5e4_seed2.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/16_fresh_lr5e4_seed3.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/17_fresh_lr7p5e4_seed1.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/18_fresh_lr7p5e4_seed2.yml",
-    "configs/experiments/nq1h_lr_decay_split90_v1/19_fresh_lr7p5e4_seed3.yml",
-]
-
-
-NQ5M_TRANSFER_NQ1H_RUN79_V1_CONFIGS = [
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/00_fresh_lr7p5e4_seed3.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/01_resume_best_lr3e4_seed3.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/02_resume_best_lr1p5e4_seed3.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/03_resume_best_lr7p5e5_seed3.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/04_fresh_lr7p5e4_seed1.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/05_resume_best_lr3e4_seed1.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/06_resume_best_lr1p5e4_seed1.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/07_resume_best_lr7p5e5_seed1.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/08_fresh_lr7p5e4_seed2.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/09_resume_best_lr3e4_seed2.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/10_resume_best_lr1p5e4_seed2.yml",
-    "configs/experiments/nq5m_transfer_nq1h_run79_v1/11_resume_best_lr7p5e5_seed2.yml",
-]
-
-
-QUEUE_CONFIGS = {
-    "nq1h_search_v1": NQ1H_SEARCH_V1_CONFIGS,
-    "nq1h_lr_decay_split90_v1": (
-        NQ1H_LR_DECAY_SPLIT90_V1_CONFIGS
-    ),
-    "nq1h_split90_epoch2_lr_grid_v1": (
-        NQ1H_SPLIT90_EPOCH2_LR_GRID_V1_CONFIGS
-    ),
-    "nq1h_split90_fresh_lr3e4_seeds_v1": (
-        NQ1H_SPLIT90_FRESH_LR3E4_SEEDS_V1_CONFIGS
-    ),
-    "nq1h_split90_fresh_lr_grid_v1": (
-        NQ1H_SPLIT90_FRESH_LR_GRID_V1_CONFIGS
-    ),
-    "nq5m_transfer_nq1h_run79_v1": (
-        NQ5M_TRANSFER_NQ1H_RUN79_V1_CONFIGS
-    ),
-}
-
+QUEUE_DIRECTORY = (
+    ROOT / "configs" / "search_queues"
+)
+QUEUE_SCHEMA_VERSION = 1
 DEFAULT_QUEUE = "nq1h_search_v1"
 
 
@@ -276,6 +102,131 @@ class RunResult:
     wall_seconds: float | None = None
 
 
+def discover_queue_manifests() -> dict[str, Path]:
+    if not QUEUE_DIRECTORY.is_dir():
+        raise RuntimeError(
+            f"Queue directory does not exist: {QUEUE_DIRECTORY}"
+        )
+
+    manifests: dict[str, Path] = {}
+
+    paths = sorted(
+        [
+            *QUEUE_DIRECTORY.glob("*.yml"),
+            *QUEUE_DIRECTORY.glob("*.yaml"),
+        ]
+    )
+
+    for path in paths:
+        queue_name = path.stem
+
+        if queue_name in manifests:
+            raise RuntimeError(
+                f"Duplicate queue manifest name: {queue_name}"
+            )
+
+        manifests[queue_name] = path
+
+    if not manifests:
+        raise RuntimeError(
+            f"No queue manifests found in {QUEUE_DIRECTORY}"
+        )
+
+    if DEFAULT_QUEUE not in manifests:
+        raise RuntimeError(
+            f"Default queue manifest is missing: {DEFAULT_QUEUE}"
+        )
+
+    return manifests
+
+
+def load_queue_config_paths(queue_name: str) -> list[str]:
+    manifests = discover_queue_manifests()
+
+    try:
+        path = manifests[queue_name]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"Unknown experiment queue: {queue_name}"
+        ) from exc
+
+    try:
+        payload = yaml.safe_load(
+            path.read_text(encoding="utf-8")
+        )
+    except yaml.YAMLError as exc:
+        raise RuntimeError(
+            f"Invalid queue YAML: {path}"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"Queue manifest must contain a mapping: {path}"
+        )
+
+    if payload.get("queue_schema_version") != QUEUE_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Unsupported queue_schema_version in {path}; "
+            f"expected {QUEUE_SCHEMA_VERSION}."
+        )
+
+    manifest_name = payload.get("name")
+
+    if manifest_name != queue_name:
+        raise RuntimeError(
+            f"Queue name in {path} must be {queue_name!r}; "
+            f"found {manifest_name!r}."
+        )
+
+    raw_configs = payload.get("configs")
+
+    if not isinstance(raw_configs, list) or not raw_configs:
+        raise RuntimeError(
+            f"Queue configs must be a non-empty list: {path}"
+        )
+
+    config_paths: list[str] = []
+    seen: set[str] = set()
+    root = ROOT.resolve()
+
+    for index, raw_config in enumerate(raw_configs, start=1):
+        if not isinstance(raw_config, str) or not raw_config.strip():
+            raise RuntimeError(
+                f"Queue config #{index} in {path} "
+                "must be a non-empty string."
+            )
+
+        relative = Path(raw_config)
+
+        if relative.is_absolute():
+            raise RuntimeError(
+                f"Queue config #{index} in {path} "
+                "must be relative to the repository root."
+            )
+
+        resolved = (ROOT / relative).resolve()
+
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Queue config #{index} in {path} "
+                "escapes the repository root."
+            ) from exc
+
+        normalized = relative.as_posix()
+
+        if normalized in seen:
+            raise RuntimeError(
+                f"Duplicate queue config in {path}: {normalized}"
+            )
+
+        seen.add(normalized)
+        config_paths.append(normalized)
+
+    return config_paths
+
+
 def find_single(text: str, pattern: str, field: str) -> str:
     matches = re.findall(pattern, text, flags=re.MULTILINE)
 
@@ -285,6 +236,115 @@ def find_single(text: str, pattern: str, field: str) -> str:
         )
 
     return matches[0]
+
+
+def parse_queue_selection(value: str) -> tuple[int, ...]:
+    positions: set[int] = set()
+
+    for raw_token in value.split(","):
+        token = raw_token.strip()
+
+        if not token:
+            raise argparse.ArgumentTypeError(
+                "Queue selection contains an empty item."
+            )
+
+        if "-" in token:
+            parts = token.split("-")
+
+            if len(parts) != 2:
+                raise argparse.ArgumentTypeError(
+                    f"Invalid queue range: {token!r}."
+                )
+
+            try:
+                first = int(parts[0].strip())
+                last = int(parts[1].strip())
+            except ValueError as exc:
+                raise argparse.ArgumentTypeError(
+                    f"Invalid queue range: {token!r}."
+                ) from exc
+
+            if first < 1 or last < 1:
+                raise argparse.ArgumentTypeError(
+                    "Queue positions must be positive integers."
+                )
+
+            if first > last:
+                raise argparse.ArgumentTypeError(
+                    f"Queue range start exceeds its end: {token!r}."
+                )
+
+            positions.update(range(first, last + 1))
+            continue
+
+        try:
+            position = int(token)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"Invalid queue position: {token!r}."
+            ) from exc
+
+        if position < 1:
+            raise argparse.ArgumentTypeError(
+                "Queue positions must be positive integers."
+            )
+
+        positions.add(position)
+
+    if not positions:
+        raise argparse.ArgumentTypeError(
+            "At least one queue position is required."
+        )
+
+    return tuple(sorted(positions))
+
+
+def resolve_queue_selection(
+    configs: list[ConfigMeta],
+    *,
+    start_at: int | None,
+    selected_positions: tuple[int, ...] | None,
+) -> list[tuple[int, ConfigMeta]]:
+    if start_at is not None and selected_positions is not None:
+        raise ValueError(
+            "--start-at and --select cannot be combined."
+        )
+
+    queue_total = len(configs)
+
+    if start_at is not None:
+        if start_at < 1 or start_at > queue_total:
+            raise ValueError(
+                f"--start-at must be between 1 and {queue_total}."
+            )
+
+        positions = tuple(range(start_at, queue_total + 1))
+    elif selected_positions is not None:
+        invalid = [
+            position
+            for position in selected_positions
+            if position > queue_total
+        ]
+
+        if invalid:
+            invalid_text = ", ".join(
+                str(position)
+                for position in invalid
+            )
+            raise ValueError(
+                f"Queue positions exceed queue size {queue_total}: "
+                f"{invalid_text}."
+            )
+
+        positions = selected_positions
+    else:
+        positions = tuple(range(1, queue_total + 1))
+
+    return [
+        (position, configs[position - 1])
+        for position in positions
+    ]
 
 
 def read_config_meta(relative_path: str) -> ConfigMeta:
@@ -395,56 +455,42 @@ def assert_git_clean() -> None:
         )
 
 
-def print_queue(configs: list[ConfigMeta], start_at: int) -> None:
+def print_queue(
+    queue_name: str,
+    configs: list[ConfigMeta],
+    selected_positions: set[int],
+) -> None:
     print()
-    print("=" * 92)
-    print("PPO SEARCH QUEUE")
-    print("=" * 92)
+    print("=" * 100)
+    print(f"PPO SEARCH QUEUE | {queue_name}")
+    print("=" * 100)
     print(
+        f"{'run':>3}  "
         f"{'#':>3}  "
         f"{'n_epochs':>8}  "
         f"{'learning_rate':>13}  "
         f"{'seed':>4}  "
         f"name"
     )
-    print("-" * 92)
+    print("-" * 100)
 
-    for i, cfg in enumerate(configs, start=1):
-        marker = "->" if i == start_at else "  "
+    for position, config in enumerate(configs, start=1):
+        marker = "[x]" if position in selected_positions else "[ ]"
 
         print(
-            f"{marker} "
-            f"{i:>2}  "
-            f"{cfg.n_epochs:>8}  "
-            f"{cfg.learning_rate:>13.8f}  "
-            f"{cfg.seed:>4}  "
-            f"{cfg.name}"
+            f"{marker:>3}  "
+            f"{position:>3}  "
+            f"{config.n_epochs:>8}  "
+            f"{config.learning_rate:>13.8f}  "
+            f"{config.seed:>4}  "
+            f"{config.name}"
         )
 
-    print("=" * 92)
+    print("=" * 100)
+    print(
+        f"Selected: {len(selected_positions)}/{len(configs)}"
+    )
     print()
-
-
-def should_echo_training_line(line: str) -> bool:
-    """Hide raw SB3 logger tables while preserving our normal training UI."""
-    stripped = line.strip()
-
-    # Stable-Baselines3 logger rows:
-    #
-    # | time/              |          |
-    # |    fps             | 1500     |
-    # | train/             |          |
-    # |    approx_kl       | ...      |
-    #
-    if stripped.startswith("|") and stripped.endswith("|"):
-        return False
-
-    # SB3 table separators such as:
-    # -----------------------------------------
-    if stripped and set(stripped) == {"-"}:
-        return False
-
-    return True
 
 
 def parse_output_line(result: RunResult, line: str) -> None:
@@ -520,18 +566,23 @@ def parse_output_line(result: RunResult, line: str) -> None:
 
 
 def run_config(
-    queue_index: int,
+    *,
+    queue_name: str,
+    queue_position: int,
     queue_total: int,
+    selected_index: int,
+    selected_total: int,
     config: ConfigMeta,
 ) -> RunResult:
     result = RunResult(
-        queue_index=queue_index,
+        queue_index=queue_position,
         config=config,
         status="RUNNING",
     )
 
     command = [
         sys.executable,
+        "-u",
         "-m",
         "train_and_eval.training",
         "--config",
@@ -540,19 +591,24 @@ def run_config(
     ]
 
     print()
-    print("#" * 100)
+    print("=" * 100)
     print(
-        f"QUEUE {queue_index}/{queue_total}"
-        f" | n_epochs={config.n_epochs}"
-        f" | lr={config.learning_rate}"
-        f" | gamma={config.gamma}"
-        f" | gae={config.gae_lambda}"
-        f" | ent={config.ent_coef}"
-        f" | exp_pen={config.exposure_penalty}"
-        f" | seed={config.seed}"
+        f"PPO QUEUE PROGRESS "
+        f"[{selected_index}/{selected_total}]"
     )
-    print(f"CONFIG: {config.path.relative_to(ROOT)}")
-    print("#" * 100)
+    print(f"Queue: {queue_name}")
+    print(
+        f"Queue position: "
+        f"{queue_position}/{queue_total}"
+    )
+    print(
+        f"Remaining after this run: "
+        f"{selected_total - selected_index}"
+    )
+    print(
+        f"Config: {config.path.relative_to(ROOT)}"
+    )
+    print("=" * 100)
     print()
 
     started = time.perf_counter()
@@ -570,15 +626,8 @@ def run_config(
 
     try:
         for line in process.stdout:
-            # Always parse the complete child-process output so the final
-            # summary still has all available metrics.
             parse_output_line(result, line)
-
-            # But keep the terminal clean: show our regular preflight,
-            # progress bars, validation output and completion summary while
-            # suppressing raw Stable-Baselines3 logger tables.
-            if should_echo_training_line(line):
-                print(line, end="", flush=True)
+            print(line, end="", flush=True)
 
         return_code = process.wait()
 
@@ -1015,7 +1064,13 @@ def print_summary(results: list[RunResult]) -> None:
     print()
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(
+    argv: list[str] | None = None,
+) -> argparse.Namespace:
+    queue_names = tuple(
+        discover_queue_manifests()
+    )
+
     parser = argparse.ArgumentParser(
         description=(
             "Run PPO experiment configs sequentially "
@@ -1025,7 +1080,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--queue",
-        choices=tuple(QUEUE_CONFIGS),
+        choices=queue_names,
         default=DEFAULT_QUEUE,
         help=(
             "Experiment queue to run. "
@@ -1039,13 +1094,25 @@ def parse_args() -> argparse.Namespace:
         help="Print the queue without starting training.",
     )
 
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+
+    selection.add_argument(
         "--start-at",
         type=int,
-        default=1,
+        default=None,
         help=(
-            "Start from this 1-based queue position. "
-            "Useful after an interrupted run."
+            "Run this 1-based queue position and every "
+            "position after it. Useful after interruption."
+        ),
+    )
+
+    selection.add_argument(
+        "--select",
+        type=parse_queue_selection,
+        metavar="POSITIONS",
+        help=(
+            "Run selected 1-based queue positions in manifest "
+            "order, for example: 1,3,5-8."
         ),
     )
 
@@ -1058,48 +1125,67 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
     args = parse_args()
 
+    config_paths = load_queue_config_paths(args.queue)
     configs = [
         read_config_meta(path)
-        for path in QUEUE_CONFIGS[args.queue]
+        for path in config_paths
     ]
 
-    if args.start_at < 1 or args.start_at > len(configs):
-        raise SystemExit(
-            f"--start-at must be between 1 and {len(configs)}"
+    try:
+        selected = resolve_queue_selection(
+            configs,
+            start_at=args.start_at,
+            selected_positions=args.select,
         )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    selected_positions = {
+        position
+        for position, _ in selected
+    }
 
     if args.summary_only:
         database_results = load_results_from_database(configs)
         print_summary(database_results)
         return 0
 
-    print_queue(configs, args.start_at)
+    print_queue(
+        args.queue,
+        configs,
+        selected_positions,
+    )
 
     if args.dry_run:
-        print("DRY RUN: no training was started.")
+        print(
+            f"DRY RUN: selected {len(selected)} "
+            f"of {len(configs)} configs; "
+            "no training was started."
+        )
         return 0
 
     assert_git_clean()
 
-    selected = configs[args.start_at - 1:]
-
     results: list[RunResult] = []
 
     try:
-        for offset, config in enumerate(
-            selected,
-            start=args.start_at,
-        ):
+        for selected_index, (
+            queue_position,
+            config,
+        ) in enumerate(selected, start=1):
             result = run_config(
-                offset,
-                len(configs),
-                config,
+                queue_name=args.queue,
+                queue_position=queue_position,
+                queue_total=len(configs),
+                selected_index=selected_index,
+                selected_total=len(selected),
+                config=config,
             )
             results.append(result)
 
@@ -1107,7 +1193,7 @@ def main() -> int:
                 print()
                 print(
                     f"Stopping queue because experiment "
-                    f"{offset} ended with status "
+                    f"{queue_position} ended with status "
                     f"{result.status}."
                 )
                 break

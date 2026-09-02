@@ -97,20 +97,15 @@ def test_queue_manifest_loading(
     ]
 
 
-def test_run_config_echoes_unfiltered_training_output(
+def test_run_config_inherits_terminal_streams(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     class FakeProcess:
-        stdout = iter(
-            [
-                "PPO RUN #123 test_run\n",
-                "| train/ | value |\n",
-                "---------------------------------\n",
-            ]
-        )
-
         def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
             return 0
 
     calls = []
@@ -143,15 +138,20 @@ def test_run_config_echoes_unfiltered_training_output(
     )
 
     output = capsys.readouterr().out
+    command, kwargs = calls[0]
 
     assert "PPO QUEUE PROGRESS [2/3]" in output
     assert "Queue position: 4/10" in output
     assert "Remaining after this run: 1" in output
-    assert "| train/ | value |" in output
-    assert "---------------------------------" in output
-    assert calls[0][0][1] == "-u"
+    assert command == [
+        queue.sys.executable,
+        "-m",
+        "train_and_eval.training",
+        "--config",
+        "configs/test.yml",
+    ]
+    assert kwargs == {"cwd": queue.ROOT}
     assert result.status == "COMPLETED"
-    assert result.run_id == 123
 
 
 def test_find_existing_selected_runs_uses_database_status() -> None:

@@ -619,12 +619,10 @@ def run_config(
 
     command = [
         sys.executable,
-        "-u",
         "-m",
         "train_and_eval.training",
         "--config",
         str(config.path.relative_to(ROOT)),
-        "--traceback",
     ]
 
     print()
@@ -648,36 +646,34 @@ def run_config(
     print("=" * 100)
     print()
 
+    # Preserve the exact terminal behavior of a direct training command.
+    # In particular, do not pipe stdout/stderr: the training CLI uses TTY
+    # detection to choose its interactive progress presentation.
+    sys.stdout.flush()
+    sys.stderr.flush()
+
     started = time.perf_counter()
 
     process = subprocess.Popen(
         command,
         cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
     )
 
-    assert process.stdout is not None
-
     try:
-        for line in process.stdout:
-            parse_output_line(result, line)
-            print(line, end="", flush=True)
-
         return_code = process.wait()
 
     except KeyboardInterrupt:
         print()
         print("Interrupted by user. Terminating current training...")
-        process.terminate()
 
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        if process.poll() is None:
+            process.terminate()
+
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
         result.status = "INTERRUPTED"
         result.wall_seconds = time.perf_counter() - started

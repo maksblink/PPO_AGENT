@@ -347,6 +347,43 @@ def resolve_queue_selection(
     ]
 
 
+def find_existing_selected_runs(
+    selected: list[tuple[int, ConfigMeta]],
+    database_results: list[RunResult],
+) -> list[tuple[int, ConfigMeta, RunResult]]:
+    existing_by_name = {
+        result.config.name: result
+        for result in database_results
+        if result.status != "NOT_FOUND"
+    }
+
+    return [
+        (position, config, existing_by_name[config.name])
+        for position, config in selected
+        if config.name in existing_by_name
+    ]
+
+
+def print_existing_selected_runs(
+    existing: list[tuple[int, ConfigMeta, RunResult]],
+) -> None:
+    print()
+    print("Selected configs already registered in PostgreSQL:")
+
+    for position, config, result in existing:
+        run_text = (
+            "-"
+            if result.run_id is None
+            else f"#{result.run_id}"
+        )
+        print(
+            f"  queue_position={position}"
+            f" | run={run_text}"
+            f" | status={result.status}"
+            f" | {config.name}"
+        )
+
+
 def read_config_meta(relative_path: str) -> ConfigMeta:
     path = ROOT / relative_path
 
@@ -1117,6 +1154,15 @@ def parse_args(
     )
 
     parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help=(
+            "Skip selected configs whose run names are already "
+            "registered in PostgreSQL."
+        ),
+    )
+
+    parser.add_argument(
         "--summary-only",
         action="store_true",
         help=(
@@ -1156,13 +1202,12 @@ def main() -> int:
         print_summary(database_results)
         return 0
 
-    print_queue(
-        args.queue,
-        configs,
-        selected_positions,
-    )
-
     if args.dry_run:
+        print_queue(
+            args.queue,
+            configs,
+            selected_positions,
+        )
         print(
             f"DRY RUN: selected {len(selected)} "
             f"of {len(configs)} configs; "
@@ -1171,6 +1216,65 @@ def main() -> int:
         return 0
 
     assert_git_clean()
+
+    preflight_results = load_results_from_database(configs)
+    existing = find_existing_selected_runs(
+        selected,
+        preflight_results,
+    )
+
+    if existing and not args.skip_existing:
+        print_queue(
+            args.queue,
+            configs,
+            selected_positions,
+        )
+        print_existing_selected_runs(existing)
+        print()
+        print(
+            "QUEUE PREFLIGHT FAILED: no training was started."
+        )
+        print(
+            "Choose configs that are not registered, or pass "
+            "--skip-existing to run only missing selections."
+        )
+        return 2
+
+    if existing:
+        print_existing_selected_runs(existing)
+        print()
+        print(
+            f"Skipping {len(existing)} existing selected "
+            f"config(s)."
+        )
+
+        existing_names = {
+            config.name
+            for _, config, _ in existing
+        }
+        selected = [
+            (position, config)
+            for position, config in selected
+            if config.name not in existing_names
+        ]
+        selected_positions = {
+            position
+            for position, _ in selected
+        }
+
+    print_queue(
+        args.queue,
+        configs,
+        selected_positions,
+    )
+
+    if not selected:
+        print(
+            "No selected configs remain after skipping existing "
+            "runs. No training was started."
+        )
+        print_summary(preflight_results)
+        return 0
 
     results: list[RunResult] = []
 

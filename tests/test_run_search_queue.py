@@ -152,3 +152,111 @@ def test_run_config_echoes_unfiltered_training_output(
     assert calls[0][0][1] == "-u"
     assert result.status == "COMPLETED"
     assert result.run_id == 123
+
+
+def test_find_existing_selected_runs_uses_database_status() -> None:
+    first = queue.ConfigMeta(
+        path=queue.ROOT / "configs" / "first.yml",
+        name="first",
+        seed=1,
+        n_epochs=3,
+        learning_rate=0.0003,
+        gamma=0.9,
+        gae_lambda=0.85,
+        ent_coef=0.0002,
+        exposure_penalty=0.0,
+    )
+    second = queue.ConfigMeta(
+        path=queue.ROOT / "configs" / "second.yml",
+        name="second",
+        seed=2,
+        n_epochs=3,
+        learning_rate=0.0003,
+        gamma=0.9,
+        gae_lambda=0.85,
+        ent_coef=0.0002,
+        exposure_penalty=0.0,
+    )
+
+    completed = queue.RunResult(
+        queue_index=1,
+        config=first,
+        status="COMPLETED",
+        run_id=91,
+    )
+    missing = queue.RunResult(
+        queue_index=2,
+        config=second,
+        status="NOT_FOUND",
+    )
+
+    assert queue.find_existing_selected_runs(
+        [(1, first), (2, second)],
+        [completed, missing],
+    ) == [(1, first, completed)]
+
+
+def test_main_preflight_blocks_existing_run_before_training(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = queue.ConfigMeta(
+        path=queue.ROOT / "configs" / "existing.yml",
+        name="existing",
+        seed=1,
+        n_epochs=3,
+        learning_rate=0.0003,
+        gamma=0.9,
+        gae_lambda=0.85,
+        ent_coef=0.0002,
+        exposure_penalty=0.0,
+    )
+    existing = queue.RunResult(
+        queue_index=1,
+        config=config,
+        status="COMPLETED",
+        run_id=84,
+    )
+
+    monkeypatch.setattr(
+        queue,
+        "parse_args",
+        lambda: type(
+            "Args",
+            (),
+            {
+                "queue": "test",
+                "start_at": None,
+                "select": (1,),
+                "summary_only": False,
+                "dry_run": False,
+                "skip_existing": False,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        queue,
+        "load_queue_config_paths",
+        lambda name: ["configs/existing.yml"],
+    )
+    monkeypatch.setattr(
+        queue,
+        "read_config_meta",
+        lambda path: config,
+    )
+    monkeypatch.setattr(queue, "assert_git_clean", lambda: None)
+    monkeypatch.setattr(
+        queue,
+        "load_results_from_database",
+        lambda configs: [existing],
+    )
+
+    def fail_if_started(**kwargs):
+        raise AssertionError("training must not start")
+
+    monkeypatch.setattr(queue, "run_config", fail_if_started)
+
+    assert queue.main() == 2
+    output = capsys.readouterr().out
+    assert "QUEUE PREFLIGHT FAILED" in output
+    assert "run=#84" in output

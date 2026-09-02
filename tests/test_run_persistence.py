@@ -26,6 +26,7 @@ from train_and_eval.run_config import (
     normalize_config,
 )
 from train_and_eval.training.persistence import (
+    RunAlreadyExistsError,
     RunIdentityError,
     RunSourceCheckpointNotFoundError,
     RunStateTransitionError,
@@ -37,9 +38,22 @@ from train_and_eval.training.persistence import (
 )
 
 
+class FakeScalarResult:
+    def __init__(self, values) -> None:
+        self.values = list(values)
+
+    def one_or_none(self):
+        if not self.values:
+            return None
+        if len(self.values) != 1:
+            raise RuntimeError("multiple rows")
+        return self.values[0]
+
+
 class FakeSession:
     def __init__(self) -> None:
         self.run: Run | None = None
+        self.existing_run: object | None = None
         self.source_checkpoint: object | None = None
         self.source_run: object | None = None
         self.commit_calls = 0
@@ -90,6 +104,14 @@ class FakeSession:
         raise AssertionError(
             f"Unexpected model: {model}"
         )
+
+    def scalars(self, statement):
+        values = (
+            []
+            if self.existing_run is None
+            else [self.existing_run]
+        )
+        return FakeScalarResult(values)
 
     def add(self, value: object) -> None:
         assert isinstance(value, Run)
@@ -192,6 +214,37 @@ def test_creates_pending_run_from_verified_inputs() -> None:
     assert session.run.git_commit == "b" * 40
     assert session.commit_calls == 1
     assert session.rollback_calls == 0
+
+
+
+
+def test_create_pending_rejects_existing_run_name() -> None:
+    session = FakeSession()
+    loaded = _loaded_config()
+    session.existing_run = SimpleNamespace(
+        id=84,
+        name=loaded.config.run.name,
+        status=RunStatus.COMPLETED,
+    )
+
+    with pytest.raises(
+        RunAlreadyExistsError,
+        match=(
+            r"already registered as run #84 "
+            r"with status 'completed'"
+        ),
+    ):
+        create_pending_run(
+            FakeSessionFactory(session),
+            loaded_config=loaded,
+            split=_split(loaded),
+            git_state=_git_state(),
+            training_steps_requested=499_712,
+        )
+
+    assert session.run is None
+    assert session.flush_calls == 0
+    assert session.commit_calls == 0
 
 
 def test_rejects_unverified_loaded_config() -> None:

@@ -9,6 +9,7 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_EVEN
 from typing import Any, TypeVar
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from train_and_eval.database.models import (
@@ -42,6 +43,10 @@ class RunPersistenceError(RuntimeError):
 
 class RunIdentityError(RunPersistenceError):
     """Raised when a run definition or progress value is invalid."""
+
+
+class RunAlreadyExistsError(RunPersistenceError):
+    """Raised when a run name is already registered."""
 
 
 class RunNotFoundError(RunPersistenceError):
@@ -194,6 +199,36 @@ def _data_epochs_completed(
     )
 
 
+def require_run_name_available(
+    session_factory: SessionFactory,
+    *,
+    run_name: str,
+) -> None:
+    """Reject a run name that is already registered."""
+    with session_factory() as session:
+        statement = select(Run).where(
+            Run.name == run_name
+        )
+        existing = session.scalars(
+            statement
+        ).one_or_none()
+
+    if existing is None:
+        return
+
+    status = getattr(
+        existing.status,
+        "value",
+        existing.status,
+    )
+
+    raise RunAlreadyExistsError(
+        f"Run name {run_name!r} is already registered "
+        f"as run #{existing.id} with status {status!r}. "
+        "Choose a unique run.name or inspect the existing run."
+    )
+
+
 def create_pending_run(
     session_factory: SessionFactory,
     *,
@@ -205,6 +240,10 @@ def create_pending_run(
 ) -> PersistedRunState:
     """Create one pending training run from verified immutable inputs."""
     config = loaded_config.config
+    require_run_name_available(
+        session_factory,
+        run_name=config.run.name,
+    )
     manifest_entry = loaded_config.data_manifest_entry
 
     if manifest_entry is None:

@@ -14,8 +14,12 @@ from train_and_eval.database.session import (
 from train_and_eval.reproducibility import (
     require_clean_git,
 )
+from train_and_eval.run_config import load_run_config
 from train_and_eval.training.progress import (
     LiveTrainingProgress,
+)
+from train_and_eval.training.persistence import (
+    require_run_name_available,
 )
 from train_and_eval.training.service import (
     TrainingServiceResult,
@@ -278,6 +282,22 @@ def _supports_live_output(stream: TextIO) -> bool:
         return False
 
 
+def preflight_training_run_name(
+    session_factory,
+    *,
+    config_path,
+) -> None:
+    """Reject a duplicate run name before resolving training."""
+    loaded_config = load_run_config(
+        config_path,
+        verify_data=False,
+    )
+    require_run_name_available(
+        session_factory,
+        run_name=loaded_config.config.run.name,
+    )
+
+
 def execute_training_cli(
     args: argparse.Namespace,
     *,
@@ -294,6 +314,10 @@ def execute_training_cli(
         engine = create_database_engine()
         session_factory = create_session_factory(
             engine
+        )
+        preflight_training_run_name(
+            session_factory,
+            config_path=args.config,
         )
 
         live_output = (

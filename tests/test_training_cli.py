@@ -24,6 +24,7 @@ from train_and_eval.training.execution import (
 )
 from train_and_eval.training.persistence import (
     PersistedRunState,
+    RunAlreadyExistsError,
 )
 from train_and_eval.training.service import (
     TrainingServiceResult,
@@ -169,6 +170,17 @@ def _args(**overrides):
     return SimpleNamespace(**values)
 
 
+@pytest.fixture(autouse=True)
+def stub_run_name_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "preflight_training_run_name",
+        lambda session_factory, **kwargs: None,
+    )
+
+
 def test_executes_training_and_prints_success_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -244,6 +256,68 @@ def test_executes_training_and_prints_success_summary(
     assert "Best checkpoint ID:     91" in output
     assert "Final checkpoint ID:    92" in output
     assert "step_000000000100_final.zip" in output
+
+
+
+
+def test_duplicate_run_name_is_rejected_before_training(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = FakeEngine()
+    session_factory = object()
+    training_calls = []
+
+    monkeypatch.setattr(
+        cli,
+        "require_clean_git",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_database_engine",
+        lambda: engine,
+    )
+    monkeypatch.setattr(
+        cli,
+        "create_session_factory",
+        lambda received_engine: session_factory,
+    )
+
+    def reject_duplicate(received_factory, **kwargs):
+        assert received_factory is session_factory
+        raise RunAlreadyExistsError(
+            "Run name 'duplicate' is already registered "
+            "as run #98 with status 'completed'."
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "preflight_training_run_name",
+        reject_duplicate,
+    )
+    monkeypatch.setattr(
+        cli,
+        "train_ppo_run",
+        lambda *args, **kwargs: training_calls.append(
+            (args, kwargs)
+        ),
+    )
+
+    stdout = StringIO()
+    stderr = StringIO()
+    exit_code = cli.execute_training_cli(
+        _args(),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert exit_code == 1
+    assert stdout.getvalue() == ""
+    assert "Training run: FAILED" in stderr.getvalue()
+    assert "RunAlreadyExistsError" in stderr.getvalue()
+    assert "run #98" in stderr.getvalue()
+    assert training_calls == []
+    assert engine.dispose_calls == 1
 
 
 def test_prints_resume_and_early_stopping_summary(

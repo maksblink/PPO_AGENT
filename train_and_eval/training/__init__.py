@@ -28,6 +28,7 @@ from train_and_eval.training.service import (
 )
 from train_and_eval.training.persistence import (
     PersistedRunState,
+    RunAlreadyExistsError,
     RunIdentityError,
     RunNotFoundError,
     RunPersistenceError,
@@ -37,6 +38,7 @@ from train_and_eval.training.persistence import (
     create_pending_run,
     fail_run,
     mark_run_running,
+    require_run_name_available,
     update_run_progress,
 )
 
@@ -59,6 +61,7 @@ __all__ = [
     "PPOTrainingExecutionError",
     "PPOTrainingIdentityError",
     "PersistedRunState",
+    "RunAlreadyExistsError",
     "RunIdentityError",
     "RunNotFoundError",
     "RunPersistenceError",
@@ -69,5 +72,6 @@ __all__ = [
     "fail_run",
     "learn_ppo_exact_timesteps",
     "mark_run_running",
+    "require_run_name_available",
     "update_run_progress",
 ]

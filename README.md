@@ -1,185 +1,130 @@
 # PPO_AGENT
 
-PPO-based reinforcement learning research project for training and evaluating trading agents on historical market data.
+Research infrastructure for training, evaluating, comparing, and reproducing
+PPO trading agents on historical market data.
 
-The project is designed around **reproducible experiments**, **PostgreSQL-backed run tracking**, **immutable checkpoints**, **persistent evaluation results**, **resumable training**, and **rebuildable artifacts**.
+The project is built around a strict experiment lifecycle:
 
-The target trading setup is **5-minute market data**. Longer intervals such as **1 hour** are used for faster research, infrastructure validation, hyperparameter screening, and diagnostic experiments. Final conclusions about the trading agent should be confirmed on the target 5-minute setup.
+- experiments are defined in versioned YAML files;
+- market data is validated against a manifest and SHA-256 hashes;
+- training requires a clean Git worktree;
+- every `run.name` is globally unique;
+- PostgreSQL stores run identity, resolved configuration, metrics, checkpoints,
+  and evaluation results;
+- checkpoints are immutable and can be replayed without retraining;
+- reports and dashboard views are derived from persisted experiment data.
 
----
+The target research interval is **5 minutes**. Longer intervals such as
+**1 hour** are primarily used for rapid iteration, infrastructure validation,
+diagnostics, and proof-of-concept experiments. A result discovered on 1-hour
+data is not considered confirmed until it is tested on the target 5-minute
+setup and across multiple seeds.
 
-## Table of contents
+> [!IMPORTANT]
+> This repository is research software. Backtest results are not evidence of
+> future profitability and should not be interpreted as financial advice.
 
-- [Main features](#main-features)
+## Contents
+
+- [Core capabilities](#core-capabilities)
+- [Architecture](#architecture)
 - [Quick start](#quick-start)
-- [Project structure](#project-structure)
-- [Run configuration](#run-configuration)
-- [Training and evaluation devices](#training-and-evaluation-devices)
-- [Training](#training)
+- [Market data](#market-data)
+- [Experiment configuration](#experiment-configuration)
+- [Reproducibility contract](#reproducibility-contract)
+- [Single-run training](#single-run-training)
+- [Search queues](#search-queues)
 - [Resume training](#resume-training)
-- [Run registry CLI](#run-registry-cli)
-- [Database](#database)
-- [Evaluation policy modes](#evaluation-policy-modes)
+- [Run registry](#run-registry)
+- [Evaluation and checkpoint replay](#evaluation-and-checkpoint-replay)
+- [Threshold sweeps](#threshold-sweeps)
 - [Reports and artifacts](#reports-and-artifacts)
-- [Policy probability diagnostics](#policy-probability-diagnostics)
 - [Dashboard](#dashboard)
-- [Pareto Explorer](#pareto-explorer)
-- [Extra tools](#extra-tools)
-- [Artifact layout](#artifact-layout)
-- [What is stored where](#what-is-stored-where)
-- [Database migrations](#database-migrations)
-- [Testing](#testing)
+- [Database model](#database-model)
+- [Testing and development](#testing-and-development)
 - [Recommended research workflow](#recommended-research-workflow)
-- [1-hour research vs 5-minute target](#1-hour-research-vs-5-minute-target)
+- [Troubleshooting](#troubleshooting)
 
----
+## Core capabilities
 
-## Main features
-
-- YAML-configured PPO experiments
+- YAML-configured fresh and resumed PPO runs
 - chronological train/validation split
-- market-data validation and SHA-256 integrity tracking
-- PostgreSQL run registry
-- Git commit and branch tracking for every run
-- clean-Git requirement for reproducible training and historical replay
-- fresh and resumed training runs
-- immutable PPO checkpoints
+- exact, batch-aligned training duration
+- periodic and final immutable checkpoints
 - periodic and final validation
-- early stopping based on validation performance
-- persistent PPO training metrics
-- critic and rollout diagnostics
-- evaluation metrics persisted in PostgreSQL
-- validation trajectories stored as Parquet when required
-- full policy action probabilities persisted in evaluation trajectories
-- rebuildable reports and plots
-- automatic policy-confidence plots
-- Streamlit experiment dashboard
-- interactive Pareto-front analysis
-- cross-run policy-probability comparison tools
-- probability-threshold replay diagnostics
+- early stopping based on validation score
 - separate devices for training and evaluation
-- Alembic-managed database migrations
+- full PostgreSQL experiment registry
+- unique run-name preflight before training
+- Git commit and branch tracking
+- market-data identity and SHA-256 tracking
+- persistent PPO, rollout, and critic diagnostics
+- persisted evaluation metrics and trajectories
+- deterministic, stochastic, and probability-threshold policies
+- replay of arbitrary existing checkpoints
+- probability-threshold sweeps without retraining
+- rebuildable run and evaluation reports
+- Streamlit experiment dashboard
+- Pareto-front exploration
+- YAML search-queue manifests with selective execution
+- Alembic-managed schema migrations
 - automated tests with pytest
 
----
-
-# Quick start
-
-## 1. Create and activate a virtual environment
-
-Example on Linux:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-## 2. Install the project
-
-Install runtime dependencies:
-
-```bash
-python -m pip install -e .
-```
-
-Install development dependencies too:
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-## 3. Start PostgreSQL
-
-```bash
-docker compose up -d postgres
-```
-
-Check it:
-
-```bash
-docker compose ps
-```
-
-A local development setup may expose PostgreSQL on a non-default host port, for example:
+## Architecture
 
 ```text
-127.0.0.1:5433 -> container:5432
+YAML config + verified market data + clean Git commit
+                         |
+                         v
+                    PPO training
+                         |
+             +-----------+-----------+
+             |                       |
+             v                       v
+      PostgreSQL registry      checkpoint files
+             |                       |
+             +-----------+-----------+
+                         |
+                         v
+               evaluation / replay
+                         |
+             +-----------+-----------+
+             |                       |
+             v                       v
+       persisted metrics      rebuildable artifacts
+                                     |
+                                     v
+                            reports and dashboard
 ```
 
-## 4. Configure `DATABASE_URL`
+PostgreSQL is the source of truth for experiment history. Checkpoint files are
+the immutable model source for historical replay. CSV, Parquet, JSON, and PNG
+outputs are analysis artifacts and can be rebuilt when their source data still
+exists.
 
-The database connection is read from the environment or local `.env`.
-
-Example:
-
-```env
-DATABASE_URL=postgresql+psycopg://ppo_agent:<password>@127.0.0.1:5433/ppo_agent
-```
-
-Do not commit real secrets.
-
-The database layer validates that the URL points to PostgreSQL and uses psycopg.
-
-## 5. Apply migrations
-
-```bash
-alembic upgrade head
-```
-
-## 6. Run tests
-
-```bash
-pytest -q
-```
-
-## 7. Train one experiment
-
-```bash
-python -m train_and_eval.training   --config configs/experiments/nq1h_search_v1/34_nepochs3_lr2p25e4_gamma090_gae085_exp1p5em5_seed1.yml
-```
-
-## 8. Inspect the registry
-
-```bash
-python -m train_and_eval.runs list
-```
-
-## 9. Start the dashboard
-
-```bash
-streamlit run train_and_eval/dashboard/app.py
-```
-
----
-
-# Project structure
+## Project structure
 
 ```text
 PPO_AGENT/
 ├── alembic/
-│   └── versions/                  # database migrations
+│   └── versions/                 # PostgreSQL schema migrations
 ├── artifacts/
-│   └── runs/                      # generated checkpoints/reports/evaluations
+│   └── runs/                     # checkpoints and generated reports
 ├── configs/
-│   └── experiments/               # YAML experiment configurations
-├── data/                          # market-data inputs
-├── extra_tools/
-│   └── policy_probability_diagnostic.py
+│   ├── experiments/              # individual training configurations
+│   └── search_queues/            # ordered queue manifests
+├── data/                         # local market-data files
+├── extra_tools/                  # cross-run diagnostic tools
 ├── tests/
 ├── train_and_eval/
+│   ├── checkpoints/
 │   ├── dashboard/
-│   │   ├── app.py
-│   │   ├── data.py
-│   │   └── pareto.py
 │   ├── database/
-│   │   ├── models.py
-│   │   └── session.py
 │   ├── environment/
 │   ├── evaluation/
+│   ├── market_data/
 │   ├── ppo/
 │   ├── reporting/
-│   │   ├── artifacts.py
-│   │   └── service.py
 │   ├── runs/
 │   └── training/
 ├── pyproject.toml
@@ -189,17 +134,132 @@ PPO_AGENT/
 
 Generated runtime artifacts are not intended to be committed to Git.
 
----
+## Quick start
 
-# Run configuration
+### 1. Create and activate a virtual environment
 
-Experiments are defined in YAML files under:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 2. Install the project
+
+Runtime dependencies:
+
+```bash
+python -m pip install -e .
+```
+
+Runtime and development dependencies:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+### 3. Start PostgreSQL
+
+```bash
+docker compose up -d postgres
+docker compose ps
+```
+
+The local compose setup may expose PostgreSQL on a non-default host port, for
+example:
+
+```text
+127.0.0.1:5433 -> postgres:5432
+```
+
+### 4. Configure the database connection
+
+Set `DATABASE_URL` in the environment or in the local `.env` file:
+
+```env
+DATABASE_URL=postgresql+psycopg://ppo_agent:<password>@127.0.0.1:5433/ppo_agent
+```
+
+Do not commit real credentials.
+
+### 5. Apply migrations
+
+```bash
+alembic upgrade head
+alembic current
+```
+
+### 6. Verify the installation
+
+```bash
+python -m pytest -q
+```
+
+### 7. Train one committed experiment
+
+```bash
+git status --short
+python -m train_and_eval.training \
+  --config configs/experiments/<group>/<experiment>.yml
+```
+
+### 8. Inspect registered runs
+
+```bash
+python -m train_and_eval.runs list
+```
+
+### 9. Start the dashboard
+
+```bash
+streamlit run train_and_eval/dashboard/app.py
+```
+
+## Market data
+
+Market data lives under `data/` and is registered in:
+
+```text
+train_and_eval/market_data/manifest.json
+```
+
+The manifest associates each accepted file with its identity information,
+including the expected path, row count, status, and SHA-256 hash. A training
+config is loaded with data verification enabled before a run is created.
+
+This prevents an experiment from silently using a changed file under an old
+filename.
+
+The split is chronological:
+
+```text
+oldest rows                                  newest rows
+|---------------- TRAIN ----------------|--- VALIDATION ---|
+                                    split_index
+```
+
+There is no random shuffle between train and validation data.
+
+The environment uses historical rows before the scored range as observation
+lookback only. At the end of an episode, `force_close_on_done: true` closes any
+open position so the final equity includes the closing transaction.
+
+### Data identity rules
+
+- never overwrite a registered dataset and continue using its old hash;
+- regenerate or update the manifest after intentionally replacing data;
+- use new run names for experiments on a new data snapshot;
+- preserve the previous database and artifacts until historical results have
+  been archived or intentionally discarded.
+
+## Experiment configuration
+
+Individual experiments are stored under:
 
 ```text
 configs/experiments/
 ```
 
-A run configuration contains sections for:
+A configuration contains these main sections:
 
 ```text
 run
@@ -207,35 +267,123 @@ continuation
 data
 training
 logging
-artifacts
 environment
 ppo
 evaluation
+artifacts
 ```
 
-The full **normalized configuration** is persisted with every run in PostgreSQL.
+Representative structure:
 
-This means the database stores the effective configuration that was actually used, not only the original YAML path.
+```yaml
+config_schema_version: 1
 
-A controlled experiment should normally change one variable at a time:
+run:
+  name: nq5m_example_v1_seed1
+  seed: 1
 
-```text
-baseline
-  |
-  +-- learning_rate only
-  |
-  +-- gamma only
-  |
-  +-- gae_lambda only
-  |
-  +-- confirm candidate on additional seeds
+continuation:
+  mode: fresh
+
+data:
+  path: data/NQ_CONTINUOUS_5m_<snapshot>.parquet
+  train_ratio: 0.9
+
+training:
+  duration_unit: data_epochs
+  duration_amount: 1
+
+logging:
+  training_progress_every_steps: 120000
+  validation_progress_every_steps: 24000
+
+environment:
+  window: 40
+  context: baseline_multiscale_v1
+  position_side: long_only
+  market_timezone: America/New_York
+  rth_open: 09:30
+  rth_close: "16:00"
+  stake_pln: 1000.0
+  fee_bps: 1.0
+  swap_bps: 3.0
+  swap_time: "17:00"
+  swap_timezone: America/New_York
+  force_close_on_done: true
+  reward_scale: 1.0
+  exposure_penalty: 0.0
+  turnover_penalty: 0.0
+  drawdown_penalty: 0.0
+  profit_reward_mult: 1.0
+  loss_reward_mult: 1.0
+
+ppo:
+  policy: mlp
+  device: cuda
+  hidden_sizes: [384, 384, 384]
+  activation: tanh
+  value_head_init_scale: 0.003
+  initial_long_probability: 0.55
+  n_steps: 2048
+  batch_size: 1024
+  n_epochs: 3
+  learning_rate: 0.0003
+  gamma: 0.9
+  gae_lambda: 0.85
+  clip_range: 0.2
+  clip_range_vf: null
+  normalize_advantage: true
+  ent_coef: 0.0002
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: null
+
+evaluation:
+  device: cpu
+  eval_every_steps: 240000
+  checkpoint_every_steps: 240000
+  policy_mode: deterministic_argmax
+  threshold_action: null
+  probability_threshold: null
+  best_metric: balanced_score
+  early_stop_patience_evals: 5
+
+artifacts:
+  training_metrics:
+    enabled: true
+    every_steps: 2048
+  validation_trajectory:
+    mode: all
+  plots:
+    during_run: false
 ```
 
----
+The original YAML, its hash, the normalized configuration, and the normalized
+configuration hash are persisted with the run. Database comparisons therefore
+use the effective experiment definition, not only a filesystem path.
 
-# Training and evaluation devices
+### Training duration
 
-Training and evaluation can use different devices.
+Supported duration styles include a fixed number of timesteps and complete
+data epochs. The training preflight resolves the requested duration into an
+exact batch-aligned execution plan.
+
+The terminal shows:
+
+- original scored training steps;
+- any oldest training steps trimmed for batch alignment;
+- effective steps per data epoch;
+- requested and resolved duration;
+- resolved checkpoint and evaluation cadence;
+- all scheduled event steps.
+
+Stable-Baselines3 normally collects fixed-size rollouts. The project preserves
+full rollouts and uses a smaller final rollout buffer when required, so the
+resolved training duration is executed exactly.
+
+### Training and evaluation devices
+
+The devices are configured independently:
 
 ```yaml
 ppo:
@@ -245,543 +393,285 @@ evaluation:
   device: cpu
 ```
 
-Supported values:
+Accepted values are `auto`, `cpu`, and `cuda`.
 
-```text
-auto
-cpu
-cuda
-```
+## Reproducibility contract
 
-This is useful because PPO optimization can benefit from GPU acceleration while sequential validation can sometimes be more efficient on CPU.
+### Clean Git is mandatory
 
----
-
-# Training
-
-Run one YAML-configured experiment:
-
-```bash
-python -m train_and_eval.training   --config configs/experiments/<experiment>.yml
-```
-
-Example:
-
-```bash
-python -m train_and_eval.training   --config configs/experiments/nq1h_search_v1/34_nepochs3_lr2p25e4_gamma090_gae085_exp1p5em5_seed1.yml
-```
-
-A training run can create:
-
-- one row in `runs`
-- many rows in `training_metrics`
-- periodic checkpoints
-- one final checkpoint
-- scheduled evaluations
-- one final evaluation
-- evaluation trajectories
-- evaluation plots
-- run-level reports
-
-The project is intentionally strict about reproducibility. Training and historical replay require a clean Git state so the recorded commit corresponds to the code that produced the experiment.
-
-Check before important runs:
+Training and historical replay reject a dirty worktree:
 
 ```bash
 git status --short
 ```
 
-For a reproducible run this should normally be empty.
+The output should be empty before a run. Commit intentional code, config,
+migration, or test changes first.
 
----
+### Run names are immutable identities
 
-## Search queue
-
-The repository also contains:
+`run.name` is unique in PostgreSQL. Running an already registered config fails
+before expensive training work begins:
 
 ```text
-run_search_queue.py
+Training run: FAILED
+Error type: RunAlreadyExistsError
+Error: Run name '<name>' is already registered as run #<id> with status '<status>'.
 ```
 
-It is used for ordered experiment-series execution.
+To create a new experiment, use a new meaningful `run.name`. Do not delete an
+existing run merely to reuse its name.
 
-Dry run:
+### Checkpoints are immutable
+
+Each checkpoint row stores its path, SHA-256, size, local run step, and complete
+model-history step. Historical replay verifies and uses the persisted
+checkpoint rather than rebuilding model state from an informal filename.
+
+## Single-run training
+
+Run one config:
 
 ```bash
-python run_search_queue.py --dry-run
+python -m train_and_eval.training \
+  --config configs/experiments/<group>/<experiment>.yml
 ```
 
-The queue also supports continuation/inspection modes such as:
+The normal terminal view includes:
+
+1. training-resolution preflight;
+2. resolved checkpoint/evaluation schedule;
+3. run identity;
+4. live training progress;
+5. latest PPO diagnostics;
+6. final validation metrics;
+7. best and final checkpoint information.
+
+A successful training execution may persist:
+
+- one `runs` row;
+- multiple `training_metrics` rows;
+- periodic checkpoints and one final checkpoint;
+- scheduled evaluations and one final evaluation;
+- validation trajectories and report artifacts, depending on config.
+
+Use `--traceback` when diagnosing an unexpected failure:
+
+```bash
+python -m train_and_eval.training \
+  --config configs/experiments/<group>/<experiment>.yml \
+  --traceback
+```
+
+## Search queues
+
+Queues run committed experiment configs sequentially. Their definitions are
+separate YAML manifests under:
 
 ```text
---start-at
---summary-only
+configs/search_queues/
 ```
 
-Use the queue for controlled experiment series where configs are created and committed before training.
+Example manifest:
 
----
-
-# Resume training
-
-Training can continue from a checkpoint produced by an earlier run.
-
-Conceptually:
-
-```text
-Run A
-  |
-  └── Checkpoint 42
-          |
-          └── Run B (resume)
+```yaml
+queue_schema_version: 1
+name: nq5m_candidate_confirmation_v1
+configs:
+  - configs/experiments/nq5m_candidate_confirmation_v1/00_fresh_seed1.yml
+  - configs/experiments/nq5m_candidate_confirmation_v1/01_fresh_seed2.yml
+  - configs/experiments/nq5m_candidate_confirmation_v1/02_fresh_seed3.yml
 ```
 
-The lineage is stored through:
+The manifest order defines the stable 1-based queue positions used by the CLI.
+The queue name must match the manifest filename, and duplicate config paths are
+rejected.
+
+### Inspect a queue
+
+```bash
+python run_search_queue.py \
+  --queue nq5m_candidate_confirmation_v1 \
+  --dry-run
+```
+
+The table marks selected configs with `[x]` and prints the selected/total count.
+
+### Run every config
+
+```bash
+python run_search_queue.py \
+  --queue nq5m_candidate_confirmation_v1
+```
+
+### Run selected positions
+
+```bash
+python run_search_queue.py \
+  --queue nq5m_candidate_confirmation_v1 \
+  --select 1,3,5-8
+```
+
+Selections are executed in manifest order, even if the expression is written
+in another order.
+
+### Continue from a position
+
+```bash
+python run_search_queue.py \
+  --queue nq5m_candidate_confirmation_v1 \
+  --start-at 5
+```
+
+`--start-at` and `--select` are mutually exclusive.
+
+### Handle already registered configs
+
+By default, the queue checks PostgreSQL before starting any selected training.
+If at least one selected `run.name` already exists, the queue lists all
+conflicts and starts nothing.
+
+To execute only selected configs that are still missing:
+
+```bash
+python run_search_queue.py \
+  --queue nq5m_candidate_confirmation_v1 \
+  --select 1-12 \
+  --skip-existing
+```
+
+If every selected config already exists, no child process is started.
+
+### Print an existing comparison only
+
+```bash
+python run_search_queue.py \
+  --queue nq5m_candidate_confirmation_v1 \
+  --summary-only
+```
+
+The summary is rebuilt from PostgreSQL and includes final metrics, best score,
+latest PPO diagnostics, runtime, ranking, and winner information.
+
+### Queue terminal behavior
+
+Before each child run, the queue prints:
+
+- selected-run progress such as `[2/5]`;
+- original queue position;
+- remaining selected runs;
+- config path.
+
+The child training process inherits the terminal directly. Its output is the
+same live training interface as a normal single-run command. The queue does not
+replace it with raw Stable-Baselines3 tables.
+
+If one run fails, the queue stops instead of silently continuing with dependent
+configs.
+
+## Resume training
+
+A resumed run starts from an immutable checkpoint selected from an earlier run.
+
+```yaml
+run:
+  name: nq5m_example_v1_epoch2_lr3e4_seed1
+  seed: 1
+
+continuation:
+  mode: resume
+  source_run: nq5m_example_v1_epoch1_lr7p5e4_seed1
+  checkpoint: best
+```
+
+Common checkpoint selectors are:
+
+- `best` — checkpoint with the best persisted validation score;
+- `final` — final checkpoint of the source run.
+
+The new run must have its own unique name. Resume compatibility validation
+protects against continuing with incompatible data, environment, model, or PPO
+identity settings.
+
+Checkpoint steps have two meanings:
+
+| Field | Meaning |
+|---|---|
+| `run_step` | Local step within the run that created the checkpoint |
+| `model_step` | Complete step count including resume history |
+
+Lineage is persisted as:
 
 ```text
 runs.source_checkpoint_id -> checkpoints.id
 ```
 
-Resume compatibility checks protect against continuing with incompatible model, environment, or PPO settings.
+## Run registry
 
-Checkpoint steps have two meanings:
+The registry CLI is read-only except for report regeneration.
 
-```text
-run_step
-model_step
-```
-
-- `run_step` is local to the run that created the checkpoint
-- `model_step` includes the complete model history across resume boundaries
-
----
-
-# Run registry CLI
-
-## List runs
+### List recent runs
 
 ```bash
 python -m train_and_eval.runs list
 ```
 
-## Show one run
+### Show one complete run
 
 ```bash
-python -m train_and_eval.runs show --run-id 34
+python -m train_and_eval.runs show --run-id 83
 ```
 
-## List checkpoints
+### List checkpoints
 
 ```bash
-python -m train_and_eval.runs checkpoints --run-id 34
+python -m train_and_eval.runs checkpoints --run-id 83
 ```
 
-## List evaluations
+### List persisted evaluations
 
 ```bash
-python -m train_and_eval.runs evaluations --run-id 34
+python -m train_and_eval.runs evaluations --run-id 83
 ```
 
-This is a **read-only lookup**. It does not regenerate artifacts.
+This command displays existing evaluation rows. It does not replay a model.
 
-## Show full evaluation information
+### Rebuild reports
 
 ```bash
-python -m train_and_eval.runs evaluations   --run-id 34   --full
+python -m train_and_eval.runs report --run-id 83
 ```
 
-## Rebuild reports
+For exact available options:
 
 ```bash
-python -m train_and_eval.runs report --run-id 34
+python -m train_and_eval.runs --help
+python -m train_and_eval.runs report --help
 ```
 
-Unlike `evaluations`, `report` actually regenerates report/artifact files.
+## Evaluation and checkpoint replay
 
-Rebuild only one evaluation:
-
-```bash
-python -m train_and_eval.runs report   --run-id 34   --evaluation-id 136
-```
-
----
-
-# Database
-
-PostgreSQL is the persistent experiment registry and should be treated as the main source of truth for experiment identity, configuration, training history, checkpoints, and evaluation results.
-
-Main runtime tables:
-
-```text
-runs
-checkpoints
-training_metrics
-evaluations
-```
-
-## Database architecture
-
-```text
-                               runs
-                                │
-              ┌─────────────────┼─────────────────┐
-              │                 │                 │
-              ▼                 ▼                 │
-      training_metrics     checkpoints            │
-                                │                 │
-                                ▼                 │
-                           evaluations            │
-                                                  │
-                 resume relationship              │
-                 runs.source_checkpoint_id ───────┘
-                          -> checkpoints.id
-```
-
-More explicitly:
+Evaluations belong to checkpoints, not directly to runs:
 
 ```text
 runs.id
-  |
-  +----< training_metrics.run_id
-  |
-  +----< checkpoints.run_id
-               |
-               +----< evaluations.checkpoint_id
-
-runs.source_checkpoint_id
-  |
-  +--------> checkpoints.id
+   |
+   +----< checkpoints.run_id
+                    |
+                    +----< evaluations.checkpoint_id
 ```
 
-A key design detail is that `evaluations` are linked to a **checkpoint**, not directly to a run.
+There is currently no general-purpose command such as:
 
-To resolve the run for an evaluation:
-
-```text
-evaluations.checkpoint_id
-        ->
-checkpoints.id
-        ->
-checkpoints.run_id
-        ->
-runs.id
+```bash
+python -m train_and_eval.evaluation
 ```
 
-This matters for SQL queries, dashboard joins, and analysis scripts.
-
----
-
-## `runs`
-
-One row represents one complete training execution.
-
-The run record stores experiment identity and reproducibility information such as:
-
-- run ID
-- unique run name
-- run status
-- seed
-- fresh/resume continuation mode
-- source checkpoint for resumed runs
-- Git commit
-- Git branch
-- market-data SHA-256
-- normalized resolved configuration
-- train/validation row counts
-- split index
-- steps per data epoch
-- requested training steps
-- completed training steps
-- completed data epochs
-- early-stop information
-- failure/error information when relevant
-- start/finish timestamps
-- other run-level reproducibility metadata
-
-The run row answers:
-
-> What exactly was trained, with which configuration, data, seed, and source code?
-
----
-
-## `checkpoints`
-
-One row represents one immutable saved PPO model file.
-
-Important persisted information includes:
-
-- checkpoint ID
-- `run_id`
-- `run_step`
-- `model_step`
-- save reason
-- relative artifact path
-- SHA-256
-- file size
-- creation timestamp
-
-Save reasons include values such as:
-
-```text
-initial
-periodic
-final
-manual
-interrupted
-```
-
-The database enforces at most one final checkpoint per run.
-
-Example:
-
-```text
-Run #34
-  |
-  +-- checkpoint at step 18,432
-  +-- checkpoint at step 36,864
-  +-- checkpoint at step 55,296
-  └-- final checkpoint at step 68,608
-```
-
----
-
-## `training_metrics`
-
-Training metrics store PPO/rollout diagnostics throughout training.
-
-Typical persisted values include:
-
-- `run_id`
-- local `run_step`
-- history-aware `model_step`
-- episode/rollout reward information
-- rollout reward mean
-- rollout reward sum
-- entropy loss
-- explained variance
-- approximate KL divergence
-- clip fraction
-- policy-gradient loss
-- value loss
-- learning rate
-- additional critic/rollout diagnostics when available
-
-These rows rebuild:
-
-```text
-training_curves.png
-```
-
-and support training-stability analysis.
-
-Typical questions:
-
-```text
-Did approx_kl spike?
-Did clip_fraction increase?
-Did explained_variance collapse?
-Did entropy change strongly?
-Did value loss become unstable?
-```
-
----
-
-## `evaluations`
-
-An evaluation row stores the validation result for one checkpoint.
-
-It stores execution/reproducibility metadata such as:
-
-- evaluation ID
-- checkpoint ID
-- trigger
-- status
-- data scope
-- policy mode
-- probability-threshold settings when applicable
-- evaluation seed
-- progress/completion information
-- failure information when relevant
-
-It also stores trading metrics.
-
-### Return and benchmark metrics
-
-Examples:
-
-```text
-agent_return
-always_long_return
-always_short_return
-agent_vs_always_long_return
-balanced_score
-```
-
-Current balanced-score convention:
-
-```text
-balanced_score = agent_return + agent_max_drawdown
-```
-
-Because drawdown is negative, this subtracts its absolute magnitude from return.
-
-### Drawdown metrics
-
-Examples:
-
-```text
-agent_max_drawdown
-always_long_max_drawdown
-always_short_max_drawdown
-drawdown_improvement
-```
-
-Example:
-
-```text
--20% is better than -40%
-```
-
-### Exposure metrics
-
-Examples:
-
-```text
-net_exposure
-long_exposure
-short_exposure
-flat_exposure
-market_exposure
-```
-
-For LONG/FLAT:
-
-```text
-market_exposure = fraction of evaluation time in the market
-flat_exposure   = fraction of evaluation time flat
-```
-
-### Trading activity
-
-Examples:
-
-```text
-trade_events_total
-trade_event_rate
-round_trips
-round_trip_rate
-open_long_count
-open_short_count
-close_long_count
-close_short_count
-```
-
-### Win/loss metrics
-
-Examples:
-
-```text
-winning_trades
-losing_trades
-breakeven_trades
-win_rate
-loss_rate
-breakeven_rate
-long_win_rate
-short_win_rate
-```
-
-### Trade-return metrics
-
-Examples:
-
-```text
-avg_trade_return
-avg_win_return
-avg_loss_return
-median_trade_return
-largest_win_return
-largest_loss_return
-gross_profit_return
-gross_loss_return
-net_profit_return
-profit_factor
-payoff_ratio
-```
-
-### Holding-time and streak metrics
-
-Examples:
-
-```text
-min_bars_held
-avg_bars_held
-median_bars_held
-max_bars_held
-max_consecutive_wins
-max_consecutive_losses
-avg_win_streak
-avg_loss_streak
-current_streak_type
-current_streak
-```
-
-### Trading costs
-
-Examples:
-
-```text
-total_fee_return
-total_swap_return
-total_cost_return
-avg_fee_per_trade_return
-avg_swap_per_trade_return
-avg_cost_per_trade_return
-```
-
-Additional persisted evaluation information includes shaped-reward totals and open-position return at the end of evaluation.
-
----
-
-## Important database relationships
-
-### Run -> training metrics
-
-```text
-runs.id
-    |
-    +----< training_metrics.run_id
-```
-
-### Run -> checkpoints
-
-```text
-runs.id
-    |
-    +----< checkpoints.run_id
-```
-
-### Checkpoint -> evaluations
-
-```text
-checkpoints.id
-    |
-    +----< evaluations.checkpoint_id
-```
-
-### Resume lineage
-
-```text
-runs.source_checkpoint_id
-    |
-    +----> checkpoints.id
-```
-
----
-
-# Evaluation policy modes
-
-Supported modes:
+Use the run registry to inspect persisted evaluations, `runs report` to rebuild
+derived artifacts, and `threshold_sweep.py` for evaluation-only replay under
+different probability thresholds.
+
+Supported policy modes are:
 
 ```text
 deterministic_argmax
@@ -789,78 +679,108 @@ stochastic_sample
 probability_threshold
 ```
 
-## Deterministic argmax
+### Deterministic argmax
 
-For LONG/FLAT:
+For the binary LONG/FLAT policy, the action with the greater probability is
+selected.
 
-```text
-P(FLAT) > P(LONG) -> FLAT
-P(LONG) > P(FLAT) -> LONG
-```
+### Stochastic sample
 
-This gives a decision boundary around `P(LONG) = 0.5`.
+The action is sampled from the policy distribution. The evaluation seed makes
+the sampled sequence reproducible.
 
-## Stochastic sampling
+### Probability threshold
 
-Actions are sampled from the policy distribution.
+For `threshold_action: 1`, action `1` is LONG and the configured LONG
+probability threshold determines whether the policy enters or remains in the
+market.
 
-The evaluation seed keeps the action sequence reproducible.
+The report service may replay immutable checkpoints to rebuild missing or
+legacy derived artifacts. Historical replay does not insert a new evaluation
+row and must reproduce persisted evaluation metrics within the service's
+verification rules.
 
-## Probability threshold
+## Threshold sweeps
 
-For the current LONG/FLAT setup:
+`threshold_sweep.py` replays existing checkpoints across multiple LONG
+probability thresholds. It does not train a model and does not insert new
+evaluation rows.
 
-```text
-threshold_action = 1
-```
-
-where action `1` is LONG.
-
-Decision rule:
-
-```text
-P(LONG) >= probability_threshold -> LONG
-P(LONG) <  probability_threshold -> FLAT
-```
-
----
-
-# Reports and artifacts
-
-Rebuild all completed evaluations for a run:
+### Sweep final checkpoints selected by run ID
 
 ```bash
-python -m train_and_eval.runs report --run-id 34
+python threshold_sweep.py \
+  --runs 80,81,82,83 \
+  --thresholds 0,0.1,0.2,0.3,0.4,0.45,0.5,0.55,0.6,0.7 \
+  --output /tmp/ppo_threshold_sweep.csv
 ```
 
-Rebuild one evaluation:
+`--runs` resolves the final checkpoint of every selected run.
+
+### Sweep arbitrary checkpoint IDs
 
 ```bash
-python -m train_and_eval.runs report   --run-id 34   --evaluation-id 136
+python threshold_sweep.py \
+  --checkpoint-ids 338,342,348,355 \
+  --thresholds 0,0.1,0.2,0.3,0.4,0.45,0.5,0.55,0.6,0.7 \
+  --output /tmp/ppo_checkpoint_threshold_sweep.csv
 ```
 
-The report system:
+`--runs` and `--checkpoint-ids` are mutually exclusive.
 
-1. reads run/checkpoint/evaluation metadata from PostgreSQL
-2. checks whether required source artifacts exist
-3. replays the immutable checkpoint when artifacts are missing or legacy
-4. verifies replayed metrics against the persisted evaluation row
-5. writes/rebuilds trajectory artifacts
-6. renders evaluation plots
-7. renders run-level training/validation curves
+The terminal and CSV identify each source by:
 
-Historical replay does **not** create a new evaluation row.
+- run ID and name;
+- seed;
+- checkpoint ID;
+- local run step;
+- complete model step;
+- checkpoint save reason.
 
-This allows plotting/reporting code to evolve without changing historical evaluation results.
+Reported metrics include exposure, flat fraction, round trips, return, maximum
+drawdown, profit factor, win rate, and balanced score.
 
----
+The CSV is written only after all replay operations finish. This allows replay
+to pass the clean-Git verification without the output file making the worktree
+dirty during the sweep.
 
-## Run-level report files
+For a binary LONG/FLAT policy, a threshold near `0.5` normally reproduces the
+argmax boundary away from an exact probability tie. Use the actual replay
+result rather than assuming equivalence at the tie boundary.
 
-Typical path:
+### Confidence curve versus threshold sweep
+
+The confidence curve answers:
 
 ```text
-artifacts/runs/00000034/reports/
+For each threshold t, on the existing trajectory, how often was P(LONG) >= t?
+```
+
+The threshold sweep answers:
+
+```text
+What trading trajectory and metrics result when actions are replayed with t?
+```
+
+These are different because changing an action can change later environment
+state, observations, probabilities, positions, costs, and equity.
+
+## Reports and artifacts
+
+### Rebuild a run report
+
+```bash
+python -m train_and_eval.runs report --run-id 83
+```
+
+The report pipeline reads persisted metadata and metrics, verifies source
+artifacts, replays checkpoints when required, and generates current-format
+derived files.
+
+Typical run-level directory:
+
+```text
+artifacts/runs/00000083/reports/
 ```
 
 Typical files:
@@ -873,17 +793,13 @@ validation_metrics.csv
 summary.json
 ```
 
----
-
-## Evaluation-level files
-
-Typical path:
+Typical evaluation directory:
 
 ```text
-artifacts/runs/00000034/evaluations/00000136/
+artifacts/runs/00000083/evaluations/00000355/
 ```
 
-Typical files:
+Possible files include:
 
 ```text
 trajectory.parquet
@@ -899,333 +815,33 @@ policy_p_long_distribution.png
 policy_p_long_confidence_curve.png
 ```
 
-Trade-specific plots may be absent if the evaluation does not contain the required events.
+Trade-specific outputs may be absent when the trajectory contains no required
+events.
 
----
+### Policy-probability columns
 
-# Policy probability diagnostics
-
-The project persists the complete categorical policy distribution in `trajectory.parquet`.
-
-For a two-action LONG/FLAT policy:
+For a two-action LONG/FLAT policy, trajectories may store:
 
 ```text
 policy_probability_action_0 = P(FLAT)
 policy_probability_action_1 = P(LONG)
-```
-
-It also stores:
-
-```text
 selected_action_probability
 ```
 
-which is the probability assigned to the action that was actually selected.
+This supports analysis of policy saturation, polarization, and confidence
+without inferring the unselected probability from action labels.
 
-Example:
+### Cross-run diagnostics
 
-```text
-action = 0
-P(FLAT) = 0.90
-P(LONG) = 0.10
-selected_action_probability = 0.90
-```
-
-versus:
-
-```text
-action = 1
-P(FLAT) = 0.10
-P(LONG) = 0.90
-selected_action_probability = 0.90
-```
-
-The full probability columns make `P(LONG)` analysis independent of the selected action.
-
----
-
-## `policy_p_long_distribution.png`
-
-Histogram of `P(LONG)` over the evaluation trajectory.
-
-It contains:
-
-- argmax boundary at `0.50`
-- mean `P(LONG)`
-- median `P(LONG)`
-
-Interpretation:
-
-- mass near `1.0`: strong LONG saturation
-- broad distribution: policy uses many confidence levels
-- mass near both `0.0` and `1.0`: polarized policy
-
----
-
-## `policy_p_long_confidence_curve.png`
-
-For every threshold `t`, this shows:
-
-```text
-fraction of observations where P(LONG) >= t
-```
-
-This is a confidence-distribution / survival curve.
-
-Important:
-
-> It is **not** a full threshold backtest.
-
-Changing the actual threshold can alter actions, future environment state, future observations, and therefore future probabilities.
-
-For exact trading results under a different threshold, use `threshold_sweep.py`.
-
----
-
-# Dashboard
-
-Start:
+Cross-run tools live under `extra_tools/`. For example:
 
 ```bash
-streamlit run train_and_eval/dashboard/app.py
+python -m extra_tools.policy_probability_diagnostic \
+  --runs 34,36,37 \
+  --output-dir /tmp/ppo_policy_probability_diag
 ```
 
-The dashboard reads the experiment database and builds a flattened explorer dataset from:
-
-```text
-runs
-checkpoints
-evaluations
-training_metrics
-```
-
-The evaluation-to-run relationship is resolved through checkpoints.
-
-Sidebar filters apply to all tabs.
-
-Current tabs:
-
-```text
-Run Explorer
-Scatter Explorer
-Activity Map
-Pareto Explorer
-Group Comparison
-Run Detail
-```
-
----
-
-## Run Explorer
-
-Interactive experiment table.
-
-Useful for:
-
-- selecting visible columns
-- inspecting hyperparameters
-- comparing evaluation metrics
-- inspecting PPO diagnostics
-- filtering experiment families
-
----
-
-## Scatter Explorer
-
-General-purpose 2D experiment view.
-
-Example:
-
-```text
-X     = Market exposure
-Y     = Agent return
-Color = Seed
-Size  = Round trips
-```
-
-Interpretation:
-
-```text
-right  -> more exposure
-left   -> more time FLAT
-up     -> higher return
-larger -> more round trips
-```
-
----
-
-## Activity Map
-
-Specialized trading-policy view.
-
-Typical mapping:
-
-```text
-X      = Market exposure
-Y      = Round trips
-Color  = Agent return
-Symbol = Seed
-```
-
-Useful for separating:
-
-- near always-long policies
-- active LONG/FLAT policies
-- highly selective policies
-- high-turnover regimes
-
----
-
-# Pareto Explorer
-
-The Pareto Explorer compares runs under two objectives.
-
-Default:
-
-```text
-X metric    = Max drawdown
-X objective = Maximize
-
-Y metric    = Agent return
-Y objective = Maximize
-
-Color       = Seed
-```
-
-Because max drawdown is stored as a negative return:
-
-```text
--20% > -30% > -40%
-```
-
-therefore maximizing max drawdown means moving closer to zero, which is better.
-
-A run is Pareto-optimal if no other currently visible run is:
-
-- at least as good in both objectives
-- strictly better in at least one objective
-
-Example of domination:
-
-```text
-Run A:
-return = +30%
-DD     = -25%
-
-Run B:
-return = +20%
-DD     = -35%
-```
-
-Run B is dominated by Run A.
-
-Example where neither dominates:
-
-```text
-Run A:
-return = +60%
-DD     = -40%
-
-Run B:
-return = +40%
-DD     = -20%
-```
-
-A has better return, B has better drawdown.
-
-The Pareto front is recalculated after sidebar filters are applied.
-
-The tab also shows the Pareto-optimal run table.
-
----
-
-## Group Comparison
-
-Groups experiments by selected hyperparameters and computes statistics such as:
-
-```text
-count
-mean
-std
-min
-max
-```
-
-Useful for multi-seed confirmation.
-
-A strong single seed should not be treated as a robust result without confirmation.
-
----
-
-## Run Detail
-
-Detailed inspection of one run, including:
-
-- run metadata
-- normalized configuration
-- evaluation history
-- training-metric history
-- charts over model steps
-
----
-
-# Extra tools
-
-Cross-run diagnostics live under:
-
-```text
-extra_tools/
-```
-
-This keeps the normal single-run evaluation pipeline focused on reproducible per-run artifacts.
-
----
-
-## Cross-run policy probability comparison
-
-Tool:
-
-```text
-extra_tools/policy_probability_diagnostic.py
-```
-
-Example:
-
-```bash
-python -m extra_tools.policy_probability_diagnostic   --runs 34,36,37   --output-dir /tmp/ppo_policy_probability_diag
-```
-
-Typical outputs:
-
-```text
-policy_probabilities.csv
-probability_summary.csv
-p_long_histogram_overlay.png
-p_long_confidence_curve.png
-```
-
-This tool is intentionally **cross-run only**. It compares an explicitly selected set of runs.
-
-Single-run policy probability plots are generated automatically by the normal evaluation/reporting pipeline:
-
-```text
-policy_p_long_distribution.png
-policy_p_long_confidence_curve.png
-```
-
-Useful for comparing seed behavior, saturation, and policy polarization.
-
----
-
-## Checkpoint-by-checkpoint policy evolution
-
-Tool:
-
-```text
-extra_tools/policy_probability_evolution.py
-```
-
-Example:
+Checkpoint-by-checkpoint probability evolution:
 
 ```bash
 python -m extra_tools.policy_probability_evolution \
@@ -1233,185 +849,212 @@ python -m extra_tools.policy_probability_evolution \
   --output-dir /tmp/ppo_policy_probability_evolution
 ```
 
-The tool:
+Use each tool's `--help` output as the authoritative option reference.
 
-- resolves periodic and final checkpoints through PostgreSQL
-- preserves the exact run -> checkpoint -> evaluation mapping
-- replays every selected immutable checkpoint on run validation
-- compares the complete `P(LONG)` distribution across training checkpoints
-- quantifies checkpoint-to-checkpoint distribution shifts
-- joins checkpoints to exact-step PPO and critic training diagnostics
-- does not retrain
-- does not create new evaluation rows
-- finishes all replays before writing output artifacts
+## Dashboard
 
-Typical outputs:
-
-```text
-policy_probabilities.csv
-probability_summary.csv
-probability_transitions.csv
-training_metrics.csv
-checkpoint_diagnostics.csv
-p_long_histogram_grid.png
-p_long_confidence_curve_grid.png
-p_long_evolution.png
-ppo_diagnostics.png
-critic_diagnostics.png
-```
-
-Historical replay requires a clean Git repository.
-
----
-
-## Probability-threshold sweep
-
-Tool:
-
-```text
-threshold_sweep.py
-```
-
-Example:
+Start the Streamlit dashboard with:
 
 ```bash
-python threshold_sweep.py   --runs 34,36,37   --thresholds 0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70   --output /tmp/nq1h_threshold_sweep_runs34_36_37.csv
+streamlit run train_and_eval/dashboard/app.py
 ```
 
-The tool:
+Do not use:
 
-- loads existing final checkpoints
-- performs validation replays
-- does not retrain
-- evaluates `probability_threshold` mode
-- reports exposure, trips, return, max drawdown, PF, balanced score, etc.
-- writes CSV output after all replays complete
+```bash
+python -m train_and_eval.dashboard
+```
 
-Use this tool when the question is:
+The dashboard package does not expose a `__main__` module.
 
-> What actually happens to trading results if I change the policy threshold?
+The dashboard reads the experiment registry and joins runs, checkpoints,
+evaluations, and training metrics into an analysis dataset. Sidebar filters
+apply across tabs, so filter the visible experiment family or dataset before
+interpreting a Pareto front.
 
-This is different from the confidence curve, which only describes the probability distribution on the existing trajectory.
+Current analysis views include:
 
----
+- Run Explorer
+- Scatter Explorer
+- Activity Map
+- Pareto Explorer
+- Group Comparison
+- Run Detail
 
-# Artifact layout
+### Pareto Explorer
 
-Example:
+A common setup is:
 
 ```text
-artifacts/
-└── runs/
-    └── 00000034/
-        ├── checkpoints/
-        │   └── ...
-        ├── reports/
-        │   ├── training_curves.png
-        │   ├── validation_curves.png
-        │   ├── training_metrics.csv
-        │   ├── validation_metrics.csv
-        │   └── summary.json
-        └── evaluations/
-            ├── 00000133/
-            │   └── ...
-            ├── 00000134/
-            │   └── ...
-            ├── 00000135/
-            │   └── ...
-            └── 00000136/
-                ├── trajectory.parquet
-                ├── trade_events.parquet
-                ├── metrics.json
-                ├── equity_curve.png
-                ├── drawdown_curve.png
-                ├── market_and_exposure.png
-                ├── cumulative_costs.png
-                ├── trade_returns.png
-                ├── holding_times.png
-                ├── policy_p_long_distribution.png
-                └── policy_p_long_confidence_curve.png
+X metric    = Max drawdown
+X objective = Maximize
+Y metric    = Agent return
+Y objective = Maximize
+Color       = Seed
 ```
 
----
+Maximum drawdown is stored as a negative return. Therefore `-15%` is better
+than `-30%`, and maximizing it means moving closer to zero.
 
-# What is stored where
+A visible run is Pareto-optimal when no other visible run is at least as good
+in both selected objectives and strictly better in at least one. The front is
+recomputed after dashboard filters are applied.
 
-| Location | Purpose | Source of truth? |
+### Multi-seed interpretation
+
+Group Comparison aggregates results across hyperparameter groups and seeds.
+One exceptional seed is a candidate, not a robust conclusion. Prefer settings
+whose behavior survives independent initializations.
+
+## Database model
+
+Main runtime tables:
+
+```text
+runs
+checkpoints
+training_metrics
+evaluations
+```
+
+Relationships:
+
+```text
+runs.id
+  |
+  +----< training_metrics.run_id
+  |
+  +----< checkpoints.run_id
+               |
+               +----< evaluations.checkpoint_id
+
+runs.source_checkpoint_id
+  |
+  +--------> checkpoints.id
+```
+
+### `runs`
+
+One row represents one training execution. It stores, among other fields:
+
+- unique name, status, and seed;
+- fresh/resume mode and source checkpoint;
+- Git commit and branch;
+- raw and normalized configuration with hashes;
+- data path and SHA-256;
+- chronological split identity;
+- requested/completed steps and data epochs;
+- early-stop and failure information;
+- lifecycle timestamps.
+
+### `checkpoints`
+
+One row represents one immutable model file. It stores:
+
+- owning run;
+- local `run_step` and history-aware `model_step`;
+- save reason (`initial`, `periodic`, `final`, `manual`, or `interrupted`);
+- relative artifact path;
+- SHA-256 and file size;
+- creation time.
+
+The database enforces at most one final checkpoint per run.
+
+### `training_metrics`
+
+Training rows capture diagnostics such as:
+
+- rollout and episode reward statistics;
+- approximate KL divergence;
+- clip fraction;
+- entropy loss;
+- explained variance;
+- policy-gradient and value losses;
+- learning rate;
+- critic prediction, target, error, and correlation diagnostics where
+  available.
+
+### `evaluations`
+
+An evaluation stores its checkpoint identity, trigger, status, policy mode,
+data scope, progress, reproducibility metadata, and trading metrics.
+
+Common metrics include:
+
+- agent, always-long, and always-short returns;
+- balanced score;
+- maximum drawdowns;
+- market, net, long, short, and flat exposure;
+- round trips and trade-event rates;
+- profit factor, payoff ratio, and win/loss rates;
+- trade-return, holding-time, streak, fee, swap, and total-cost statistics.
+
+The current balanced-score convention is:
+
+```text
+balanced_score = agent_return + agent_max_drawdown
+```
+
+Because drawdown is negative, the score penalizes its absolute magnitude.
+
+### Sources of truth
+
+| Location | Purpose | Authority |
 |---|---|---|
-| Git | code, configs, migrations, tests | Yes, for source/config history |
-| PostgreSQL `runs` | experiment identity and resolved config | Yes |
-| PostgreSQL `training_metrics` | PPO training history | Yes |
-| PostgreSQL `checkpoints` | checkpoint metadata and integrity | Yes |
-| PostgreSQL `evaluations` | persisted validation results | Yes |
-| checkpoint files | immutable model weights | Yes, for replay |
-| `trajectory.parquet` | per-step evaluation trajectory | Rebuildable |
-| `trade_events.parquet` | detailed trade event stream | Rebuildable |
-| PNG/CSV reports | visualization / analysis convenience | Rebuildable |
-| Streamlit dashboard | presentation layer over database | No |
+| Git | Code, configs, migrations, tests | Source/config history |
+| PostgreSQL `runs` | Experiment identity and resolved config | Authoritative |
+| PostgreSQL `training_metrics` | PPO training history | Authoritative |
+| PostgreSQL `checkpoints` | Checkpoint identity and integrity | Authoritative metadata |
+| PostgreSQL `evaluations` | Persisted evaluation results | Authoritative |
+| Checkpoint ZIP files | Model weights for replay/resume | Required model source |
+| Parquet/JSON/CSV/PNG artifacts | Detailed analysis and presentation | Derived/rebuildable |
+| Streamlit dashboard | Interactive presentation | Not a source of truth |
 
-The database should be used for durable comparisons and queries.
+## Database migrations
 
-Plots should not be treated as the only copy of important metrics.
-
----
-
-# Database migrations
-
-Schema changes are managed with Alembic.
-
-Apply migrations:
+Apply all migrations:
 
 ```bash
 alembic upgrade head
 ```
 
-Check current state:
+Inspect state and history:
 
 ```bash
 alembic current
-```
-
-Inspect history:
-
-```bash
 alembic history
 ```
 
 When adding persisted fields:
 
-```text
-1. modify SQLAlchemy model
-2. create Alembic migration
-3. update persistence logic
-4. add tests
-5. apply migration
-6. verify schema
-```
+1. update the SQLAlchemy model;
+2. create an Alembic migration;
+3. update persistence and query code;
+4. add or update tests;
+5. apply the migration;
+6. verify the real PostgreSQL schema.
 
----
+## Testing and development
 
-# Testing
-
-Run all tests:
+Run the full suite:
 
 ```bash
-pytest -q
+python -m pytest -q
 ```
 
 Targeted examples:
 
 ```bash
-pytest -q tests/test_reporting_artifacts.py
-```
-
-```bash
-pytest -q tests/test_dashboard_pareto.py
+python -m pytest -q tests/test_training_cli.py
+python -m pytest -q tests/test_run_search_queue.py
+python -m pytest -q tests/test_threshold_sweep.py
+python -m pytest -q tests/test_dashboard_pareto.py
 ```
 
 Syntax checks:
 
 ```bash
-python -m py_compile   train_and_eval/dashboard/app.py   train_and_eval/reporting/artifacts.py
+python -m py_compile run_search_queue.py threshold_sweep.py
 ```
 
 Before committing:
@@ -1421,102 +1064,149 @@ git diff --check
 git status --short
 ```
 
----
+After staging:
 
-# Recommended research workflow
-
-```text
-1. Define one research question
-        |
-        v
-2. Create/change one YAML config
-        |
-        v
-3. Validate config / dry-run queue if applicable
-        |
-        v
-4. Commit code + config
-        |
-        v
-5. Confirm clean Git
-        |
-        v
-6. Train
-        |
-        v
-7. Inspect DB / run registry
-        |
-        v
-8. Inspect or rebuild reports
-        |
-        v
-9. Compare in dashboard
-        |
-        v
-10. Confirm promising settings on more seeds
-        |
-        v
-11. Move to the next research question
+```bash
+git diff --cached --check
+git diff --cached --stat
 ```
 
-Typical commands:
+## Recommended research workflow
+
+```text
+1. Define one question and one baseline
+2. Create explicit YAML configs
+3. Add or update a queue manifest when comparing several configs
+4. Validate configs and run the queue with --dry-run
+5. Run targeted and full tests
+6. Commit code, configs, manifests, migrations, and tests
+7. Confirm a clean Git worktree
+8. Train one config or the selected queue positions
+9. Inspect runs, checkpoints, and evaluation histories
+10. Replay thresholds or rebuild reports when needed
+11. Compare only the relevant dataset/experiment family in the dashboard
+12. Confirm promising behavior on multiple seeds
+13. Re-test surviving candidates on the target 5-minute data
+```
+
+Useful command sequence:
 
 ```bash
 git status --short
-```
-
-```bash
-python -m train_and_eval.training   --config configs/experiments/<experiment>.yml
-```
-
-```bash
+python run_search_queue.py --queue <QUEUE_NAME> --dry-run
+python run_search_queue.py --queue <QUEUE_NAME> --select 1-3
 python -m train_and_eval.runs evaluations --run-id <RUN_ID>
-```
-
-```bash
-python -m train_and_eval.runs report --run-id <RUN_ID>
-```
-
-```bash
+python -m train_and_eval.runs checkpoints --run-id <RUN_ID>
 streamlit run train_and_eval/dashboard/app.py
 ```
 
 Research principle:
 
-> Do not optimize one attractive run. Look for behavior that survives seed changes.
+> Do not optimize one attractive run. Look for behavior that survives seed,
+> checkpoint, and target-data changes.
 
----
-
-# 1-hour research vs 5-minute target
-
-Longer intervals such as 1 hour are intentionally used for fast iteration.
+## 1-hour research versus 5-minute target
 
 ```text
-idea
-  |
-  v
-fast experiment on 1h
-  |
-  v
-diagnostics / dashboard / multi-seed checks
-  |
-  v
-promising?
-  |
-  +-- no --> reject or revise
-  |
-  +-- yes
-        |
-        v
-target 5m experiment
-        |
-        v
-multi-seed confirmation
-        |
-        v
-final comparison
+research question
+      |
+      v
+fast 1-hour experiment
+      |
+      v
+diagnostics and infrastructure checks
+      |
+      v
+promising across seeds?
+      |
+      +-- no --> reject or revise
+      |
+      +-- yes
+            |
+            v
+      target 5-minute experiment
+            |
+            v
+      multi-seed confirmation
+            |
+            v
+      untouched final-test evaluation
 ```
 
-Hyperparameters and reward settings found on 1-hour data should **not** be blindly transferred to 5-minute data.
+Hyperparameters discovered on 1-hour data should not be transferred blindly.
+The number of observations, market microstructure, turnover, fee impact,
+episode length, training duration, and policy dynamics all change at 5-minute
+resolution.
 
-The 1-hour interval is a research and infrastructure tool. Final conclusions about the trading agent should be based on the target 5-minute setup.
+## Troubleshooting
+
+### `RunAlreadyExistsError`
+
+Cause: the config's `run.name` is already registered.
+
+Resolution:
+
+```bash
+python -m train_and_eval.runs list
+```
+
+Inspect the existing run or create a genuinely new config with a unique name.
+
+### Dirty Git rejection
+
+Cause: training or replay detected uncommitted repository changes.
+
+Resolution:
+
+```bash
+git status --short
+git diff --check
+```
+
+Review and commit intentional changes. Do not bypass the check for a real
+experiment.
+
+### Queue preflight finds existing runs
+
+Choose new configs, narrow the selection, or skip already registered entries:
+
+```bash
+python run_search_queue.py \
+  --queue <QUEUE_NAME> \
+  --select 1-12 \
+  --skip-existing
+```
+
+### Dashboard package cannot be executed
+
+Use Streamlit:
+
+```bash
+streamlit run train_and_eval/dashboard/app.py
+```
+
+### `runs evaluations` does not replay anything
+
+That command only lists persisted evaluations. Use `threshold_sweep.py` for
+probability-threshold replay, or `runs report` to rebuild report artifacts.
+
+### PostgreSQL connection fails
+
+```bash
+docker compose ps
+```
+
+Then verify `DATABASE_URL`, the exposed host port, credentials, and migration
+state.
+
+### A resumed run cannot resolve its source
+
+Verify the exact source name and its available checkpoints:
+
+```bash
+python -m train_and_eval.runs list
+python -m train_and_eval.runs checkpoints --run-id <SOURCE_RUN_ID>
+```
+
+The source checkpoint, checkpoint file, and archived configuration must all be
+available and compatible.

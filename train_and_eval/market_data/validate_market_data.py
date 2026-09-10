@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +12,14 @@ import pyarrow.parquet as pq
 from train_and_eval.market_data.load_market_data import (
     DATA_DIRECTORY,
     MANIFEST_PATH,
-    MANIFEST_VERSION,
     SOURCE_COLUMNS,
     calculate_file_sha256,
     load_manifest,
     manifest_key,
     resolve_data_file,
+    verify_market_data,
+    verify_loaded_frame,
+    INTERVAL_MINUTES,
 )
 
 
@@ -39,65 +39,6 @@ EXPECTED_TYPES = {
 
 class MarketDataValidationError(ValueError):
     """Raised when a market-data file fails full validation."""
-
-
-def utc_now_iso() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
-
-
-def new_manifest() -> dict[str, Any]:
-    return {
-        "manifest_version": MANIFEST_VERSION,
-        "files": {},
-    }
-
-
-def load_or_create_manifest(
-    manifest_path: str | Path,
-) -> dict[str, Any]:
-    path = Path(manifest_path).expanduser().resolve()
-
-    if not path.exists():
-        return new_manifest()
-
-    return load_manifest(path)
-
-
-def write_manifest(
-    manifest: dict[str, Any],
-    manifest_path: str | Path,
-) -> None:
-    """
-    Rewrite the complete manifest atomically.
-
-    A temporary file is written first, then replaces the previous manifest.
-    """
-    path = Path(manifest_path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    temporary_path = path.with_suffix(path.suffix + ".tmp")
-    serialized = json.dumps(
-        manifest,
-        indent=2,
-        sort_keys=True,
-        ensure_ascii=False,
-    )
-
-    temporary_path.write_text(
-        serialized + "\n",
-        encoding="utf-8",
-    )
-    temporary_path.replace(path)
-
-
-def reset_manifest(
-    manifest_path: str | Path = MANIFEST_PATH,
-) -> None:
-    write_manifest(new_manifest(), manifest_path)
 
 
 def validate_schema(path: Path) -> None:
@@ -209,10 +150,10 @@ def validate_market_data_file(
     data_directory: str | Path = DATA_DIRECTORY,
 ) -> dict[str, Any]:
     """
-    Perform complete validation and update the file's manifest entry.
+    Verify the pipeline manifest and perform local checks without writing.
 
-    Validation failures are recorded as status='not_okay'. The manifest is
-    rewritten even when validation fails.
+    The result is returned to the caller only. Neither a successful check
+    nor a failure can create, approve or modify a producer manifest.
     """
     file_path = resolve_data_file(
         path,
@@ -231,13 +172,15 @@ def validate_market_data_file(
         "rows": None,
         "first_timestamp": None,
         "last_timestamp": None,
-        "validated_at_utc": utc_now_iso(),
         "errors": [],
     }
 
     try:
         record["sha256"] = calculate_file_sha256(file_path)
 
+        _, entry = verify_market_data(
+            file_path, manifest_path=manifest_path, data_directory=data_directory,
+        )
         validate_schema(file_path)
 
         frame = pd.read_parquet(
@@ -247,6 +190,17 @@ def validate_market_data_file(
         )
 
         validate_dataframe(frame)
+        verify_loaded_frame(frame, entry)
+        interval_ns = INTERVAL_MINUTES[entry["interval"]] * 60 * 1_000_000_000
+        timestamps = frame["Datetime"]
+        if (timestamps.astype("int64") % interval_ns != 0).any():
+            raise MarketDataValidationError("Unaligned interval timestamps.")
+        if (timestamps.dt.weekday >= 5).any():
+            raise MarketDataValidationError("Weekend UTC records are not permitted.")
+        if frame["symbol"].eq("").any():
+            raise MarketDataValidationError("Empty symbol values are not permitted.")
+        if calculate_file_sha256(file_path) != entry["sha256"]:
+            raise MarketDataValidationError("Data file has changed while validating.")
 
         record.update(
             {
@@ -263,10 +217,6 @@ def validate_market_data_file(
         record["errors"] = [
             f"{type(error).__name__}: {error}"
         ]
-
-    manifest = load_or_create_manifest(manifest_path)
-    manifest["files"][key] = record
-    write_manifest(manifest, manifest_path)
 
     return record
 
@@ -286,7 +236,7 @@ def print_result(record: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Perform full validation of market-data Parquet files."
+        description="Verify pipeline datasets without modifying data or manifest."
     )
     parser.add_argument(
         "path",
@@ -299,7 +249,7 @@ def main() -> int:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Validate every .parquet file from the top-level data directory.",
+        help="Verify every Parquet file listed in the imported manifest.",
     )
     args = parser.parse_args()
 
@@ -310,23 +260,26 @@ def main() -> int:
         parser.error("Provide a file path or use --all.")
 
     if args.all:
-        files = sorted(DATA_DIRECTORY.glob("*.parquet"))
-
-        if not files:
-            print(f"No Parquet files found in: {DATA_DIRECTORY}")
+        try:
+            manifest = load_manifest(MANIFEST_PATH)
+        except Exception as error:
+            print(f"[NOT OKAY] {error}")
             return 1
-
-        # A full-directory validation rebuilds the manifest from scratch.
-        reset_manifest(MANIFEST_PATH)
-
-        records = [
-            validate_market_data_file(path)
-            for path in files
-        ]
+        files = [DATA_DIRECTORY / item["path"] for item in manifest["files"].values()]
     else:
-        records = [
-            validate_market_data_file(args.path)
-        ]
+        files = [args.path]
+
+    records = []
+    for path in files:
+        try:
+            records.append(validate_market_data_file(
+                path, manifest_path=MANIFEST_PATH, data_directory=DATA_DIRECTORY,
+            ))
+        except Exception as error:
+            records.append({
+                "path": str(path), "status": "not_okay",
+                "errors": [f"{type(error).__name__}: {error}"],
+            })
 
     print()
 

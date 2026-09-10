@@ -6,7 +6,8 @@ PPO trading agents on historical market data.
 The project is built around a strict experiment lifecycle:
 
 - experiments are defined in versioned YAML files;
-- market data is validated against a manifest and SHA-256 hashes;
+- market data is imported from a published pipeline release and verified against
+  manifest v2 and SHA-256 hashes;
 - training requires a clean Git worktree;
 - every `run.name` is globally unique;
 - PostgreSQL stores run identity, resolved configuration, metrics, checkpoints,
@@ -194,7 +195,20 @@ alembic current
 python -m pytest -q
 ```
 
-### 7. Train one committed experiment
+### 7. Import and verify market data
+
+Follow [Manual snapshot import](#manual-snapshot-import) to place the published
+Parquet files under `data/` and the unchanged pipeline manifest at
+`train_and_eval/market_data/manifest.json`.
+
+```bash
+python -m train_and_eval.market_data.validate_market_data --all
+```
+
+This command verifies the imported files without modifying data or manifest.
+It requires manifest v2; it cannot generate a manifest from loose Parquet files.
+
+### 8. Train one committed experiment
 
 ```bash
 git status --short
@@ -202,13 +216,13 @@ python -m train_and_eval.training \
   --config configs/experiments/<group>/<experiment>.yml
 ```
 
-### 8. Inspect registered runs
+### 9. Inspect registered runs
 
 ```bash
 python -m train_and_eval.runs list
 ```
 
-### 9. Start the dashboard
+### 10. Start the dashboard
 
 ```bash
 streamlit run train_and_eval/dashboard/app.py
@@ -216,18 +230,132 @@ streamlit run train_and_eval/dashboard/app.py
 
 ## Market data
 
-Market data lives under `data/` and is registered in:
+### Repository responsibilities
+
+`NQ_HISTORICAL_DATA_PIPELINE` owns historical acquisition, source provenance,
+normalization, merging, continuous-contract handling, calendar and gap analysis,
+resampling, quality reports, and publication of Parquet files and manifest v2.
+
+`PPO_AGENT` consumes that published snapshot, verifies its identity, and performs
+the chronological split, training, evaluation, reporting, and experiment analysis.
+It does not download or repair market data and does not generate or update the
+producer's manifest.
+
+### Manual snapshot import
+
+Market-data Parquet files live under `data/`. The imported manifest lives at:
 
 ```text
 train_and_eval/market_data/manifest.json
 ```
 
-The manifest associates each accepted file with its identity information,
-including the expected path, row count, status, and SHA-256 hash. A training
-config is loaded with data verification enabled before a run is created.
+Import is a manual operation:
+
+1. Preserve the previous snapshot and its manifest before replacing them.
+   Keep the source pipeline release and any repair reports needed to explain
+   how its input history was produced.
+2. Copy the published Parquet files from the pipeline's `OUT/` into `data/`,
+   preserving their filenames and any relative subdirectories.
+3. Copy the pipeline's `OUT/manifest.json` unchanged to
+   `train_and_eval/market_data/manifest.json`. Do not add `data/` prefixes inside
+   the manifest or combine entries from different releases.
+4. Keep the four pipeline reports with the archived source release. The
+   PPO_AGENT loader does not require them locally and does not verify their
+   contents or hashes during training.
+5. Run the verification command below, update experiment `data.path` values to
+   the new filenames, and use new `run.name` values for the new snapshot.
+6. Review and commit tracked manifest, configuration, code, and documentation
+   changes before training. Avoid training or replay during a snapshot import.
+
+The producer stores file entries under interval keys (`1m`, `5m`, `15m`, `30m`,
+`1h`). Each entry's `path` is relative to the imported data root. For example,
+`files["5m"]["path"] = "NQ_CONTINUOUS_5m_<snapshot>.parquet"` maps to
+`data/NQ_CONTINUOUS_5m_<snapshot>.parquet` in PPO_AGENT. The loader adapts paths
+in memory while preserving the original manifest bytes.
+
+### Manifest and file verification
+
+The consumer requires `manifest_version: 2` and `data_schema_version: 1`.
+Manifest v1 is no longer supported; changing its version number manually is
+not a migration.
+
+The manifest must describe a published dataset with zero structural errors.
+Accepted status combinations are:
+
+| Dataset status | Validation status | Warning acceptance |
+|---|---|---|
+| `published` | `passed` | No warnings; acceptance is `not_required` |
+| `published_with_warnings` | `passed_with_warnings` | Warnings accepted through `interactive` or `cli_flag` mode |
+
+Every file entry must have `validation_status: passed`. The loader checks
+supported schema versions and intervals, normalized relative paths, unique
+file paths, warning-count consistency, acceptance metadata, and required file
+identity fields. Duplicate JSON keys and paths escaping the data directory
+are rejected.
+
+A training config is loaded with data verification enabled before a run is
+created. Verification requires an exact manifest entry, matching file size,
+and matching SHA-256. Loading also checks the Arrow schema, row count, first
+and last timestamps, and rechecks SHA-256 after reading.
 
 This prevents an experiment from silently using a changed file under an old
-filename.
+filename. Hash checks establish agreement with the imported manifest; they do
+not independently establish the accuracy of the source market data.
+
+### Verification commands
+
+Verify every file referenced by the imported manifest:
+
+```bash
+python -m train_and_eval.market_data.validate_market_data --all
+```
+
+Verify one file, including local row-level checks:
+
+```bash
+python -m train_and_eval.market_data.validate_market_data \
+  data/NQ_CONTINUOUS_5m_<snapshot>.parquet
+```
+
+Verify identity and load a file through the training loader:
+
+```bash
+python -m train_and_eval.market_data.load_market_data \
+  data/NQ_CONTINUOUS_5m_<snapshot>.parquet
+```
+
+The validator checks schema, nulls, duplicate timestamps, ordering, finite
+positive prices, OHLC relationships, interval alignment, UTC weekdays, and
+nonempty symbols, in addition to manifest identity and file metadata.
+Missing minutes and calendar expectations remain the pipeline's responsibility.
+
+Both successful and failed validation leave the manifest and Parquet files
+unchanged. `--all` checks manifest-listed files, reports missing files, and
+does not register unrelated local Parquet files. Console results `okay` and
+`not_okay` are local check outcomes, not new producer manifest entries.
+
+### Data schema and training interface
+
+Published Parquet column order and physical types remain:
+
+| Parquet column | Arrow type | Loaded column |
+|---|---|---|
+| `Datetime` | `timestamp[ns, tz=UTC]` | `DT` |
+| `Open_NQ` | `float64` | `Open` |
+| `High_NQ` | `float64` | `High` |
+| `Low_NQ` | `float64` | `Low` |
+| `Close_NQ` | `float64` | `Close` |
+| `Volume_NQ` | `uint64` | `Volume` |
+| `symbol` | `large_string` | `symbol` |
+| `instrument_id` | `uint32` | `instrument_id` |
+
+The loader preserves `frame.attrs["source_path"]` in the local `data/...`
+convention and `frame.attrs["sha256"]`. It also exposes `dataset_id`,
+`release_id`, and `interval` in `frame.attrs`. These additional attributes do
+not introduce new database columns. The chronological splitter copies the
+attributes into both partitions.
+
+### Chronological split
 
 The split is chronological:
 
@@ -246,10 +374,18 @@ open position so the final equity includes the closing transaction.
 ### Data identity rules
 
 - never overwrite a registered dataset and continue using its old hash;
-- regenerate or update the manifest after intentionally replacing data;
+- import the matching producer manifest unchanged when replacing a snapshot;
+- make corrections in the data project and publish a new release instead of
+  editing an imported manifest to approve changed bytes;
 - use new run names for experiments on a new data snapshot;
-- preserve the previous database and artifacts until historical results have
-  been archived or intentionally discarded.
+- preserve the previous dataset, manifest, database, and artifacts for any
+  historical results that must remain reproducible;
+- replay checks the dataset SHA-256 recorded for the source run: a new snapshot
+  cannot silently replace the old dataset for an existing checkpoint evaluation.
+
+Historical replay of a manifest-v1 snapshot requires its archived compatible
+code and environment, or an explicit, separately verified migration. Retaining
+old files alone does not make manifest v1 readable by this loader.
 
 ## Experiment configuration
 
@@ -1007,6 +1143,7 @@ Because drawdown is negative, the score penalizes its absolute magnitude.
 | PostgreSQL `checkpoints` | Checkpoint identity and integrity | Authoritative metadata |
 | PostgreSQL `evaluations` | Persisted evaluation results | Authoritative |
 | Checkpoint ZIP files | Model weights for replay/resume | Required model source |
+| Imported market-data Parquet and manifest v2 | Dataset identity and training input | Required data source |
 | Parquet/JSON/CSV/PNG artifacts | Detailed analysis and presentation | Derived/rebuildable |
 | Streamlit dashboard | Interactive presentation | Not a source of truth |
 
@@ -1049,6 +1186,16 @@ python -m pytest -q tests/test_training_cli.py
 python -m pytest -q tests/test_run_search_queue.py
 python -m pytest -q tests/test_threshold_sweep.py
 python -m pytest -q tests/test_dashboard_pareto.py
+```
+
+Market-data import and consumer integration checks:
+
+```bash
+python -m pytest -q \
+  tests/test_market_data_loading.py \
+  tests/test_market_data_validation.py \
+  tests/test_run_config.py \
+  tests/test_evaluation_service.py
 ```
 
 Syntax checks:
@@ -1139,6 +1286,25 @@ episode length, training duration, and policy dynamics all change at 5-minute
 resolution.
 
 ## Troubleshooting
+
+### Missing or unsupported market-data manifest
+
+Import the original manifest v2 from the same pipeline release as the Parquet
+files. Place it at `train_and_eval/market_data/manifest.json`.
+`validate_market_data --all` no longer creates, resets, or upgrades manifests.
+
+### Market-data hash, size, or timestamp mismatch
+
+Verify that the manifest and Parquet files belong to the same release and that
+the files were copied completely. Restore matching source files or publish a
+new dataset through the data pipeline. Do not replace the expected hash merely
+to make a modified file pass verification.
+
+### Dataset warnings are not approved
+
+Complete warning review and publication in `NQ_HISTORICAL_DATA_PIPELINE`, then
+import its published manifest. PPO_AGENT does not provide a warning-acceptance
+override and does not rewrite the producer's acceptance record.
 
 ### `RunAlreadyExistsError`
 

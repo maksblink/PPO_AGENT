@@ -132,6 +132,12 @@ class Run(Base):
 
     __tablename__ = "runs"
 
+    window_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    cycle_id: Mapped[int | None] = mapped_column(ForeignKey("walk_forward_cycles.id"), nullable=True)
+    stage_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    candidate_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stage_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     __table_args__ = (
         CheckConstraint(
             """
@@ -160,7 +166,7 @@ class Run(Base):
             name="train_rows_positive",
         ),
         CheckConstraint(
-            "validation_rows >= 1",
+            "validation_rows >= 0",
             name="validation_rows_positive",
         ),
         CheckConstraint(
@@ -2082,3 +2088,34 @@ class Evaluation(Base):
         foreign_keys=[checkpoint_id],
     )
 
+
+
+class WalkForwardStudy(Base):
+    """Immutable protocol and resolved calendar; status is execution progress only."""
+    __tablename__ = "walk_forward_studies"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    protocol_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    protocol: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    git_commit: Mapped[str] = mapped_column(String(40), nullable=False)
+    git_branch: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class WalkForwardCycle(Base):
+    __tablename__ = "walk_forward_cycles"
+    __table_args__ = (UniqueConstraint("study_id", "number"), CheckConstraint("number >= 1", name="positive_number"))
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    study_id: Mapped[int] = mapped_column(ForeignKey("walk_forward_studies.id"), nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source_checkpoint_id: Mapped[int | None] = mapped_column(ForeignKey("checkpoints.id", use_alter=True), nullable=True)
+    selected_checkpoint_id: Mapped[int | None] = mapped_column(ForeignKey("checkpoints.id", use_alter=True), nullable=True)
+    refit_checkpoint_id: Mapped[int | None] = mapped_column(ForeignKey("checkpoints.id", use_alter=True), nullable=True)
+    test_evaluation_id: Mapped[int | None] = mapped_column(ForeignKey("evaluations.id", use_alter=True), nullable=True)
+    reference_evaluation_id: Mapped[int | None] = mapped_column(ForeignKey("evaluations.id", use_alter=True), nullable=True)
+    selection: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)

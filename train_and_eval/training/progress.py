@@ -42,6 +42,7 @@ class TrainingPreflightSnapshot:
     total_checkpoint_writes: int
     training_segment_count: int
     all_segments_batch_aligned: bool
+    prepended_training_data_steps: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,10 +190,10 @@ class LiveTrainingProgress:
                 f"{snapshot.original_steps_per_data_epoch:,}"
             ),
             (
-                "  "
-                f"{snapshot.original_steps_per_data_epoch:,} % "
-                f"{snapshot.batch_size:,} = "
-                f"{snapshot.trimmed_training_data_steps:,}"
+                "  " +
+                (f"prepend earlier scored steps: {snapshot.prepended_training_data_steps:,}"
+                 if snapshot.prepended_training_data_steps else
+                 f"{snapshot.original_steps_per_data_epoch:,} % {snapshot.batch_size:,} = {snapshot.trimmed_training_data_steps:,}")
             ),
             (
                 "  trimmed oldest TRAIN steps: "

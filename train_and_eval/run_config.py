@@ -126,9 +126,45 @@ ContinuationSection = Annotated[
 ]
 
 
+class TimeRangeSection(StrictConfigModel):
+    start: str
+    end: str
+
+    @field_validator("start", "end")
+    @classmethod
+    def canonical_timestamp(cls, value: str) -> str:
+        from datetime import datetime, timezone
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError("Time range bounds must be timezone-aware")
+        return timestamp.astimezone(timezone.utc).isoformat()
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> Self:
+        from datetime import datetime
+        if datetime.fromisoformat(self.end) <= datetime.fromisoformat(self.start):
+            raise ValueError("Time ranges must be increasing [start, end) bounds")
+        return self
+
+
 class DataSection(StrictConfigModel):
     path: str
-    train_ratio: float = Field(gt=0.0, lt=1.0)
+    train_ratio: float | None = Field(default=None, gt=0.0, lt=1.0)
+    train_range: TimeRangeSection | None = None
+    validation_range: TimeRangeSection | None = None
+    alignment: Literal["trim_start", "prepend"] = "trim_start"
+
+    @model_validator(mode="after")
+    def validate_split_mode(self) -> Self:
+        if (self.train_ratio is None) == (self.train_range is None):
+            raise ValueError("Specify exactly one of train_ratio or train_range")
+        if self.train_ratio is not None and self.validation_range is not None:
+            raise ValueError("validation_range requires train_range")
+        if self.train_range and self.validation_range:
+            from datetime import datetime
+            if datetime.fromisoformat(self.train_range.end) > datetime.fromisoformat(self.validation_range.start):
+                raise ValueError("Training must end before validation begins")
+        return self
 
     @field_validator("path")
     @classmethod
@@ -437,6 +473,7 @@ class PPOSection(StrictConfigModel):
 
 
 class EvaluationSection(StrictConfigModel):
+    training_mode: Literal["scheduled", "final_only", "none"] = "scheduled"
     eval_every_steps: PositiveInt
     checkpoint_every_steps: PositiveInt
 
@@ -501,6 +538,13 @@ class RunConfig(StrictConfigModel):
     environment: EnvironmentSection
     ppo: PPOSection
     evaluation: EvaluationSection
+
+    @model_validator(mode="after")
+    def validate_time_range_evaluation(self) -> Self:
+        if self.data.train_range is not None:
+            if (self.evaluation.training_mode != "none") != (self.data.validation_range is not None):
+                raise ValueError("Temporal training requires a validation range exactly when evaluation is enabled")
+        return self
 
     @model_validator(mode="after")
     def validate_initial_long_probability(self) -> Self:

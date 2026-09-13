@@ -51,6 +51,7 @@ class ChronologicalMarketDataSplit:
 
     steps_per_data_epoch: int
     validation_steps: int
+    window_metadata: dict | None = None
 
     def requested_training_steps(
         self,

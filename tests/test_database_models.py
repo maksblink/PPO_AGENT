@@ -51,6 +51,7 @@ def test_runs_table_contains_required_columns() -> None:
         "error_message",
     }
 
+    expected_columns.update({"window_metadata", "cycle_id", "stage_role", "candidate_id", "stage_summary"})
     assert set(table.columns.keys()) == expected_columns
 
 

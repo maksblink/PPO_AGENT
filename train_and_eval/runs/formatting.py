@@ -558,10 +558,10 @@ def render_run_show(
         (
             ("Data path", run.data_path),
             ("Data SHA-256", run.data_sha256),
-            ("Total rows", _integer(run.train_rows + run.validation_rows)),
+            ("Dataset rows", _integer((getattr(run, "window_metadata", None) or {}).get("data_rows", run.train_rows + run.validation_rows))),
             ("TRAIN rows", _integer(run.train_rows)),
             ("Validation rows", _integer(run.validation_rows)),
-            ("Split index", _integer(run.split_index)),
+            ("Legacy split index", "n/a (explicit time ranges)" if getattr(run, "window_metadata", None) else _integer(run.split_index)),
             (
                 "Train ratio",
                 _float(_config_value(config, "data", "train_ratio"), digits=6),

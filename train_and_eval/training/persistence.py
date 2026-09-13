@@ -237,6 +237,9 @@ def create_pending_run(
     git_state: CleanGitState,
     training_steps_requested: int,
     source_checkpoint_id: int | None = None,
+    cycle_id: int | None = None,
+    stage_role: str | None = None,
+    candidate_id: str | None = None,
 ) -> PersistedRunState:
     """Create one pending training run from verified immutable inputs."""
     config = loaded_config.config
@@ -271,7 +274,8 @@ def create_pending_run(
         )
 
     if manifest_rows != (
-        split.train_rows + split.validation_rows
+        split.window_metadata["data_rows"] if split.window_metadata is not None
+        else split.train_rows + split.validation_rows
     ):
         raise RunIdentityError(
             "Manifest row count does not match the chronological split."
@@ -365,6 +369,8 @@ def create_pending_run(
 
             run = Run(
                 name=config.run.name,
+                window_metadata=split.window_metadata,
+                cycle_id=cycle_id, stage_role=stage_role, candidate_id=candidate_id,
                 status=RunStatus.PENDING,
                 continuation_mode=continuation_mode,
                 source_checkpoint_id=resolved_source_checkpoint_id,

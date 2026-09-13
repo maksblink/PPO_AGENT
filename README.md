@@ -1376,3 +1376,252 @@ python -m train_and_eval.runs checkpoints --run-id <SOURCE_RUN_ID>
 
 The source checkpoint, checkpoint file, and archived configuration must all be
 available and compatible.
+
+## Weekly walk-forward training
+
+The walk-forward protocol adds a separate, time-based workflow while retaining
+all existing ratio-split commands. It uses the same PPO adapter, environment,
+immutable checkpoints, run registry, evaluation runner and report artifacts.
+Apply Alembic revision `f0a1b2c3d4e5` before running it. The upgrade adds tables
+and columns and preserves existing runs, checkpoints, evaluations and data.
+
+### Frozen starting protocol
+
+Committed definitions are in `configs/walk_forward/nq5m_v1_seed1.yml`,
+`nq5m_v1_seed2.yml` and `nq5m_v1_seed3.yml`. Each seed is an independent study;
+seeds are not candidates in a weekly ranking. Study names, normalized protocol,
+resolved plan, dataset/manifest identities and code commit are recorded before
+training. Changing any of them requires a new study name.
+
+| Setting | Starting value |
+|---|---|
+| Dataset | Verified manifest-v2 5m file from release `NQ_CONTINUOUS_WEEKDAYS_20260909T163317Z_7d5ce9278b18` |
+| Initial history | First approximately 50% of elapsed coverage, rounded down to Monday 00:00 UTC |
+| Validation / test / advance | 4 weeks / 1 week / 1 week |
+| Candidate learning rates, tie order | `0.000075`, `0.00015`, `0.0003` |
+| Initial / weekly / refit budget | One aligned data epoch per stage |
+| Rollout / minibatch / PPO epochs | 1024 / 256 / 3 |
+| Selection | Highest final-checkpoint validation `balanced_score`, then candidate order |
+| Refit learning rate | Fixed `0.000075` |
+| Optimizer | Preserve the source optimizer state in independently loaded copies |
+| Evaluation policy | `deterministic_argmax` |
+| Position boundaries | Start FLAT; force-close at each episode/test end |
+| Incomplete final test | Skip |
+
+Candidate architecture and environment settings are shared within a study.
+The starting MLP is `[384, 384, 384]` with `tanh`, gamma 0.9, GAE lambda 0.85,
+entropy coefficient 0.0002, initial LONG probability 0.55 and no additional
+exposure/turnover/drawdown penalties. Inspect the committed YAML for all fields. The nested `run` is a reusable
+single-run template: the workflow derives its name, seed, split, duration, LR
+and evaluation mode from the top-level protocol for each stage. In particular,
+the template `train_ratio` is replaced by explicit time ranges and does not
+control the walk-forward boundary. Each effective stage configuration is
+persisted in the run registry.
+These values define an initial experiment, not a confirmed profitable strategy.
+
+The calendar is `[start, end)` in UTC. For the current release the initial
+boundary is **2018-07-23 00:00 UTC**. The first validation is
+`[2018-07-23, 2018-08-20)` and the first test is `[2018-08-20, 2018-08-27)`.
+There are **420 complete calendar test windows**, ending at 2026-09-07 00:00 UTC.
+The remaining September 7–8 data does not form a full final test week.
+A complete calendar window may contain missing candles; no candles are imputed.
+A window with no available scored rows, or insufficient earlier context, fails
+preflight rather than silently disappearing from the study.
+
+Window lengths are configurable. This first implementation requires
+`test_weeks == step_weeks` to keep tests consecutive and non-overlapping, and
+`step_weeks <= validation_weeks`. Budgets are positive integer data epochs.
+The optional CLI execution limit does not change the frozen calendar plan.
+
+### Two separate model histories
+
+Cycle 1 trains each candidate on initial A, starting from identical seeded
+policy weights. Initial checkpoints and policy-state hashes document this
+common initialization. Each candidate is evaluated once at its final checkpoint
+on the next four weeks. Periodic checkpoints are diagnostic, not eligible for
+selection in this protocol.
+
+For later cycles, all candidates load the same selected **pre-refit** checkpoint
+from the previous cycle and train on the oldest week(s) leaving validation.
+The best updated candidate is selected even when its validation score is worse
+than that of the unchanged source. The unchanged source is evaluated as a
+separate diagnostic reference and never enters the ranking.
+
+The selected checkpoint is loaded again into an independent model, including
+an independent copy of optimizer state, and trained on the four validation
+weeks with the fixed refit budget/LR. This stage has no validation, no early
+stopping and no intermediate checkpoint selection. Its final checkpoint is
+frozen and evaluated on the next test week. **The refit checkpoint never becomes
+the source of the next cycle's candidates.** There is no second weekly update
+after candidate selection.
+
+Validation describes the model before refit; test describes the model after
+refit. Earlier test weeks can subsequently become validation and training data,
+without altering their originally recorded test results. Overlapping validation
+windows are descriptive comparisons, not independent test returns.
+
+### Context and minibatch alignment
+
+`baseline_multiscale_v1` requires 6145 earlier rows for a complete observation.
+The action from that observation executes at the next candle open. Context rows
+are not scored and produce no optimizer steps.
+
+For initial A:
+
+1. Reserve the complete 6145-row context.
+2. Count the remaining available execution rows, `N`.
+3. Move the training start forward by `N % batch_size` rows.
+4. Train through A's exclusive end, retaining all required earlier context.
+
+With batch size 256, the additional trim is 0–255 rows. The model never trains
+on the reserved warm-up rows.
+
+For weekly candidate updates and final refit:
+
+1. Count available rows in the nominal calendar range, `N`.
+2. Prepend `(-N) % batch_size` available rows from earlier history to the scored
+   training range.
+3. Supply a separate full observation context before this expanded start.
+
+A gap-free 5m UTC weekday week has 1440 rows; 96 earlier rows expand it to
+1536 steps, or six minibatches. With rollout length 1024 this is one 1024-step
+rollout plus one 512-step rollout. With missing candles the actual prepend count
+changes; it is recorded in the plan. All candidates use the same aligned range.
+An epoch is a pass through this **expanded** range. Earlier repeated data is
+intentional and never comes from the future validation/test range.
+
+Validation and test ranges are never aligned or padded for PPO minibatches.
+Context features remain the existing causal rolling features; no learned
+`VecNormalize` state is introduced. Current `normalize_advantage` applies only
+during PPO training. Weights and optimizer moments are loaded independently
+for every branch.
+
+### Plan, run three cycles, then continue
+
+Inspect the plan without training or creating database rows:
+
+```bash
+python -m train_and_eval.walk_forward plan \
+  --config configs/walk_forward/nq5m_v1_seed1.yml \
+  --output /tmp/PPO_AGENT_walk_forward_plan.json
+```
+
+After tests, migration, and committing the intended changes, start the first
+three cycles using the real one-epoch starting budgets:
+
+```bash
+python -m train_and_eval.walk_forward run \
+  --config configs/walk_forward/nq5m_v1_seed1.yml \
+  --max-cycles 3
+```
+
+This is a process pilot, not a reduced-step or profitability confirmation run.
+The study is marked `paused` while planned cycles remain. The command prints
+the study ID and writes the aggregate report automatically after the completed
+prefix. Add `--plain-output` to disable the live training display.
+
+Continue the same unchanged study, preserving its completed tests:
+
+```bash
+python -m train_and_eval.walk_forward run \
+  --config configs/walk_forward/nq5m_v1_seed1.yml
+```
+
+Run the other seeds by supplying their corresponding configuration files.
+Do not choose a preferred seed from test results and label that result an
+independent confirmation.
+
+### Persistence, interruption and replay
+
+`walk_forward_studies` stores the frozen protocol and calendar. Each row in
+`walk_forward_cycles` stores its source/selected/refit checkpoint IDs, candidate
+selection evidence, diagnostic reference evaluation and final test evaluation.
+Existing `runs` rows record cycle, stage role and candidate identity.
+
+`runs.window_metadata` is authoritative for temporal runs: it stores the full
+dataset row count, nominal and actual training bounds, observation lookback,
+trim/prepend counts and validation bounds. In temporal mode, `train_rows` counts
+the environment slice including context; legacy `split_index` is retained for
+compatibility but is **not** a global dataset boundary. Consumers must use
+`window_metadata` for these runs. Ratio-mode runs retain their original meaning.
+
+`runs.stage_summary` records environment steps, rollout sizes, the difference
+in PPO's epoch-update counter, actual optimizer-step calls, initial policy hash
+and initial checkpoint where applicable. PPO epochs and optimizer steps are
+separate quantities.
+
+Candidate validations use `run_validation`, unchanged-source diagnostics use
+`custom_range`, and test evaluations use `extended_out_of_sample`. Replay of a
+persisted evaluation uses its own archived start/end indices, including when
+regenerating a missing test trajectory. Dataset and checkpoint identity checks
+remain enabled.
+
+Only one process may advance a named study at a time, guarded by a PostgreSQL
+session advisory lock. Rerunning a paused study reuses completed stages and
+exact completed evaluations; it does not rerank using test scores or overwrite
+completed tests. Selection is committed before refit and before test.
+
+Automatic recovery does not silently retrain a failed, running or pending
+training run. Such a state requires diagnosis; preserve it and start a new
+study name for a full restart. An interrupted evaluation can be repeated from
+the unchanged checkpoint; an already completed exact evaluation is reused.
+A changed protocol, data release or code commit also requires a new study name.
+
+### Aggregate reports
+
+Rebuild a report from a consecutive completed prefix:
+
+```bash
+python -m train_and_eval.walk_forward report --study-id <STUDY_ID>
+```
+
+Outputs are under `artifacts/walk_forward/<zero-padded-study-id>/`:
+
+- `report.html`: standalone report with embedded charts;
+- `validation.csv`: candidate and unchanged-source validation comparisons;
+- `tests.csv`: separate per-test metrics and checkpoint lineage;
+- `summary.json`: weekly mean, median, minimum, maximum, positive-window share,
+  exposure, trades, fees, swaps, total costs and full-path drawdown;
+- `test_trajectory.parquet`: the additive, chronological test-only path;
+- `protocol.json`, `plan.json`, `stages.json`: protocol, exact ranges and stage
+  provenance; PNG charts are also saved individually.
+
+Individual validation/test trajectories, trade events and checkpoints remain
+under the existing `artifacts/runs/` structure. Existing run-level PPO diagnostic
+plots can still be generated with `python -m train_and_eval.runs report`.
+
+For fixed `stake_pln`, `agent_return` is additive cumulative P&L expressed as a
+fraction of that nominal. Aggregate PLN P&L is `stake_pln * sum(test returns)`;
+there is **no compounding**. Each weekly trajectory is offset by previous test
+results before computing the maximum drawdown of the entire path, including
+its initial zero. Drawdown is expressed against the fixed nominal, not current
+account equity. Validation results never enter that path.
+
+The always-long comparator uses the same execution candles, fees, swaps and
+weekly forced closing/reopening rules. It is not an uninterrupted multi-year
+buy-and-hold position. Aggregate exposure is weighted by available scored bars,
+not elapsed time, because missing candles are not imputed.
+
+### Walk-forward tests
+
+The ordinary suite includes calendar, gap, warm-up, alignment, future-data
+isolation, optimizer-copy, training-without-validation, selection and additive
+reporting checks:
+
+```bash
+python -m pytest -q
+```
+
+An optional integration test runs real PPO on generated data, applies all
+migrations, executes three cycles, verifies lineage and completed-stage reuse,
+and reconstructs a missing test trajectory. It requires a separately supplied
+PostgreSQL test URL and creates/removes only its own randomly named schema:
+
+```bash
+PPO_WALK_FORWARD_TEST_DATABASE_URL='postgresql+psycopg://<user>:<password>@<host>:<port>/<test_db>' \
+  python -m pytest -q -s tests/test_walk_forward_integration.py
+```
+
+The test skips when that variable is absent; it does not default to the
+application database. The downgrade refuses to discard existing walk-forward
+history or invalidate training-only temporal runs.

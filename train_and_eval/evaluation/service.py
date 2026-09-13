@@ -98,6 +98,7 @@ class CheckpointEvaluationSource:
     validation_rows: int
     run_git_commit: str
     run_git_branch: str
+    window_metadata: dict[str, Any] | None = None
 
 
 def _nonnegative_integer(
@@ -226,6 +227,7 @@ def _load_source(
             ),
             run_git_commit=str(run.git_commit),
             run_git_branch=str(run.git_branch),
+            window_metadata=getattr(run, "window_metadata", None),
         )
 
 
@@ -303,6 +305,11 @@ def _load_source_market_data(
             "match the source run."
         )
 
+    if source.window_metadata is not None:
+        if len(frame) != source.window_metadata["data_rows"]:
+            raise EvaluationSourceMismatchError("Temporal source dataset row count changed")
+        return frame
+
     expected_rows = (
         source.train_rows
         + source.validation_rows
@@ -351,6 +358,8 @@ def evaluate_run_validation_checkpoint(
     progress_interval_steps: int = 128,
     persist_trajectory: bool = False,
     render_plots: bool = False,
+    evaluation_range: tuple[int, int] | None = None,
+    data_scope: EvaluationDataScope | str | None = None,
 ) -> PersistedEvaluationState:
     """
     Evaluate one persisted checkpoint on its archived validation range.
@@ -391,12 +400,19 @@ def evaluate_run_validation_checkpoint(
         manifest_path=manifest_path,
     )
 
-    evaluation_start_index = (
-        source.split_index
-    )
-    evaluation_end_index = len(
-        market_data
-    )
+    if evaluation_range is not None:
+        evaluation_start_index, evaluation_end_index = evaluation_range
+        if data_scope is None or data_scope == EvaluationDataScope.RUN_VALIDATION:
+            raise EvaluationSourceMismatchError("Explicit ranges require custom or out-of-sample scope")
+    elif source.window_metadata is not None:
+        bounds = source.window_metadata.get("validation")
+        if bounds is None:
+            raise EvaluationSourceMismatchError("This training run has no validation range")
+        evaluation_start_index, evaluation_end_index = bounds["start_index"], bounds["end_index"]
+    else:
+        evaluation_start_index, evaluation_end_index = source.split_index, len(market_data)
+    if not 0 < evaluation_start_index < evaluation_end_index <= len(market_data):
+        raise EvaluationSourceMismatchError("Invalid evaluation range")
     context_definition = (
         get_context_definition(
             config.environment.context
@@ -454,10 +470,7 @@ def evaluate_run_validation_checkpoint(
             probability_threshold
         ),
         seed=resolved_seed,
-        data_scope=(
-            EvaluationDataScope
-            .RUN_VALIDATION
-        ),
+        data_scope=data_scope or EvaluationDataScope.RUN_VALIDATION,
         data_path=source.data_path,
         data_sha256=source.data_sha256,
         data_rows=len(market_data),
@@ -580,6 +593,7 @@ def replay_run_validation_checkpoint(
     threshold_action: int | None = None,
     probability_threshold: float | None = None,
     seed: int | None = None,
+    evaluation_range: tuple[int, int] | None = None,
 ) -> EvaluationRunResult:
     """Replay archived run-validation without inserting an Evaluation row.
 
@@ -597,8 +611,15 @@ def replay_run_validation_checkpoint(
     market_data = _load_source_market_data(
         source, data_directory=data_directory, manifest_path=manifest_path
     )
-    start = source.split_index
-    end = len(market_data)
+    if evaluation_range is not None:
+        start, end = evaluation_range
+    elif source.window_metadata is not None:
+        bounds = source.window_metadata.get("validation")
+        if bounds is None:
+            raise EvaluationSourceMismatchError("No validation range; supply persisted evaluation bounds")
+        start, end = bounds["start_index"], bounds["end_index"]
+    else:
+        start, end = source.split_index, len(market_data)
     definition = get_context_definition(config.environment.context)
     lookback = definition.required_history_rows(int(config.environment.window))
     resolved_seed = source.run_seed if seed is None else _nonnegative_integer(seed, name="seed")

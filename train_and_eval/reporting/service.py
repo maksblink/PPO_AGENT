@@ -151,11 +151,14 @@ def generate_run_report(
                     session_factory=session_factory,
                     checkpoint_id=int(checkpoint.id),
                     project_root=root,
+                    data_directory=root / "data",
+                    manifest_path=root / "train_and_eval/market_data/manifest.json",
                     artifacts_directory=artifacts_directory,
                     policy_mode=evaluation.policy_mode,
                     threshold_action=evaluation.threshold_action,
                     probability_threshold=evaluation.probability_threshold,
                     seed=int(evaluation.seed),
+                    evaluation_range=(int(evaluation.evaluation_start_index), int(evaluation.evaluation_end_index)),
                 )
             _assert_replay_matches_evaluation(result, evaluation)
             directory = persist_evaluation_source_artifacts(

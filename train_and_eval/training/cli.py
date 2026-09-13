@@ -112,6 +112,11 @@ def _print_success(
     *,
     stream: TextIO,
 ) -> None:
+    if result.best_evaluation is None:
+        print(f"Training run #{result.run.run_id}: completed without validation; "
+              f"final checkpoint #{result.checkpoint.checkpoint_id}; "
+              f"steps={result.training.local_steps_completed}", file=stream)
+        return
     run = result.run
     training = result.training
 
@@ -214,6 +219,11 @@ def _print_live_success(
     *,
     stream: TextIO,
 ) -> None:
+    if result.best_evaluation is None:
+        print(f"Training run #{result.run.run_id}: completed without validation; "
+              f"final checkpoint #{result.checkpoint.checkpoint_id}; "
+              f"steps={result.training.local_steps_completed}", file=stream)
+        return
     run = result.run
     training = result.training
     outcome = "stopped early" if run.stopped_early else "completed"

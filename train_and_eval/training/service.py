@@ -145,8 +145,8 @@ class TrainingServiceResult:
     checkpoint: PersistedCheckpoint
     checkpoints: tuple[PersistedCheckpoint, ...]
     evaluations: tuple[PersistedEvaluationState, ...]
-    best_checkpoint: PersistedCheckpoint
-    best_evaluation: PersistedEvaluationState
+    best_checkpoint: PersistedCheckpoint | None
+    best_evaluation: PersistedEvaluationState | None
     training: ExactPPOTrainingResult
     early_stop_reason: str | None
     source_checkpoint_id: int | None
@@ -451,6 +451,10 @@ def _load_and_split_data(
         data_directory=data_directory,
         manifest_path=manifest_path,
     )
+    if config.data.train_range is not None:
+        from train_and_eval.walk_forward.windows import split_time_ranges
+        split = split_time_ranges(market_data, config)
+        return market_data, split, int(split.window_metadata["trimmed_steps"])
     split = split_market_data_chronologically(
         market_data,
         train_ratio=float(
@@ -638,6 +642,9 @@ def train_ppo_run(
     log_interval: int | None = 1,
     progress_bar: bool = False,
     progress_reporter: TrainingProgressReporter | None = None,
+    cycle_id: int | None = None,
+    stage_role: str | None = None,
+    candidate_id: str | None = None,
 ) -> TrainingServiceResult:
     """
     Execute one complete fresh or resumed PPO training run.
@@ -734,6 +741,12 @@ def train_ppo_run(
         ),
     )
 
+    if config.evaluation.training_mode != "scheduled":
+        schedule = tuple(
+            replace(event, evaluation_due=(event.final and config.evaluation.training_mode == "final_only"))
+            for event in schedule if event.final or event.run_step % checkpoint_resolution.resolved_steps == 0
+        )
+
     schedule_event_steps = tuple(
         int(event.run_step)
         for event in schedule
@@ -767,7 +780,9 @@ def train_ppo_run(
             original_steps_per_data_epoch=(
                 int(split.steps_per_data_epoch)
                 + int(trimmed_training_data_steps)
+                - int((getattr(split, "window_metadata", None) or {}).get("prepended_steps", 0))
             ),
+            prepended_training_data_steps=int((getattr(split, "window_metadata", None) or {}).get("prepended_steps", 0)),
             trimmed_training_data_steps=int(
                 trimmed_training_data_steps
             ),
@@ -827,7 +842,7 @@ def train_ppo_run(
                 periodic_evaluations
             ),
             total_checkpoint_writes=(
-                periodic_checkpoint_writes + 1
+                periodic_checkpoint_writes + 1 + int(cycle_id is not None and resume_source is None)
             ),
             training_segment_count=len(
                 segment_sizes
@@ -847,6 +862,7 @@ def train_ppo_run(
         split=split,
         git_state=git_state,
         training_steps_requested=requested_steps,
+        cycle_id=cycle_id, stage_role=stage_role, candidate_id=candidate_id,
         source_checkpoint_id=(
             None
             if resume_source is None
@@ -917,12 +933,35 @@ def train_ppo_run(
         model_steps_before = int(
             model.num_timesteps
         )
+        updates_before = int(getattr(model, "_n_updates", 0))
+        optimizer_steps = [0]
+        optimizer_hook = None
+        if cycle_id is not None:
+            def count_optimizer_step(optimizer, args, kwargs):
+                optimizer_steps[0] += 1
+            optimizer_hook = model.policy.optimizer.register_step_post_hook(count_optimizer_step)
         storage = ArtifactStorage(
             project_root=root,
             artifacts_directory=(
                 artifacts_directory
             ),
         )
+        initial_checkpoint_id = None
+        initial_policy_sha256 = None
+        if cycle_id is not None:
+            import hashlib
+            state_digest = hashlib.sha256()
+            for name, value in sorted(model.policy.state_dict().items()):
+                state_digest.update(name.encode())
+                state_digest.update(value.detach().cpu().contiguous().numpy().tobytes())
+            initial_policy_sha256 = state_digest.hexdigest()
+            if resume_source is None:
+                initial_checkpoint = persist_ppo_checkpoint(
+                    session_factory, storage, model, run_id=run_id, run_step=0,
+                    save_reason=CheckpointSaveReason.INITIAL,
+                )
+                persisted_checkpoints.append(initial_checkpoint)
+                initial_checkpoint_id = initial_checkpoint.checkpoint_id
 
         _progress_call(
             progress_reporter,
@@ -1437,7 +1476,7 @@ def train_ppo_run(
                 "number of training steps."
             )
 
-        if (
+        if config.evaluation.training_mode != "none" and (
             best_checkpoint is None
             or best_evaluation is None
         ):
@@ -1460,6 +1499,24 @@ def train_ppo_run(
                 metrics=latest_training_update.metrics,
             )
 
+        if cycle_id is not None:
+            from train_and_eval.database.models import Run
+            with session_factory() as session:
+                row = session.get(Run, run_id)
+                row.stage_summary = {
+                    "model_steps_before": model_steps_before,
+                    "model_steps_after": model_steps_after,
+                    "environment_steps": completed_steps,
+                    "rollout_sizes": rollout_sizes,
+                    "ppo_epoch_updates": int(model._n_updates) - updates_before,
+                    "optimizer_steps": optimizer_steps[0],
+                    "optimizer_policy": "preserve_independent_copy",
+                    "initial_checkpoint_id": initial_checkpoint_id,
+                    "initial_policy_sha256": initial_policy_sha256,
+                }
+                session.commit()
+            if optimizer_hook is not None:
+                optimizer_hook.remove()
         completed = complete_run(
             session_factory,
             run_id=run_id,

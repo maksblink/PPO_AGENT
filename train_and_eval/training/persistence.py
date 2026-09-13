@@ -255,9 +255,9 @@ def create_pending_run(
     manifest_sha256 = manifest_entry.get("sha256")
     manifest_rows = manifest_entry.get("rows")
 
-    if manifest_entry.get("status") != "okay":
+    if manifest_entry.get("validation_status") != "passed":
         raise RunIdentityError(
-            "Market-data manifest entry must have status='okay'."
+            "Market-data manifest entry must have validation_status='passed'."
         )
 
     if manifest_path != config.data.path:

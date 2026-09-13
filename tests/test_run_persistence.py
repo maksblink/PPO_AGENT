@@ -149,7 +149,7 @@ def _loaded_config() -> LoadedRunConfig:
         loaded,
         data_manifest_entry={
             "path": loaded.config.data.path,
-            "status": "okay",
+            "validation_status": "passed",
             "sha256": "a" * 64,
             "rows": total_rows,
         },

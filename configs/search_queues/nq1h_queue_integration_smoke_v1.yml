@@ -1,9 +1,0 @@
-queue_schema_version: 1
-name: nq1h_queue_integration_smoke_v1
-configs:
-- configs/experiments/nq1h_queue_integration_smoke_v1/00_fresh_steps4096_seed101.yml
-- configs/experiments/nq1h_queue_integration_smoke_v1/01_fresh_steps4096_seed102.yml
-- configs/experiments/nq1h_queue_integration_smoke_v1/02_fresh_steps4096_seed103.yml
-- configs/experiments/nq1h_queue_integration_smoke_v1/04_fresh_steps4096_seed105.yml
-- configs/experiments/nq1h_queue_integration_smoke_v1/05_fresh_steps4096_seed106.yml
-- configs/experiments/nq1h_queue_integration_smoke_v1/06_fresh_steps4096_seed107.yml

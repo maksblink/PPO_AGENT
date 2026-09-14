@@ -1,18 +1,11 @@
-"""Opt-in PostgreSQL test. Uses and removes only its own randomly named schema.
-
-PPO_WALK_FORWARD_TEST_DATABASE_URL must point to a disposable test database.
-No connection to the application DATABASE_URL is made unless explicitly supplied
-through that separate variable. The ordinary suite skips this test.
-"""
+"""Automatic PostgreSQL integration test in a dedicated test database."""
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
-import uuid
 
 from alembic import command
 from alembic.config import Config
@@ -21,8 +14,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import select
+from tests.database_support import isolated_test_schema, resolve_test_database_url
 import yaml
 
 from train_and_eval.database.models import Checkpoint, Evaluation, Run, WalkForwardCycle
@@ -33,25 +26,12 @@ from train_and_eval.walk_forward.reporting import generate_report
 
 @pytest.fixture
 def database(monkeypatch):
-    url = os.environ.get("PPO_WALK_FORWARD_TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("Set PPO_WALK_FORWARD_TEST_DATABASE_URL for the isolated PostgreSQL integration test")
-    schema = "wf_test_" + uuid.uuid4().hex
-    admin = create_engine(url, isolation_level="AUTOCOMMIT")
-    with admin.connect() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    # Startup search_path confines the migration and every stage to this test schema.
-    scoped = make_url(url).update_query_dict({"options": f"-csearch_path={schema}"}).render_as_string(hide_password=False)
-    engine = create_engine(scoped, pool_pre_ping=True)
-    monkeypatch.setenv("DATABASE_URL", scoped)
-    try:
-        command.upgrade(Config("alembic.ini"), "head")
+    root = Path(__file__).resolve().parents[1]
+    url = resolve_test_database_url(root)
+    with isolated_test_schema(url) as (engine, scoped):
+        monkeypatch.setenv("DATABASE_URL", scoped.render_as_string(hide_password=False))
+        command.upgrade(Config(str(root / "alembic.ini")), "head")
         yield create_session_factory(engine), engine
-    finally:
-        engine.dispose()
-        with admin.connect() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        admin.dispose()
 
 
 def synthetic_project(tmp_path):

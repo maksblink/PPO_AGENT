@@ -1612,16 +1612,39 @@ reporting checks:
 python -m pytest -q
 ```
 
-An optional integration test runs real PPO on generated data, applies all
-migrations, executes three cycles, verifies lineage and completed-stage reuse,
-and reconstructs a missing test trajectory. It requires a separately supplied
-PostgreSQL test URL and creates/removes only its own randomly named schema:
+The integration test runs automatically with the ordinary pytest suite. It runs
+real PPO on generated data, applies all migrations, executes three cycles,
+verifies lineage and completed-stage reuse, and reconstructs a missing trajectory.
+
+By default, tests read DATABASE_URL from the environment or local .env and
+create/reuse ppo_agent_test on the same PostgreSQL server with the same credentials.
+Provisioning connects to the postgres maintenance database, not the application
+database. First creation requires CREATEDB permission, available to the user
+initialized by the supplied Compose image. Start PostgreSQL before testing:
 
 ```bash
-PPO_WALK_FORWARD_TEST_DATABASE_URL='postgresql+psycopg://<user>:<password>@<host>:<port>/<test_db>' \
-  python -m pytest -q -s tests/test_walk_forward_integration.py
+docker compose up -d --wait postgres
+python -m pytest -q
 ```
 
-The test skips when that variable is absent; it does not default to the
-application database. The downgrade refuses to discard existing walk-forward
-history or invalidate training-only temporal runs.
+Each invocation creates a random wf_test_* schema inside the test database.
+Migrations, runs and sequences live only there. A finally block removes that
+schema after success or failure, including migration failures, and verifies its
+removal. Application experiments, artifacts and ID counters are untouched.
+Generated data and artifacts use pytest temporary directories. The empty test
+database is retained for reuse. A forced process kill or database outage may
+leave a temporary schema behind; later tests use new schemas and never remove
+unrelated schemas.
+
+Optionally set PPO_WALK_FORWARD_TEST_DATABASE_URL in the environment or .env to
+use an already existing dedicated database. Its name must end in _test and differ
+from the application database name. Explicit targets are not provisioned.
+Missing configuration, connection failures and insufficient permissions fail the
+test instead of skipping it. To run only the walk-forward integration test:
+
+```bash
+python -m pytest -q -s tests/test_walk_forward_integration.py
+```
+
+The downgrade refuses to discard existing walk-forward history or invalidate
+training-only temporal runs.

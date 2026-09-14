@@ -47,6 +47,8 @@ class WalkForwardConfig(StrictConfigModel):
             raise ValueError("Candidate learning rates must be unique, finite and positive")
         if not math.isfinite(self.refit_learning_rate):
             raise ValueError("Refit learning rate must be finite")
+        if self.run is None:
+            return self
         if not self.run.environment.force_close_on_done:
             raise ValueError("This protocol requires closing positions at every episode/test boundary")
         if self.run.evaluation.policy_mode != "deterministic_argmax":
@@ -58,8 +60,26 @@ class WalkForwardConfig(StrictConfigModel):
         return self
 
 
+class CheckpointWalkForwardConfig(WalkForwardConfig):
+    """Stage two starts from an explicitly chosen stage-one checkpoint."""
+    schema_version: Literal[2] = 2
+    source_checkpoint_id: int = Field(ge=1, strict=True)
+    run: RunConfig | None = Field(default=None, exclude=True)
+    initial_time_fraction: Literal[None] = None
+    initial_epochs: Literal[None] = None
+    bootstrap_epochs: int = Field(default=1, ge=1, strict=True)
+
+    @model_validator(mode="after")
+    def source_template_only(self):
+        if "run" in self.model_fields_set:
+            raise ValueError("Stage two inherits its run settings from source_checkpoint_id; do not supply run")
+        return self
+
+
 def load_protocol(path: str | Path) -> WalkForwardConfig:
-    return WalkForwardConfig.model_validate(yaml.safe_load(Path(path).read_text()))
+    raw = yaml.safe_load(Path(path).read_text())
+    cls = CheckpointWalkForwardConfig if isinstance(raw, dict) and raw.get("schema_version") == 2 else WalkForwardConfig
+    return cls.model_validate(raw)
 
 
 def stage_config(protocol: WalkForwardConfig, cycle: dict, *, role: str, candidate: int = 0,
@@ -72,9 +92,10 @@ def stage_config(protocol: WalkForwardConfig, cycle: dict, *, role: str, candida
     raw["data"] = {"path": protocol.run.data.path,
                    "train_range": cycle["validation"] if is_refit else cycle["update"],
                    "validation_range": None if is_refit else cycle["validation"],
-                   "alignment": "prepend" if is_refit or cycle["number"] > 1 else "trim_start"}
-    raw["training"] = {"duration_unit": "data_epochs", "duration_amount":
-                       protocol.refit_epochs if is_refit else (protocol.initial_epochs if cycle["number"] == 1 else protocol.update_epochs)}
+                   "alignment": "prepend" if protocol.schema_version == 2 or is_refit or cycle["number"] > 1 else "trim_start"}
+    first_epochs = protocol.bootstrap_epochs if protocol.schema_version == 2 else protocol.initial_epochs
+    epochs = protocol.refit_epochs if is_refit else (first_epochs if cycle["number"] == 1 else protocol.update_epochs)
+    raw["training"] = {"duration_unit": "data_epochs", "duration_amount": epochs}
     raw["ppo"]["learning_rate"] = protocol.refit_learning_rate if is_refit else protocol.learning_rates[candidate]
     raw["evaluation"]["training_mode"] = "none" if is_refit else "final_only"
     raw["artifacts"]["validation_trajectory"]["mode"] = "all"
@@ -82,7 +103,7 @@ def stage_config(protocol: WalkForwardConfig, cycle: dict, *, role: str, candida
     return RunConfig.model_validate(raw)
 
 
-def build_plan(protocol: WalkForwardConfig, frame: pd.DataFrame, manifest: dict) -> dict:
+def build_plan(protocol: WalkForwardConfig, frame: pd.DataFrame, manifest: dict, source: dict | None = None) -> dict:
     if frame.empty or not frame.DT.is_monotonic_increasing or frame.DT.duplicated().any():
         raise ValueError("Planning requires nonempty, sorted, unique candles")
     identity = manifest["files"]["5m"]
@@ -94,19 +115,35 @@ def build_plan(protocol: WalkForwardConfig, frame: pd.DataFrame, manifest: dict)
     end = pd.Timestamp(manifest["build"]["target_end_exclusive_utc"])
     if end <= frame.DT.iloc[-1] or frame.DT.iloc[-1] != pd.Timestamp(identity["last_timestamp"]):
         raise ValueError("Invalid dataset coverage metadata")
-    middle = start + (end - start) * protocol.initial_time_fraction
-    boundary = middle.normalize() - pd.Timedelta(days=middle.weekday())
-    if boundary <= start:
-        raise ValueError("Initial calendar range is empty")
-    initial = {"start": start.isoformat(), "end": boundary.isoformat()}
+    if protocol.schema_version == 2:
+        if source is None or source["checkpoint_id"] != protocol.source_checkpoint_id:
+            raise ValueError("Stage two requires the resolved stage-one checkpoint")
+        initial = source["train_range"]
+        bootstrap = source["validation_range"]
+        boundary = pd.Timestamp(bootstrap["end"])
+        middle = None
+        for value in (*initial.values(), *bootstrap.values()):
+            timestamp = pd.Timestamp(value)
+            if timestamp.tzinfo is None or timestamp.weekday() != 0 or timestamp != timestamp.normalize():
+                raise ValueError("Stage-one ranges must use Monday 00:00 UTC boundaries")
+        if (pd.Timestamp(initial["start"]) < start or initial["end"] != bootstrap["start"]
+                or boundary > end or source["data_sha256"] != identity["sha256"]):
+            raise ValueError("Stage-one ranges or data identity do not match this dataset")
+    else:
+        middle = start + (end - start) * protocol.initial_time_fraction
+        boundary = middle.normalize() - pd.Timedelta(days=middle.weekday())
+        if boundary <= start:
+            raise ValueError("Initial calendar range is empty")
+        initial = {"start": start.isoformat(), "end": boundary.isoformat()}
+        bootstrap = initial
     cycles = []
     vs = boundary
     while vs + pd.Timedelta(weeks=protocol.validation_weeks + protocol.test_weeks) <= end:
         ve = vs + pd.Timedelta(weeks=protocol.validation_weeks)
         te = ve + pd.Timedelta(weeks=protocol.test_weeks)
         number = len(cycles) + 1
-        cycle = {"number": number, "base_history": {"start": start.isoformat(), "end": vs.isoformat()},
-                 "update": initial if number == 1 else {"start": (vs-pd.Timedelta(weeks=protocol.step_weeks)).isoformat(), "end": vs.isoformat()},
+        cycle = {"number": number, "base_history": {"start": initial["start"], "end": vs.isoformat()},
+                 "update": bootstrap if number == 1 else {"start": (vs-pd.Timedelta(weeks=protocol.step_weeks)).isoformat(), "end": vs.isoformat()},
                  "validation": {"start": vs.isoformat(), "end": ve.isoformat()},
                  "test": {"start": ve.isoformat(), "end": te.isoformat()}}
         cycle["candidate_window"] = split_time_ranges(frame, stage_config(protocol, cycle, role="candidate"), validate_order=False).window_metadata
@@ -118,9 +155,13 @@ def build_plan(protocol: WalkForwardConfig, frame: pd.DataFrame, manifest: dict)
         vs += pd.Timedelta(weeks=protocol.step_weeks)
     if not cycles:
         raise ValueError("Dataset is too short for one full test")
-    return {"schema_version": 1, "release_id": manifest["release_id"],
+    result = {"schema_version": protocol.schema_version, "release_id": manifest["release_id"],
             "manifest_canonical_sha256": digest(manifest), "data_sha256": identity["sha256"], "data_rows": len(frame),
             "coverage_start": start.isoformat(), "coverage_end_exclusive": end.isoformat(),
-            "initial_midpoint": middle.isoformat(), "initial_train": initial,
+            "initial_midpoint": middle.isoformat() if middle is not None else None, "initial_train": initial,
             "cycles": cycles, "unused_tail_start": cycles[-1]["test"]["end"],
             "unused_tail_end": end.isoformat()}
+
+    if source is not None:
+        result["stage_one_source"] = source
+    return result

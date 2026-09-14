@@ -34,13 +34,14 @@ def database(monkeypatch):
         yield create_session_factory(engine), engine
 
 
-def synthetic_project(tmp_path):
+def synthetic_project(tmp_path, end="2026-04-13"):
+
     root = tmp_path/"project"
     root.mkdir()
     (root/"data").mkdir()
     manifest_dir = root/"train_and_eval/market_data"
     manifest_dir.mkdir(parents=True)
-    times = pd.date_range("2026-01-05", "2026-04-13", freq="5min", tz="UTC", inclusive="left")
+    times = pd.date_range("2026-01-05", end, freq="5min", tz="UTC", inclusive="left")
     times = times[times.weekday < 5]
     # Explicit gaps exercise variable weekly row counts.
     times = times.delete([11000, 11001, 15432])
@@ -56,7 +57,7 @@ def synthetic_project(tmp_path):
     path = root/"data/synthetic.parquet"
     pq.write_table(table, path)
     manifest = {"manifest_version":2,"data_schema_version":1,"dataset_id":"NQ_CONTINUOUS_WEEKDAYS", "release_id":"synthetic_test",
-                "status":"published_with_warnings", "build":{"target_end_exclusive_utc":"2026-04-13T00:00:00Z"},
+                "status":"published_with_warnings", "build":{"target_end_exclusive_utc":end+"T00:00:00Z"},
                 "files":{"5m":{"path":path.name,"interval":"5m","data_schema_version":1,"validation_status":"passed",
                                   "rows":len(times),"size_bytes":path.stat().st_size,"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
                                   "first_timestamp":times[0].isoformat(),"last_timestamp":times[-1].isoformat()}},
@@ -129,3 +130,58 @@ def test_three_cycles_migrations_lineage_resume_and_replay(database, tmp_path):
     changed_path.write_text(yaml.safe_dump(changed))
     with pytest.raises(RuntimeError, match="changed"):
         execute(factory, changed_path, project_root=root, max_cycles=3, live=False)
+
+
+def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path):
+    from train_and_eval.training.service import train_ppo_run
+    from train_and_eval.walk_forward.service import prepare
+    factory, engine = database
+    root, legacy = synthetic_project(tmp_path, end="2026-05-11")
+    base = yaml.safe_load(legacy.read_text())["run"]
+    base["run"] = {"name": "manual_stage_one", "seed": 1}
+    base["data"] = {"path": "data/synthetic.parquet", "alignment": "trim_start",
+                    "train_range": {"start": "2026-01-05T00:00:00Z", "end": "2026-03-02T00:00:00Z"},
+                    "validation_range": {"start": "2026-03-02T00:00:00Z", "end": "2026-03-09T00:00:00Z"}}
+    base["evaluation"]["training_mode"] = "scheduled"
+    base_path = tmp_path / "base.yml"
+    base_path.write_text(yaml.safe_dump(base))
+    trained = train_ppo_run(factory, config_path=base_path, project_root=root,
+                            data_directory=root/"data", manifest_path=root/"train_and_eval/market_data/manifest.json")
+    checkpoint_id = trained.checkpoint.checkpoint_id
+    with factory() as session:
+        assert len(list(session.scalars(select(Run)))) == 1  # Stage one never launches stage two.
+    protocol_path = tmp_path / "stage_two.yml"
+    definition = {"schema_version": 2, "name": "manual_stage_two", "seed": 1,
+                  "source_checkpoint_id": checkpoint_id, "bootstrap_epochs": 1}
+    protocol_path.write_text(yaml.safe_dump(definition))
+    protocol, plan = prepare(protocol_path, root, factory)
+    assert plan["cycles"][0]["update"] == protocol.run.data.validation_range.model_dump()
+    assert plan["cycles"][0]["validation"]["start"] == "2026-03-09T00:00:00+00:00"
+    study_id = execute(factory, protocol_path, project_root=root, max_cycles=1, live=False)
+    assert execute(factory, protocol_path, project_root=root, max_cycles=3, live=False) == study_id
+    with factory() as session:
+        cycles = list(session.scalars(select(WalkForwardCycle).order_by(WalkForwardCycle.number)))
+        completed = [c for c in cycles if c.status == "completed"]
+        assert len(completed) == 3
+        runs = list(session.scalars(select(Run)))
+        assert len(runs) == 13
+        for i, cycle in enumerate(completed):
+            expected = checkpoint_id if i == 0 else completed[i-1].selected_checkpoint_id
+            assert cycle.source_checkpoint_id == expected
+            candidates = [r for r in runs if r.cycle_id == cycle.id and r.stage_role == "candidate"]
+            assert len(candidates) == 3
+            assert all(r.source_checkpoint_id == expected for r in candidates)
+            assert len({r.stage_summary["initial_policy_sha256"] for r in candidates}) == 1
+            assert all(r.window_metadata["alignment"] == "prepend" for r in candidates)
+            refit = next(r for r in runs if r.cycle_id == cycle.id and r.stage_role == "refit")
+            assert refit.source_checkpoint_id == cycle.selected_checkpoint_id
+            assert refit.window_metadata["train"]["end_index"] <= cycle.plan["test_rows"]["start_index"]
+        forbidden = completed[0].refit_checkpoint_id
+    assert execute(factory, protocol_path, project_root=root, max_cycles=3, live=False) == study_id
+    with factory() as session:
+        assert len(list(session.scalars(select(Run)))) == 13
+    report = generate_report(factory, study_id, project_root=root)
+    assert json.loads((report.parent/"plan.json").read_text())["stage_one_source"]["checkpoint_id"] == checkpoint_id
+    protocol_path.write_text(yaml.safe_dump({**definition,"source_checkpoint_id":forbidden}))
+    with pytest.raises(ValueError, match="Stage one|Stage-one"):
+        prepare(protocol_path, root, factory)

@@ -1,0 +1,21 @@
+# Set source_checkpoint_id to a validated stage-one checkpoint before use.
+# Architecture, environment, data path, device and reporting settings are inherited.
+schema_version: 2
+name: nq5m_stage_two_v1_seed3
+seed: 3
+validation_weeks: 4
+test_weeks: 1
+step_weeks: 1
+update_epochs: 1
+refit_epochs: 1
+learning_rates:
+- 7.5e-05
+- 0.00015
+- 0.0003
+refit_learning_rate: 7.5e-05
+selection_rule: final_balanced_score_then_candidate_order
+optimizer_policy: preserve_independent_copy
+reject_updates: false
+partial_test: skip
+source_checkpoint_id: null
+bootstrap_epochs: 1

@@ -18,7 +18,7 @@ from train_and_eval.database.models import (
 from train_and_eval.evaluation.service import evaluate_run_validation_checkpoint
 from train_and_eval.market_data.load_market_data import load_market_data
 from train_and_eval.reproducibility import require_clean_git
-from train_and_eval.run_config import normalize_config
+from train_and_eval.run_config import RunConfig, normalize_config, validate_resume_compatibility
 from train_and_eval.training.service import train_ppo_run
 from train_and_eval.training.progress import LiveTrainingProgress
 from train_and_eval.walk_forward.config import build_plan, digest, load_protocol, stage_config
@@ -45,15 +45,92 @@ def select_candidate(records: list[dict]) -> dict:
     return min(records, key=lambda r: (-r["balanced_score"], r["candidate_order"]))
 
 
-def prepare(config_path, root):
+def prepare(config_path, root, factory=None):
     protocol = load_protocol(config_path)
+    if protocol.schema_version == 2:
+        if factory is None:
+            raise ValueError("Stage-two planning requires a database connection to resolve the checkpoint")
+        with factory() as session:
+            checkpoint = session.get(Checkpoint, protocol.source_checkpoint_id)
+            if checkpoint is None:
+                raise ValueError("Stage-one checkpoint does not exist")
+            run = session.get(Run, checkpoint.run_id)
+            template = dict(run.normalized_config_json)
+            template["continuation"] = {"mode": "fresh"}
+            inherited = RunConfig.model_validate(template)
+            if (not inherited.environment.force_close_on_done
+                    or inherited.evaluation.policy_mode != "deterministic_argmax"
+                    or inherited.ppo.n_steps % inherited.ppo.batch_size):
+                raise ValueError("Stage two requires force_close_on_done, deterministic_argmax and batch-aligned n_steps")
+            protocol = protocol.model_copy(update={"run": inherited})
     data_dir = root / "data"
     manifest_path = root / "train_and_eval/market_data/manifest.json"
     manifest = json.loads(manifest_path.read_text())
     frame = load_market_data(protocol.run.data.path, data_directory=data_dir, manifest_path=manifest_path)
-    plan = build_plan(protocol, frame, manifest)
+    source = None
+    if protocol.schema_version == 2:
+        source = _stage_one_source(factory, protocol)
+    plan = build_plan(protocol, frame, manifest, source)
     plan["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     return protocol, plan
+
+
+def _stage_one_source(factory, protocol):
+    """Freeze source identity and reject lineage that has already trained ahead."""
+    with factory() as session:
+        checkpoint = session.get(Checkpoint, protocol.source_checkpoint_id)
+        if checkpoint is None:
+            raise ValueError("Stage-one checkpoint does not exist")
+        selected_run = session.get(Run, checkpoint.run_id)
+        source_config = RunConfig.model_validate(selected_run.normalized_config_json)
+        train = source_config.data.train_range
+        validation = source_config.data.validation_range
+        if train is None or validation is None or source_config.data.alignment != "trim_start":
+            raise ValueError("Stage one requires explicit train/validation ranges and trim_start alignment")
+        if source_config.run.seed != protocol.seed or source_config.environment != protocol.run.environment:
+            raise ValueError("Stage-two seed and environment must match the stage-one source")
+        # The source may be an ordinary resume, but every ancestor must use the same
+        # bounded development period. A trading/refit branch cannot masquerade as a base.
+        run = selected_run
+        ancestors, seen = [], set()
+        while run is not None:
+            if run.id in seen:
+                raise ValueError("Cyclic checkpoint ancestry")
+            seen.add(run.id)
+            cfg = RunConfig.model_validate(run.normalized_config_json)
+            if (run.status != RunStatus.COMPLETED or run.cycle_id is not None or run.stage_role is not None
+                    or cfg.data.train_range != train or cfg.data.validation_range != validation
+                    or run.data_sha256 != selected_run.data_sha256 or run.data_path != protocol.run.data.path):
+                raise ValueError("Stage-one ancestry must contain completed ordinary runs on the same explicit ranges and data")
+            if run.window_metadata is None:
+                raise ValueError("Stage-one source lacks persisted temporal window metadata")
+            ancestors.append({"run_id": run.id, "config_sha256": run.normalized_config_sha256,
+                              "source_checkpoint_id": run.source_checkpoint_id})
+            if run.source_checkpoint_id is None:
+                break
+            parent = session.get(Checkpoint, run.source_checkpoint_id)
+            if parent is None:
+                raise ValueError("Missing ancestor checkpoint")
+            run = session.get(Run, parent.run_id)
+            if run is None:
+                raise ValueError("Missing ancestor run")
+        validated = session.scalar(select(Evaluation.id).where(
+            Evaluation.checkpoint_id == checkpoint.id,
+            Evaluation.data_scope == EvaluationDataScope.RUN_VALIDATION,
+            Evaluation.status == EvaluationStatus.COMPLETED).limit(1))
+        if validated is None:
+            raise ValueError("Choose a stage-one checkpoint with a completed validation")
+        # Reuse the existing architecture/observation compatibility check before any run writes.
+        probe = protocol.run.model_dump(mode="json")
+        probe["run"]["name"] = protocol.name + "_source_check"
+        probe["continuation"] = {"mode": "resume", "source_run": selected_run.name, "checkpoint": str(checkpoint.id)}
+        validate_resume_compatibility(RunConfig.model_validate(probe), source_config)
+        return {"checkpoint_id": checkpoint.id, "checkpoint_sha256": checkpoint.sha256,
+                "run_id": selected_run.id, "run_name": selected_run.name,
+                "validation_evaluation_id": validated,
+                "git_commit": selected_run.git_commit, "data_sha256": selected_run.data_sha256,
+                "train_range": train.model_dump(), "validation_range": validation.model_dump(),
+                "ancestors": ancestors}
 
 
 def _set_cycle(factory, cycle_id, **changes):
@@ -135,10 +212,11 @@ def _evaluation(factory, checkpoint_id, bounds, scope, root):
 def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
     root = Path(project_root).resolve()
     git = require_clean_git(root)
-    protocol, plan = prepare(config_path, root)
+    protocol, plan = prepare(config_path, root, factory)
     if max_cycles is not None and max_cycles < 1:
         raise ValueError("max_cycles must be positive")
     definition = protocol.model_dump(mode="json")
+    definition["run"] = protocol.run.model_dump(mode="json")
     protocol_hash = digest({"protocol": definition, "plan": plan})
     with study_lock(factory, protocol.name):
         with factory() as session:
@@ -160,7 +238,7 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
         try:
             with factory() as session:
                 cycles = list(session.scalars(select(WalkForwardCycle).where(WalkForwardCycle.study_id == study_id).order_by(WalkForwardCycle.number)))
-            previous = None
+            previous = protocol.source_checkpoint_id if protocol.schema_version == 2 else None
             for cycle in cycles:
                 if max_cycles is not None and cycle.number > max_cycles:
                     break
@@ -170,7 +248,8 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
                     previous = cycle.selected_checkpoint_id
                     continue
                 current_id = cycle.id
-                source = _source(factory, previous)
+                source = ((plan["stage_one_source"]["run_name"], previous)
+                          if protocol.schema_version == 2 and cycle.number == 1 else _source(factory, previous))
                 _set_cycle(factory, cycle.id, source_checkpoint_id=previous, status="running", error=None)
                 if cycle.selection is None:
                     records = []

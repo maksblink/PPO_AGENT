@@ -1377,7 +1377,163 @@ python -m train_and_eval.runs checkpoints --run-id <SOURCE_RUN_ID>
 The source checkpoint, checkpoint file, and archived configuration must all be
 available and compatible.
 
-## Weekly walk-forward training
+## Two manually started training stages
+
+The recommended workflow separates model development from weekly walk-forward.
+Stage one uses the existing training CLI and ordinary RunConfig YAML files.
+Stage two uses a checkpoint-based walk-forward protocol (schema_version: 2).
+Nothing automatically launches stage two after stage one finishes.
+
+### Stage one: explicit dates, ordinary training and validation
+
+Configurations: configs/stage_one/nq5m_v1_seed1.yml (also seed2 and seed3).
+The data section contains concrete UTC [start, end) ranges:
+
+```yaml
+data:
+  path: data/NQ_CONTINUOUS_5m_WEEKDAYS_2010-06-07_00-00_2026-09-08_23-55_20260909_163317.parquet
+  train_range:
+    start: '2010-06-07T00:00:00+00:00'
+    end: '2018-07-30T00:00:00+00:00'
+  validation_range:
+    start: '2018-07-30T00:00:00+00:00'
+    end: '2019-07-01T00:00:00+00:00'
+  alignment: trim_start
+```
+
+Training reads these dates directly. It does not recalculate percentages or
+change dates when new market data is published. Initial observation context is
+reserved first; the remaining oldest training candles are trimmed by N % batch_size.
+Validation retains every available candle. Missing candles are not imputed.
+
+The supplied starting configurations retain the MLP, trading costs and PPO
+settings of the earlier baseline. Their initial budget is one data epoch;
+learning rate is 0.0003. These are editable starting points, not a claim of
+strategy quality. evaluation.training_mode is scheduled: periodic and final
+validation, periodic/final checkpoints, existing early stopping and reports all
+remain available. Use distinct run names for different configurations; ordinary
+resume remains available for further development on the same explicit ranges.
+Choose the source checkpoint using stage-one validation, before seeing stage-two
+tests. A source can be a validated periodic checkpoint, not only the final one.
+
+### Calculate dates and confirm the config update
+
+The standalone helper uses the verified dataset and manifest from the selected
+config. Defaults are 50% of the dataset's calendar span for training and a 90/10
+train/validation ratio within stage one. These percentages are helper arguments,
+not training-config fields:
+
+```bash
+python set_stage_one_ranges.py --config configs/stage_one/nq5m_v1_seed1.yml \
+  --train-fraction 0.5 --train-split 0.9
+```
+
+It computes the nominal training end, rounds it UP to Monday 00:00 UTC, and
+computes validation length from that rounded training duration. Validation weeks
+are ceil(train_weeks * (1 - train_split) / train_split). An already aligned
+boundary is unchanged. If the dataset starts midweek, the first partial week is
+excluded so the training starts on the next Monday. Both windows must fit inside
+the published coverage. For the current release: 425 training weeks + 48 validation
+weeks; actual calendar split = 425 / 473, approximately 0.89852.
+
+The helper previews old/new ranges, weeks, actual split, context, batch trimming
+and candle counts, then asks for confirmation in the terminal. Enter y/yes or
+t/tak to save; Enter, no, EOF or Ctrl-C leaves the config unchanged. It replaces
+only the two block-style range fields, preserves unrelated YAML text, checks for
+concurrent edits, and writes atomically. Use the supplied block-style YAML;
+ambiguous/unsupported layouts are rejected. There is no automatic-confirm flag.
+The helper changes no database rows and starts no training.
+
+After reviewing and committing config changes, start stage one manually:
+
+```bash
+python -m train_and_eval.training --config configs/stage_one/nq5m_v1_seed1.yml
+```
+
+### Stage two: choose a checkpoint and start walk-forward manually
+
+Configurations: configs/stage_two/nq5m_v1_seed1.yml (also seed2 and seed3).
+Replace source_checkpoint_id: null with the numeric ID you selected in stage one.
+The null placeholder intentionally prevents accidental training from an arbitrary
+checkpoint. The source must belong to a completed ordinary temporal run and have
+a completed validation. The entire resume ancestry must use the same explicit
+training/validation ranges and dataset; walk-forward candidate/refit runs are not
+accepted as stage-one sources. The seed must match the source.
+
+Stage two inherits architecture, observation context, trading environment/costs,
+data path, device, checkpoint cadence and logging settings from the persisted
+source configuration. Its YAML contains the source ID and walk-forward settings,
+without a duplicate run template or a percentage-based split. The current protocol
+requires deterministic_argmax, forced position closing and batch-aligned n_steps.
+
+- Cycle 1 candidates each load an independent copy of the chosen checkpoint,
+  including optimizer state. They train on the ENTIRE stage-one validation period
+  using the learning_rates grid and bootstrap_epochs budget. They are then
+  compared on the next validation_weeks weeks, using their final checkpoints.
+- The selected pre-refit checkpoint becomes the continuing base. A separate copy
+  trains on the current validation window with refit_learning_rate and refit_epochs;
+  its final checkpoint is frozen for the following test window.
+- Later cycles start every candidate from the previous selected pre-refit base,
+  train on the oldest step_weeks leaving validation with update_epochs, and repeat.
+  Trading/refit copies never replace the continuing base.
+
+The default bootstrap, weekly update and refit budgets are each one data epoch.
+Candidate LRs remain [0.000075, 0.00015, 0.0003]; refit LR is fixed at 0.000075.
+Updates are always selected by final balanced_score, with configured candidate
+order breaking exact ties. The unchanged source is only a diagnostic reference.
+Refit has no validation or checkpoint reselection. Every training update/refit
+prepends up to batch_size - 1 historical candles to align minibatches, with a
+separate full context before that extended range.
+
+For the supplied stage-one dates, cycle 1 updates on 2018-07-30 to 2019-07-01,
+validates on 2019-07-01 to 2019-07-29, then tests on 2019-07-29 to 2019-08-05.
+There are 371 complete weekly tests through 2026-09-07; the final partial week is
+omitted. Dates are always UTC and end-exclusive. Stage-one validation is never
+included in the aggregate test curve.
+
+After setting the checkpoint ID and committing the stage-two config:
+
+```bash
+python -m train_and_eval.walk_forward plan \
+  --config configs/stage_two/nq5m_v1_seed1.yml --output /tmp/ppo_stage_two_plan.json
+python -m train_and_eval.walk_forward run \
+  --config configs/stage_two/nq5m_v1_seed1.yml --max-cycles 3
+```
+
+The plan command reads the database to resolve source identity but creates no
+study or training run. To continue, rerun without --max-cycles using the same
+config, dataset and code commit. Source ID, hash, originating run/commit, ancestry,
+stage-one bounds and every cycle's actual candle ranges are frozen in plan.json
+and the study record. The source run may originate from an earlier Git commit;
+within an existing stage-two study, commit changes still block continuation.
+Changing tests or documentation therefore also requires attention before resuming
+an old study. No existing study, experiment, checkpoint or dataset is deleted by
+this update. No database migration is needed.
+
+All existing per-stage persistence, test trajectories, always-long comparison,
+separate validation/test tables and additive fixed-stake aggregate reports remain
+in use. Reports are saved under artifacts/walk_forward/<study-id>/report.html.
+Only consecutive non-overlapping tests contribute to the combined capital and
+global drawdown curves.
+
+### Tests for the two-stage workflow
+
+```bash
+docker compose up -d --wait postgres
+python -m pytest -q
+```
+
+The PostgreSQL integration suite now also trains stage one on generated data,
+starts stage two from its explicitly selected checkpoint, executes three cycles,
+resumes without duplicate runs, checks lineage and generates a report. It uses the
+same isolated test database/schema cleanup described below.
+
+## Legacy weekly walk-forward (schema version 1)
+
+The following section documents the earlier all-in-one workflow. Its configs and
+stored results remain supported for compatibility; use configs/stage_one and
+configs/stage_two for the new manually separated workflow.
+
 
 The walk-forward protocol adds a separate, time-based workflow while retaining
 all existing ratio-split commands. It uses the same PPO adapter, environment,

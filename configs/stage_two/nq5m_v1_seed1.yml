@@ -17,5 +17,5 @@ selection_rule: final_balanced_score_then_candidate_order
 optimizer_policy: preserve_independent_copy
 reject_updates: false
 partial_test: skip
-source_checkpoint_id: null
+source_checkpoint_id: 68
 bootstrap_epochs: 1

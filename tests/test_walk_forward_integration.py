@@ -166,7 +166,7 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     assert len(restored.results["validation"]) == 3
     output = capsys.readouterr().out
     assert "CYCLE COMPLETED" in output
-    assert "agent_max_drawdown" in output
+    assert "Metric" in output and "DD" in output
     assert "PPO TRAINING RESOLUTION" not in output
     assert "not run yet" not in output
 

@@ -28,7 +28,8 @@ class WalkForwardProgress:
         self.number = 0
         self.started = time.monotonic()
         self.last_render = 0.
-        self.lines = 0
+        self.screen_open = False
+        self.active_fraction = 0.
         self.total = {key: sum(self.amount(c, key) for c in self.cycles) for key in self.done}
 
     def amount(self, cycle, key):
@@ -43,6 +44,7 @@ class WalkForwardProgress:
         self.number = cycle["number"]
         self.active = (cycle, key)
         self.phase = key.upper()
+        self.active_fraction = 0.
         self.requested = 0
         self.render(force=True)
 
@@ -55,58 +57,89 @@ class WalkForwardProgress:
         if render:
             self.render(force=True)
 
+    @staticmethod
+    def bar(done, total, width=16):
+        fraction = min(1., max(0., done / total)) if total else 0.
+        filled = int(width * fraction)
+        return "[" + "#" * filled + "-" * (width-filled) + f"] {100*fraction:5.1f}%"
+
+    @staticmethod
+    def table(headers, rows):
+        widths = [max(len(str(row[i])) for row in [headers, *rows]) for i in range(len(headers))]
+        def line(row):
+            return " | ".join(str(value).ljust(width) for value, width in zip(row, widths))
+        return [line(headers), "-+-".join("-"*width for width in widths), *map(line, rows)]
+
     def metric_lines(self, key, *, compact=False):
         rows = self.results[key]
-        lines = [f"{key.upper()} | completed {'weeks' if key == 'test' else 'windows'}: {len(rows)}"]
-        for metric in ("balanced_score", "agent_return", "agent_max_drawdown"):
+        title = f"{key.upper()} | completed windows: {len(rows)}"
+        table_rows = []
+        for metric, label in (("balanced_score", "balanced_score"),
+                              ("agent_return", "return"), ("agent_max_drawdown", "DD")):
             values = [(number, bounds, data[metric]) for number, (bounds, data) in rows.items()
                       if data.get(metric) is not None and math.isfinite(data[metric])]
             if not values:
-                lines.append(f"  {metric}: n/a")
+                table_rows.append([label, "n/a", "n/a", "n/a", "n/a"])
                 continue
             best = max(values, key=lambda v: v[2])
             worst = min(values, key=lambda v: v[2])
-            def label(item):
-                if compact:
-                    return f"{item[2]:+.5f} c{item[0]} {item[1]['start'][:10]}"
-                return f"{item[2]:+.5f} c{item[0]} [{item[1]['start'][:10]}, {item[1]['end'][:10]})"
+            def extreme(item):
+                result = f"{item[2]:+.5f} c{item[0]}"
+                if not compact:
+                    result += f" [{item[1]['start'][:10]}, {item[1]['end'][:10]})"
+                return result
             numbers = [v[2] for v in values]
-            lines.append(f"  {metric}: mean {statistics.mean(numbers):+.5f} | median {statistics.median(numbers):+.5f}")
-            lines.append(f"    best {label(best)} | worst {label(worst)}")
+            table_rows.append([label, f"{statistics.mean(numbers):+.5f}",
+                               f"{statistics.median(numbers):+.5f}", extreme(best), extreme(worst)])
+        return [title, *self.table(["Metric", "Mean", "Median", "Best", "Worst"], table_rows)]
+
+    def panel_lines(self, *, compact=False):
+        total_cycles = len(self.cycles)
+        completed_cycles = len(self.done["test"])
+        lines = [f"WALK FORWARD | {self.name}",
+                 f"Cycle {self.number}/{total_cycles} | stop after {self.limit} | {self.phase} | session {int(time.monotonic()-self.started)}s",
+                 "Cycles " + self.bar(completed_cycles, total_cycles)]
+        rows = []
+        for key, total in self.total.items():
+            done = sum(self.done[key].values())
+            rows.append([key, f"{done:g}", f"{total:g}", f"{max(0., total-done):g}", self.bar(done, total)])
+        lines += self.table(["Week work", "Done", "Total", "Left", "Progress"], rows)
+        active = "Active: " + (self.bar(self.active_fraction, 1) if self.active else "none")
+        lines.append(active)
+        lines += self.metric_lines("validation", compact=compact) + self.metric_lines("test", compact=compact)
+        lines.append("Weeks include repeated work/epochs. DD: closer to 0 is better.")
         return lines
 
     def render(self, *, force=False):
         now = time.monotonic()
         if not force and (not self.interactive or now - self.last_render < .5):
             return
-        # Plain logs get a snapshot per finished cycle and at start/end only.
-        if not self.interactive and self.phase not in ("INITIALIZING", "CYCLE COMPLETED", "PAUSED", "COMPLETED", "FAILED"):
-            return
-        lines = [f"WALK FORWARD | {self.name}",
-                 f"Cycle {self.number}/{len(self.cycles)} | invocation through {self.limit} | {self.phase} | session {int(now-self.started)}s",
-                 "Week work: done / total / remaining (training includes epochs; overlapping windows repeat)"]
-        for key, total in self.total.items():
-            done = sum(self.done[key].values())
-            lines.append(f"  {key:10s} {done:g} / {total:g} / {max(0., total-done):g}")
-        width = max(20, shutil.get_terminal_size((120, 24)).columns - 1)
-        compact = self.interactive and width < 120
-        lines += self.metric_lines("validation", compact=compact) + self.metric_lines("test", compact=compact)
-        if self.active:
-            lines.append("Counters: completed operations. Narrow view: extrema show start dates.")
-        if self.interactive:
-            # Keep one physical row per line; automatic wrapping breaks cursor accounting.
-            lines = [line[:width] for line in lines]
-            if self.lines:
-                self.stream.write(f"\033[{self.lines}A")
-            for line in lines:
-                self.stream.write("\r\033[2K" + line + "\n")
-            for _ in range(max(0, self.lines-len(lines))):
-                self.stream.write("\r\033[2K\n")
-            self.lines = max(self.lines, len(lines))
+        size = shutil.get_terminal_size((120, 24))
+        # A full-screen panel avoids cursor-up escaping the visible viewport.
+        # Small terminals use complete plain snapshots instead of dropping metrics.
+        fits = size.columns >= 80 and size.lines >= 24
+        terminal_phase = self.phase in ("PAUSED", "COMPLETED", "FAILED")
+        live_screen = self.interactive and fits and not terminal_phase
+        if not live_screen:
+            self.leave_screen()
+            if self.phase not in ("INITIALIZING", "CYCLE COMPLETED", "PAUSED", "COMPLETED", "FAILED"):
+                return
+            self.stream.write("\n".join(self.panel_lines()) + "\n")
         else:
-            self.stream.write("\n".join(lines) + "\n")
+            if not self.screen_open:
+                self.stream.write("\033[?1049h\033[?25l")
+                self.screen_open = True
+            lines = self.panel_lines(compact=size.columns < 150)
+            self.stream.write("\033[H\033[J")
+            # No newline on the bottom row, so drawing never scrolls the viewport.
+            self.stream.write("\n".join(line[:size.columns-1] for line in lines))
         self.stream.flush()
         self.last_render = now
+
+    def leave_screen(self):
+        if self.screen_open:
+            self.stream.write("\033[?25h\033[?1049l")
+            self.screen_open = False
 
     def cycle_completed(self, number):
         self.number = number
@@ -127,7 +160,8 @@ class WalkForwardProgress:
         self.requested = requested_steps
 
     def training_update(self, *, completed_steps, **kwargs):
-        self.phase = f"{self.active[1].upper()} {100*completed_steps/max(1,self.requested):.0f}%"
+        self.active_fraction = min(1., max(0., completed_steps/max(1,self.requested)))
+        self.phase = f"{self.active[1].upper()} {100*self.active_fraction:.0f}%"
         self.render()
 
     def validation_started(self, **kwargs):
@@ -139,7 +173,8 @@ class WalkForwardProgress:
         self.evaluation_update(completed_steps, expected_steps)
 
     def evaluation_update(self, completed_steps, expected_steps):
-        self.phase = f"{self.active[1].upper()} {100*completed_steps/max(1,expected_steps):.0f}%"
+        self.active_fraction = min(1., max(0., completed_steps/max(1,expected_steps)))
+        self.phase = f"{self.active[1].upper()} {100*self.active_fraction:.0f}%"
         self.render()
 
     def validation_completed(self, metrics):

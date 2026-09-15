@@ -1525,11 +1525,25 @@ global drawdown curves.
 
 ### Stage-two terminal progress
 
-Stage two shows one study panel instead of per-run PPO preflight, loss metrics
+Stage two shows a table-based study panel instead of per-run PPO preflight, loss metrics
 and validation progress panels. Stage-one terminal output is unchanged.
 The panel refreshes during training rollouts and evaluation callbacks (at most
 twice per second), and immediately after operations complete. The timer measures
 the current invocation, not previous sessions.
+
+The progress table has Done, Total, Left and progress-bar columns. Separate bars
+show completed test cycles and the active operation. Validation and test tables
+have Metric, Mean, Median, Best and Worst columns. Values remain raw fractions,
+as in the saved reports; DD is agent_max_drawdown.
+
+Interactive terminals of at least 80 columns by 24 rows use an alternate screen
+with a fixed-height layout, preventing leftover fragments in scrollback. Live
+extrema identify cycles; terminals at least 150 columns wide and the final printed
+tables include full UTC date ranges.
+On completion, pause or failure the normal screen and cursor are restored and
+a complete final snapshot is printed. Smaller terminals use complete plain
+snapshots without live redraw; enlarge the terminal to enable the live panel.
+
 
 Week counters show completed / total / remaining work for base training, trading
 refit, candidate validation, unchanged-source reference validation and test.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import numpy as np
+from pathlib import Path
+import yaml
 import pandas as pd
 import pytest
 from pydantic import ValidationError
@@ -12,7 +13,8 @@ from train_and_eval.walk_forward.windows import split_time_ranges
 
 @pytest.fixture
 def protocol():
-    return load_protocol("configs/walk_forward/nq5m_v1_seed1.yml")
+    base = RunConfig.model_validate(yaml.safe_load(Path("configs/stage_one/nq5m_v1_seed1.yml").read_text()))
+    return load_protocol("configs/stage_two/nq5m_v1_seed1.yml").model_copy(update={"run": base})
 
 
 def frame_between(start="2018-01-01", end="2018-06-01"):
@@ -88,32 +90,13 @@ def test_validation_keeps_every_available_row(protocol):
     assert split.validation_start_index == 6144
 
 
-def test_frozen_calendar_matches_agreed_dates(protocol):
-    # Sparse valid timestamps make row/time fractions substantially different.
-    frame = frame_between("2010-06-07", "2026-09-09")
-    protocol = protocol.model_copy(update={"run": protocol.run.model_copy(update={"data": protocol.run.data.model_copy(update={"path": "data/example.parquet"})})})
-    manifest = {"files": {"5m": {"sha256": "a"*64, "first_timestamp": frame.DT.iloc[0].isoformat(),
-                                      "last_timestamp": frame.DT.iloc[-1].isoformat()}},
-                "release_id": "test-release", "build": {"target_end_exclusive_utc": "2026-09-09T00:00:00Z"}}
-    plan = build_plan(protocol, frame, manifest)
-    assert plan["initial_train"]["end"] == "2018-07-23T00:00:00+00:00"
-    assert len(plan["cycles"]) == 420
-    assert plan["cycles"][0]["test"]["start"] == "2018-08-20T00:00:00+00:00"
-    assert plan["cycles"][-1]["test"]["end"] == "2026-09-07T00:00:00+00:00"
-    for previous, current in zip(plan["cycles"], plan["cycles"][1:]):
-        assert previous["test"]["end"] == current["test"]["start"]
-        assert current["update"]["start"] == previous["validation"]["start"]
-        assert current["candidate_window"]["train"]["end_index"] <= current["candidate_window"]["validation"]["start_index"]
-        assert current["refit_window"]["train"]["end_index"] <= current["test_rows"]["start_index"]
-
-
 def test_protocol_rejects_overlapping_tests_and_bad_lrs(protocol):
     raw = protocol.model_dump(mode="json")
     raw["test_weeks"] = 2
     with pytest.raises(ValidationError, match="non-overlapping"):
         type(protocol).model_validate(raw)
     raw["test_weeks"] = 1
-    raw["learning_rates"] = [float("nan")]
+    raw["learning_rate"] = float("nan")
     with pytest.raises(ValidationError, match="finite"):
         type(protocol).model_validate(raw)
 
@@ -121,12 +104,11 @@ def test_protocol_rejects_overlapping_tests_and_bad_lrs(protocol):
 def test_refit_has_no_validation_and_prescribed_budget(protocol):
     cycle = {"number": 2, "update": {"start": "2018-03-05T00:00:00Z", "end": "2018-03-12T00:00:00Z"},
              "validation": {"start": "2018-03-12T00:00:00Z", "end": "2018-04-09T00:00:00Z"}}
-    configs = [stage_config(protocol, cycle, role="candidate", candidate=i, source=("base", 17)) for i in range(3)]
-    assert all(c.continuation.checkpoint == "17" for c in configs)
-    assert all(c.data == configs[0].data for c in configs)
-    refit = stage_config(protocol, cycle, role="refit", candidate=2, source=("selected", 24))
+    config = stage_config(protocol, cycle, role="candidate", source=("base", 17))
+    assert config.continuation.checkpoint == "17"
+    refit = stage_config(protocol, cycle, role="refit", source=("selected", 24))
     assert refit.data.validation_range is None
-    assert refit.data.train_range == configs[0].data.validation_range
+    assert refit.data.train_range == config.data.validation_range
     assert refit.evaluation.training_mode == "none"
-    assert refit.ppo.learning_rate == .000075
+    assert refit.ppo.learning_rate == config.ppo.learning_rate == protocol.learning_rate
     assert refit.training.duration_amount == 1

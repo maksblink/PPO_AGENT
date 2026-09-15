@@ -1466,24 +1466,31 @@ source configuration. Its YAML contains the source ID and walk-forward settings,
 without a duplicate run template or a percentage-based split. The current protocol
 requires deterministic_argmax, forced position closing and batch-aligned n_steps.
 
-- Cycle 1 candidates each load an independent copy of the chosen checkpoint,
-  including optimizer state. They train on the ENTIRE stage-one validation period
-  using the learning_rates grid and bootstrap_epochs budget. They are then
-  compared on the next validation_weeks weeks, using their final checkpoints.
-- The selected pre-refit checkpoint becomes the continuing base. A separate copy
-  trains on the current validation window with refit_learning_rate and refit_epochs;
-  its final checkpoint is frozen for the following test window.
-- Later cycles start every candidate from the previous selected pre-refit base,
-  train on the oldest step_weeks leaving validation with update_epochs, and repeat.
-  Trading/refit copies never replace the continuing base.
+- Cycle 1 loads the chosen checkpoint, including optimizer state, and trains on
+  the ENTIRE stage-one validation period using bootstrap_epochs. Its final
+  checkpoint is evaluated on the next validation_weeks weeks.
+- That final pre-refit checkpoint becomes the continuing base. A separate copy
+  trains on the current validation window using refit_epochs; its final checkpoint
+  is frozen for the following test window.
+- Later cycles update the previous pre-refit base on the oldest step_weeks leaving
+  validation using update_epochs. Trading/refit copies never replace the base.
 
-The default bootstrap, weekly update and refit budgets are each one data epoch.
-Candidate LRs remain [0.000075, 0.00015, 0.0003]; refit LR is fixed at 0.000075.
-Updates are always selected by final balanced_score, with configured candidate
-order breaking exact ties. The unchanged source is only a diagnostic reference.
-Refit has no validation or checkpoint reselection. Every training update/refit
-prepends up to batch_size - 1 historical candles to align minibatches, with a
-separate full context before that extended range.
+Stage two accepts exactly one scalar learning_rate (default 0.000075), shared by
+bootstrap, weekly base updates and trading refits. Lists of LRs and a separate
+refit LR are rejected. The default budgets are each one data epoch.
+The selection_rule is final_checkpoint: the only updated candidate's final
+checkpoint is accepted even when its validation score is worse than the source.
+Validation must complete with a finite score; it does not rank configurations.
+The unchanged source is only a diagnostic reference. Refit has no validation or
+checkpoint reselection. Every update/refit prepends up to batch_size - 1
+historical candles to align minibatches, with a separate full context before
+that extended range.
+
+Only checkpoint-based stage-two protocols (schema_version: 2) are accepted.
+The all-in-one walk-forward mode, automatic initial split in stage two and old
+configs/walk_forward definitions have been removed. Stage one still uses the
+ordinary RunConfig schema and its explicit date ranges. Existing database rows,
+checkpoints and report artifacts are not modified or removed.
 
 For the supplied stage-one dates, cycle 1 updates on 2018-07-30 to 2019-07-01,
 validates on 2019-07-01 to 2019-07-29, then tests on 2019-07-29 to 2019-08-05.
@@ -1523,169 +1530,10 @@ docker compose up -d --wait postgres
 python -m pytest -q
 ```
 
-The PostgreSQL integration suite now also trains stage one on generated data,
+The PostgreSQL integration suite trains stage one on generated data,
 starts stage two from its explicitly selected checkpoint, executes three cycles,
 resumes without duplicate runs, checks lineage and generates a report. It uses the
 same isolated test database/schema cleanup described below.
-
-## Legacy weekly walk-forward (schema version 1)
-
-The following section documents the earlier all-in-one workflow. Its configs and
-stored results remain supported for compatibility; use configs/stage_one and
-configs/stage_two for the new manually separated workflow.
-
-
-The walk-forward protocol adds a separate, time-based workflow while retaining
-all existing ratio-split commands. It uses the same PPO adapter, environment,
-immutable checkpoints, run registry, evaluation runner and report artifacts.
-Apply Alembic revision `f0a1b2c3d4e5` before running it. The upgrade adds tables
-and columns and preserves existing runs, checkpoints, evaluations and data.
-
-### Frozen starting protocol
-
-Committed definitions are in `configs/walk_forward/nq5m_v1_seed1.yml`,
-`nq5m_v1_seed2.yml` and `nq5m_v1_seed3.yml`. Each seed is an independent study;
-seeds are not candidates in a weekly ranking. Study names, normalized protocol,
-resolved plan, dataset/manifest identities and code commit are recorded before
-training. Changing any of them requires a new study name.
-
-| Setting | Starting value |
-|---|---|
-| Dataset | Verified manifest-v2 5m file from release `NQ_CONTINUOUS_WEEKDAYS_20260909T163317Z_7d5ce9278b18` |
-| Initial history | First approximately 50% of elapsed coverage, rounded down to Monday 00:00 UTC |
-| Validation / test / advance | 4 weeks / 1 week / 1 week |
-| Candidate learning rates, tie order | `0.000075`, `0.00015`, `0.0003` |
-| Initial / weekly / refit budget | One aligned data epoch per stage |
-| Rollout / minibatch / PPO epochs | 1024 / 256 / 3 |
-| Selection | Highest final-checkpoint validation `balanced_score`, then candidate order |
-| Refit learning rate | Fixed `0.000075` |
-| Optimizer | Preserve the source optimizer state in independently loaded copies |
-| Evaluation policy | `deterministic_argmax` |
-| Position boundaries | Start FLAT; force-close at each episode/test end |
-| Incomplete final test | Skip |
-
-Candidate architecture and environment settings are shared within a study.
-The starting MLP is `[384, 384, 384]` with `tanh`, gamma 0.9, GAE lambda 0.85,
-entropy coefficient 0.0002, initial LONG probability 0.55 and no additional
-exposure/turnover/drawdown penalties. Inspect the committed YAML for all fields. The nested `run` is a reusable
-single-run template: the workflow derives its name, seed, split, duration, LR
-and evaluation mode from the top-level protocol for each stage. In particular,
-the template `train_ratio` is replaced by explicit time ranges and does not
-control the walk-forward boundary. Each effective stage configuration is
-persisted in the run registry.
-These values define an initial experiment, not a confirmed profitable strategy.
-
-The calendar is `[start, end)` in UTC. For the current release the initial
-boundary is **2018-07-23 00:00 UTC**. The first validation is
-`[2018-07-23, 2018-08-20)` and the first test is `[2018-08-20, 2018-08-27)`.
-There are **420 complete calendar test windows**, ending at 2026-09-07 00:00 UTC.
-The remaining September 7–8 data does not form a full final test week.
-A complete calendar window may contain missing candles; no candles are imputed.
-A window with no available scored rows, or insufficient earlier context, fails
-preflight rather than silently disappearing from the study.
-
-Window lengths are configurable. This first implementation requires
-`test_weeks == step_weeks` to keep tests consecutive and non-overlapping, and
-`step_weeks <= validation_weeks`. Budgets are positive integer data epochs.
-The optional CLI execution limit does not change the frozen calendar plan.
-
-### Two separate model histories
-
-Cycle 1 trains each candidate on initial A, starting from identical seeded
-policy weights. Initial checkpoints and policy-state hashes document this
-common initialization. Each candidate is evaluated once at its final checkpoint
-on the next four weeks. Periodic checkpoints are diagnostic, not eligible for
-selection in this protocol.
-
-For later cycles, all candidates load the same selected **pre-refit** checkpoint
-from the previous cycle and train on the oldest week(s) leaving validation.
-The best updated candidate is selected even when its validation score is worse
-than that of the unchanged source. The unchanged source is evaluated as a
-separate diagnostic reference and never enters the ranking.
-
-The selected checkpoint is loaded again into an independent model, including
-an independent copy of optimizer state, and trained on the four validation
-weeks with the fixed refit budget/LR. This stage has no validation, no early
-stopping and no intermediate checkpoint selection. Its final checkpoint is
-frozen and evaluated on the next test week. **The refit checkpoint never becomes
-the source of the next cycle's candidates.** There is no second weekly update
-after candidate selection.
-
-Validation describes the model before refit; test describes the model after
-refit. Earlier test weeks can subsequently become validation and training data,
-without altering their originally recorded test results. Overlapping validation
-windows are descriptive comparisons, not independent test returns.
-
-### Context and minibatch alignment
-
-`baseline_multiscale_v1` requires 6145 earlier rows for a complete observation.
-The action from that observation executes at the next candle open. Context rows
-are not scored and produce no optimizer steps.
-
-For initial A:
-
-1. Reserve the complete 6145-row context.
-2. Count the remaining available execution rows, `N`.
-3. Move the training start forward by `N % batch_size` rows.
-4. Train through A's exclusive end, retaining all required earlier context.
-
-With batch size 256, the additional trim is 0–255 rows. The model never trains
-on the reserved warm-up rows.
-
-For weekly candidate updates and final refit:
-
-1. Count available rows in the nominal calendar range, `N`.
-2. Prepend `(-N) % batch_size` available rows from earlier history to the scored
-   training range.
-3. Supply a separate full observation context before this expanded start.
-
-A gap-free 5m UTC weekday week has 1440 rows; 96 earlier rows expand it to
-1536 steps, or six minibatches. With rollout length 1024 this is one 1024-step
-rollout plus one 512-step rollout. With missing candles the actual prepend count
-changes; it is recorded in the plan. All candidates use the same aligned range.
-An epoch is a pass through this **expanded** range. Earlier repeated data is
-intentional and never comes from the future validation/test range.
-
-Validation and test ranges are never aligned or padded for PPO minibatches.
-Context features remain the existing causal rolling features; no learned
-`VecNormalize` state is introduced. Current `normalize_advantage` applies only
-during PPO training. Weights and optimizer moments are loaded independently
-for every branch.
-
-### Plan, run three cycles, then continue
-
-Inspect the plan without training or creating database rows:
-
-```bash
-python -m train_and_eval.walk_forward plan \
-  --config configs/walk_forward/nq5m_v1_seed1.yml \
-  --output /tmp/PPO_AGENT_walk_forward_plan.json
-```
-
-After tests, migration, and committing the intended changes, start the first
-three cycles using the real one-epoch starting budgets:
-
-```bash
-python -m train_and_eval.walk_forward run \
-  --config configs/walk_forward/nq5m_v1_seed1.yml \
-  --max-cycles 3
-```
-
-This is a process pilot, not a reduced-step or profitability confirmation run.
-The study is marked `paused` while planned cycles remain. The command prints
-the study ID and writes the aggregate report automatically after the completed
-prefix. Add `--plain-output` to disable the live training display.
-
-Continue the same unchanged study, preserving its completed tests:
-
-```bash
-python -m train_and_eval.walk_forward run \
-  --config configs/walk_forward/nq5m_v1_seed1.yml
-```
-
-Run the other seeds by supplying their corresponding configuration files.
-Do not choose a preferred seed from test results and label that result an
-independent confirmation.
 
 ### Persistence, interruption and replay
 

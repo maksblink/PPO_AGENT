@@ -24,9 +24,11 @@ def test_test_path_includes_initial_zero_peak():
         combine_tests([part,part], 1000)
 
 
-def test_selection_follows_frozen_tie_rule_and_requires_all_finite():
-    candidates = [{"candidate_order": 2, "balanced_score": -.3}, {"candidate_order": 1, "balanced_score": -.3}, {"candidate_order": 0, "balanced_score": -.4}]
-    assert select_candidate(candidates)["candidate_order"] == 1
-    candidates[0]["balanced_score"] = float("nan")
+def test_single_candidate_requires_finite_validation():
+    candidate = {"candidate_order": 0, "balanced_score": -.4}
+    assert select_candidate([candidate]) == candidate
+    for records in ([], [candidate, candidate]):
+        with pytest.raises(ValueError, match="exactly one"):
+            select_candidate(records)
     with pytest.raises(ValueError, match="finite"):
-        select_candidate(candidates)
+        select_candidate([{**candidate, "balanced_score": float("nan")}])

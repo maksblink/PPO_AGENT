@@ -40,36 +40,35 @@ def study_lock(session_factory, name: str):
 
 
 def select_candidate(records: list[dict]) -> dict:
-    if not records or any(not math.isfinite(r["balanced_score"]) for r in records):
-        raise ValueError("All candidates must have completed finite validation scores before selection")
-    return min(records, key=lambda r: (-r["balanced_score"], r["candidate_order"]))
+    if len(records) != 1:
+        raise ValueError("Stage two requires exactly one candidate")
+    if not math.isfinite(records[0]["balanced_score"]):
+        raise ValueError("The candidate must have a completed finite validation score")
+    return records[0]
 
 
 def prepare(config_path, root, factory=None):
     protocol = load_protocol(config_path)
-    if protocol.schema_version == 2:
-        if factory is None:
-            raise ValueError("Stage-two planning requires a database connection to resolve the checkpoint")
-        with factory() as session:
-            checkpoint = session.get(Checkpoint, protocol.source_checkpoint_id)
-            if checkpoint is None:
-                raise ValueError("Stage-one checkpoint does not exist")
-            run = session.get(Run, checkpoint.run_id)
-            template = dict(run.normalized_config_json)
-            template["continuation"] = {"mode": "fresh"}
-            inherited = RunConfig.model_validate(template)
-            if (not inherited.environment.force_close_on_done
-                    or inherited.evaluation.policy_mode != "deterministic_argmax"
-                    or inherited.ppo.n_steps % inherited.ppo.batch_size):
-                raise ValueError("Stage two requires force_close_on_done, deterministic_argmax and batch-aligned n_steps")
-            protocol = protocol.model_copy(update={"run": inherited})
+    if factory is None:
+        raise ValueError("Stage-two planning requires a database connection to resolve the checkpoint")
+    with factory() as session:
+        checkpoint = session.get(Checkpoint, protocol.source_checkpoint_id)
+        if checkpoint is None:
+            raise ValueError("Stage-one checkpoint does not exist")
+        run = session.get(Run, checkpoint.run_id)
+        template = dict(run.normalized_config_json)
+        template["continuation"] = {"mode": "fresh"}
+        inherited = RunConfig.model_validate(template)
+        if (not inherited.environment.force_close_on_done
+                or inherited.evaluation.policy_mode != "deterministic_argmax"
+                or inherited.ppo.n_steps % inherited.ppo.batch_size):
+            raise ValueError("Stage two requires force_close_on_done, deterministic_argmax and batch-aligned n_steps")
+        protocol = protocol.model_copy(update={"run": inherited})
     data_dir = root / "data"
     manifest_path = root / "train_and_eval/market_data/manifest.json"
     manifest = json.loads(manifest_path.read_text())
     frame = load_market_data(protocol.run.data.path, data_directory=data_dir, manifest_path=manifest_path)
-    source = None
-    if protocol.schema_version == 2:
-        source = _stage_one_source(factory, protocol)
+    source = _stage_one_source(factory, protocol)
     plan = build_plan(protocol, frame, manifest, source)
     plan["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     return protocol, plan
@@ -142,8 +141,6 @@ def _set_cycle(factory, cycle_id, **changes):
 
 
 def _source(factory, checkpoint_id):
-    if checkpoint_id is None:
-        return None
     with factory() as session:
         checkpoint = session.get(Checkpoint, checkpoint_id)
         run = session.get(Run, checkpoint.run_id)
@@ -152,8 +149,10 @@ def _source(factory, checkpoint_id):
         return run.name, checkpoint.id
 
 
-def _run_stage(factory, protocol, cycle, role, candidate, source, root, live):
-    config = stage_config(protocol, cycle.plan, role=role, candidate=candidate, source=source)
+def _run_stage(factory, protocol, cycle, role, source, root, live):
+    if source is None:
+        raise ValueError("Every stage-two training run must resume a checkpoint")
+    config = stage_config(protocol, cycle.plan, role=role, source=source)
     with factory() as session:
         existing = session.scalar(select(Run).where(Run.name == config.run.name))
         if existing is not None:
@@ -169,7 +168,7 @@ def _run_stage(factory, protocol, cycle, role, candidate, source, root, live):
             if len(checkpoints) != 1:
                 raise RuntimeError("Completed stage must have one final checkpoint")
             return existing.id, checkpoints[0].id
-    print(f"Cycle {cycle.number}: {role} {candidate} | LR={config.ppo.learning_rate} | {config.data.train_range.start} -> {config.data.train_range.end}", flush=True)
+    print(f"Cycle {cycle.number}: {role} | LR={config.ppo.learning_rate} | {config.data.train_range.start} -> {config.data.train_range.end}", flush=True)
     window = cycle.plan["refit_window" if role == "refit" else "candidate_window"]
     print(f"  available scored steps={window['train']['rows']}, context={window['history_rows']}, "
           f"trimmed={window['trimmed_steps']}, prepended={window['prepended_steps']}", flush=True)
@@ -178,7 +177,7 @@ def _run_stage(factory, protocol, cycle, role, candidate, source, root, live):
         path.write_text(yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False))
         result = train_ppo_run(factory, config_path=path, project_root=root,
                                data_directory=root/"data", manifest_path=root/"train_and_eval/market_data/manifest.json",
-                               cycle_id=cycle.id, stage_role=role, candidate_id=str(candidate) if role == "candidate" else None,
+                               cycle_id=cycle.id, stage_role=role, candidate_id="0" if role == "candidate" else None,
                                progress_reporter=LiveTrainingProgress(stream=sys.stdout) if live else None)
     return result.run.run_id, result.checkpoint.checkpoint_id
 
@@ -238,7 +237,7 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
         try:
             with factory() as session:
                 cycles = list(session.scalars(select(WalkForwardCycle).where(WalkForwardCycle.study_id == study_id).order_by(WalkForwardCycle.number)))
-            previous = protocol.source_checkpoint_id if protocol.schema_version == 2 else None
+            previous = protocol.source_checkpoint_id
             for cycle in cycles:
                 if max_cycles is not None and cycle.number > max_cycles:
                     break
@@ -249,28 +248,25 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
                     continue
                 current_id = cycle.id
                 source = ((plan["stage_one_source"]["run_name"], previous)
-                          if protocol.schema_version == 2 and cycle.number == 1 else _source(factory, previous))
+                          if cycle.number == 1 else _source(factory, previous))
                 _set_cycle(factory, cycle.id, source_checkpoint_id=previous, status="running", error=None)
                 if cycle.selection is None:
                     records = []
-                    for candidate, lr in enumerate(protocol.learning_rates):
-                        run_id, checkpoint_id = _run_stage(factory, protocol, cycle, "candidate", candidate, source, root, live)
-                        with factory() as session:
-                            evaluations = list(session.scalars(select(Evaluation).where(
-                                Evaluation.checkpoint_id == checkpoint_id,
-                                Evaluation.data_scope == EvaluationDataScope.RUN_VALIDATION,
-                                Evaluation.status == EvaluationStatus.COMPLETED)))
-                            if len(evaluations) != 1:
-                                raise RuntimeError("Candidate must have exactly one final validation")
-                            evaluation = evaluations[0]
-                            run = session.get(Run, run_id)
-                            records.append({"candidate_order": candidate, "learning_rate": lr, "seed": protocol.seed,
-                                            "run_id": run_id, "checkpoint_id": checkpoint_id,
-                                            "evaluation_id": evaluation.id, "balanced_score": float(evaluation.balanced_score),
-                                            "initial_policy_sha256": run.stage_summary["initial_policy_sha256"],
-                                            "initial_checkpoint_id": run.stage_summary["initial_checkpoint_id"]})
-                    if len({r["initial_policy_sha256"] for r in records}) != 1:
-                        raise RuntimeError("Candidates did not start with identical policy weights")
+                    run_id, checkpoint_id = _run_stage(factory, protocol, cycle, "candidate", source, root, live)
+                    with factory() as session:
+                        evaluations = list(session.scalars(select(Evaluation).where(
+                            Evaluation.checkpoint_id == checkpoint_id,
+                            Evaluation.data_scope == EvaluationDataScope.RUN_VALIDATION,
+                            Evaluation.status == EvaluationStatus.COMPLETED)))
+                        if len(evaluations) != 1:
+                            raise RuntimeError("Candidate must have exactly one final validation")
+                        evaluation = evaluations[0]
+                        run = session.get(Run, run_id)
+                        records.append({"candidate_order": 0, "learning_rate": protocol.learning_rate, "seed": protocol.seed,
+                                        "run_id": run_id, "checkpoint_id": checkpoint_id,
+                                        "evaluation_id": evaluation.id, "balanced_score": float(evaluation.balanced_score),
+                                        "initial_policy_sha256": run.stage_summary["initial_policy_sha256"],
+                                        "initial_checkpoint_id": run.stage_summary["initial_checkpoint_id"]})
                     winner = select_candidate(records)
                     selection = {"rule": protocol.selection_rule, "candidates": records, "winner": winner,
                                  "reject_updates": False, "checkpoint_policy": "final_only"}
@@ -281,12 +277,12 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
                     if winner != selection["winner"] or winner["checkpoint_id"] != cycle.selected_checkpoint_id:
                         raise RuntimeError("Persisted selection is inconsistent")
                 # Reference is diagnostic only and is never eligible for selection.
-                if previous is not None and cycle.reference_evaluation_id is None:
+                if cycle.reference_evaluation_id is None:
                     reference = _evaluation(factory, previous, cycle.plan["candidate_window"]["validation"], EvaluationDataScope.CUSTOM_RANGE, root)
                     _set_cycle(factory, cycle.id, reference_evaluation_id=reference)
                 selected = winner["checkpoint_id"]
                 selected_source = _source(factory, selected)
-                _, refit = _run_stage(factory, protocol, cycle, "refit", winner["candidate_order"], selected_source, root, live)
+                _, refit = _run_stage(factory, protocol, cycle, "refit", selected_source, root, live)
                 _set_cycle(factory, cycle.id, refit_checkpoint_id=refit)
                 # The test is first read by the evaluator only after selection and refit are persisted.
                 test_id = _evaluation(factory, refit, cycle.plan["test_rows"], EvaluationDataScope.EXTENDED_OUT_OF_SAMPLE, root)

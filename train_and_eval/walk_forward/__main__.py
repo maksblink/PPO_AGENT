@@ -23,17 +23,12 @@ def main():
     args = parser.parse_args()
     from train_and_eval.walk_forward.service import prepare, execute
     if args.command == "plan":
-        from train_and_eval.walk_forward.config import load_protocol
-        protocol = load_protocol(args.config)
-        if protocol.schema_version == 2:
-            from train_and_eval.database.session import create_database_engine, create_session_factory
-            engine = create_database_engine()
-            try:
-                protocol, plan = prepare(args.config, args.project_root.resolve(), create_session_factory(engine))
-            finally:
-                engine.dispose()
-        else:
-            protocol, plan = prepare(args.config, args.project_root.resolve())
+        from train_and_eval.database.session import create_database_engine, create_session_factory
+        engine = create_database_engine()
+        try:
+            protocol, plan = prepare(args.config, args.project_root.resolve(), create_session_factory(engine))
+        finally:
+            engine.dispose()
         print(f"Study: {protocol.name}; seed={protocol.seed}; full tests={len(plan['cycles'])}")
         print(f"Initial A: {plan['initial_train']}")
         if "stage_one_source" in plan:

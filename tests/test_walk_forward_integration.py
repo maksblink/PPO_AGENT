@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import shutil
 import subprocess
 
 from alembic import command
@@ -64,11 +63,10 @@ def synthetic_project(tmp_path, end="2026-04-13"):
                 "validation":{"status":"passed_with_warnings","structural_error_count":0,"warning_event_count":3,
                               "warning_counts":{"missing_minute":3},"warning_acceptance":{"required":True,"accepted":True,"mode":"cli_flag","accepted_at_utc":"2026-04-13T00:00:00Z"}}}
     (manifest_dir/"manifest.json").write_text(json.dumps(manifest))
-    config = yaml.safe_load(Path("configs/walk_forward/nq5m_v1_seed1.yml").read_text())
-    config["name"] = "synthetic_walk_forward"
-    config["run"]["data"]["path"] = "data/synthetic.parquet"
-    config["run"]["ppo"].update(device="cpu", hidden_sizes=[8], n_steps=256, batch_size=64, n_epochs=1)
-    config["run"]["artifacts"]["training_metrics"]["every_steps"] = 256
+    config = yaml.safe_load(Path("configs/stage_one/nq5m_v1_seed1.yml").read_text())
+    config["data"]["path"] = "data/synthetic.parquet"
+    config["ppo"].update(device="cpu", hidden_sizes=[8], n_steps=256, batch_size=64, n_epochs=1)
+    config["artifacts"]["training_metrics"]["every_steps"] = 256
     config_path = root/"protocol.yml"
     config_path.write_text(yaml.safe_dump(config))
     (root/".gitignore").write_text("data/\nartifacts/\n__pycache__/\n")
@@ -77,67 +75,12 @@ def synthetic_project(tmp_path, end="2026-04-13"):
     return root, config_path
 
 
-def test_three_cycles_migrations_lineage_resume_and_replay(database, tmp_path):
-    factory, engine = database
-    root, config = synthetic_project(tmp_path)
-    study_id = execute(factory, config, project_root=root, max_cycles=1, live=False)
-    with factory() as session:
-        first = session.scalar(select(WalkForwardCycle).where(WalkForwardCycle.number == 1))
-        first_test_id = first.test_evaluation_id
-        first_test_return = session.get(Evaluation, first_test_id).agent_return
-    assert execute(factory, config, project_root=root, max_cycles=3, live=False) == study_id
-    with factory() as session:
-        cycles = list(session.scalars(select(WalkForwardCycle).order_by(WalkForwardCycle.number)))
-        runs = list(session.scalars(select(Run)))
-        assert len(cycles) == 3 and all(c.status == "completed" for c in cycles)
-        assert len(runs) == 12
-        for i, cycle in enumerate(cycles):
-            candidates = [r for r in runs if r.cycle_id == cycle.id and r.stage_role == "candidate"]
-            assert len(candidates) == 3
-            assert len({r.stage_summary["initial_policy_sha256"] for r in candidates}) == 1
-            previous = None if i == 0 else cycles[i-1].selected_checkpoint_id
-            assert cycle.source_checkpoint_id == previous
-            assert all(r.source_checkpoint_id == previous for r in candidates)
-            refit = next(r for r in runs if r.cycle_id == cycle.id and r.stage_role == "refit")
-            assert refit.source_checkpoint_id == cycle.selected_checkpoint_id
-            assert refit.validation_rows == 0
-            assert refit.stage_summary["optimizer_steps"] > 0
-            test = session.get(Evaluation, cycle.test_evaluation_id)
-            assert test.checkpoint_id == cycle.refit_checkpoint_id
-            assert refit.window_metadata["train"]["end_index"] <= test.evaluation_start_index
-        assert session.get(Evaluation, first_test_id).agent_return == first_test_return
-        before_count = len(list(session.scalars(select(Evaluation))))
-    assert execute(factory, config, project_root=root, max_cycles=3, live=False) == study_id
-    with factory() as session:
-        assert len(list(session.scalars(select(Run)))) == 12
-        assert len(list(session.scalars(select(Evaluation)))) == before_count
-    # The aggregate report must reproduce a missing TEST trajectory using its own bounds.
-    from train_and_eval.reporting.artifacts import evaluation_artifact_directory
-    with factory() as session:
-        test = session.get(Evaluation, first_test_id)
-        cp = session.get(Checkpoint, test.checkpoint_id)
-        trajectory = evaluation_artifact_directory(root,"artifacts",cp.run_id,test.id)/"trajectory.parquet"
-    trajectory.unlink()
-    report = generate_report(factory, study_id, project_root=root)
-    assert report.is_file() and trajectory.is_file()
-    summary = json.loads((report.parent/"summary.json").read_text())
-    assert summary["completed_tests"] == 3
-    assert summary["capitalization"] is False
-    assert summary["agent"]["total_pnl_pln"] == pytest.approx(sum(pd.read_csv(report.parent/"tests.csv").agent_return)*1000)
-    changed = yaml.safe_load(config.read_text())
-    changed["refit_learning_rate"] = .0001
-    changed_path = tmp_path/"changed.yml"
-    changed_path.write_text(yaml.safe_dump(changed))
-    with pytest.raises(RuntimeError, match="changed"):
-        execute(factory, changed_path, project_root=root, max_cycles=3, live=False)
-
-
 def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path):
     from train_and_eval.training.service import train_ppo_run
     from train_and_eval.walk_forward.service import prepare
     factory, engine = database
-    root, legacy = synthetic_project(tmp_path, end="2026-05-11")
-    base = yaml.safe_load(legacy.read_text())["run"]
+    root, stage_one_config = synthetic_project(tmp_path, end="2026-05-11")
+    base = yaml.safe_load(stage_one_config.read_text())
     base["run"] = {"name": "manual_stage_one", "seed": 1}
     base["data"] = {"path": "data/synthetic.parquet", "alignment": "trim_start",
                     "train_range": {"start": "2026-01-05T00:00:00Z", "end": "2026-03-02T00:00:00Z"},
@@ -158,30 +101,59 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path):
     assert plan["cycles"][0]["update"] == protocol.run.data.validation_range.model_dump()
     assert plan["cycles"][0]["validation"]["start"] == "2026-03-09T00:00:00+00:00"
     study_id = execute(factory, protocol_path, project_root=root, max_cycles=1, live=False)
+    with factory() as session:
+        first = session.scalar(select(WalkForwardCycle).where(WalkForwardCycle.number == 1))
+        first_test_id = first.test_evaluation_id
+        first_test_return = session.get(Evaluation, first_test_id).agent_return
     assert execute(factory, protocol_path, project_root=root, max_cycles=3, live=False) == study_id
     with factory() as session:
         cycles = list(session.scalars(select(WalkForwardCycle).order_by(WalkForwardCycle.number)))
         completed = [c for c in cycles if c.status == "completed"]
         assert len(completed) == 3
         runs = list(session.scalars(select(Run)))
-        assert len(runs) == 13
+        assert len(runs) == 7
         for i, cycle in enumerate(completed):
             expected = checkpoint_id if i == 0 else completed[i-1].selected_checkpoint_id
             assert cycle.source_checkpoint_id == expected
             candidates = [r for r in runs if r.cycle_id == cycle.id and r.stage_role == "candidate"]
-            assert len(candidates) == 3
+            assert len(candidates) == 1
             assert all(r.source_checkpoint_id == expected for r in candidates)
             assert len({r.stage_summary["initial_policy_sha256"] for r in candidates}) == 1
             assert all(r.window_metadata["alignment"] == "prepend" for r in candidates)
             refit = next(r for r in runs if r.cycle_id == cycle.id and r.stage_role == "refit")
             assert refit.source_checkpoint_id == cycle.selected_checkpoint_id
             assert refit.window_metadata["train"]["end_index"] <= cycle.plan["test_rows"]["start_index"]
+            assert refit.validation_rows == 0
+            assert refit.stage_summary["optimizer_steps"] > 0
+            assert refit.normalized_config_json["ppo"]["learning_rate"] == protocol.learning_rate
+            assert candidates[0].normalized_config_json["ppo"]["learning_rate"] == protocol.learning_rate
+            test = session.get(Evaluation, cycle.test_evaluation_id)
+            assert test.checkpoint_id == cycle.refit_checkpoint_id
+        assert session.get(Evaluation, first_test_id).agent_return == first_test_return
+        before_count = len(list(session.scalars(select(Evaluation))))
         forbidden = completed[0].refit_checkpoint_id
     assert execute(factory, protocol_path, project_root=root, max_cycles=3, live=False) == study_id
     with factory() as session:
-        assert len(list(session.scalars(select(Run)))) == 13
+        assert len(list(session.scalars(select(Run)))) == 7
+        assert len(list(session.scalars(select(Evaluation)))) == before_count
+    # The aggregate report must reproduce a missing TEST trajectory using its own bounds.
+    from train_and_eval.reporting.artifacts import evaluation_artifact_directory
+    with factory() as session:
+        test = session.get(Evaluation, first_test_id)
+        cp = session.get(Checkpoint, test.checkpoint_id)
+        trajectory = evaluation_artifact_directory(root,"artifacts",cp.run_id,test.id)/"trajectory.parquet"
+    trajectory.unlink()
     report = generate_report(factory, study_id, project_root=root)
+    assert report.is_file() and trajectory.is_file()
+    summary = json.loads((report.parent/"summary.json").read_text())
+    assert summary["completed_tests"] == 3
+    assert summary["capitalization"] is False
+    assert summary["agent"]["total_pnl_pln"] == pytest.approx(sum(pd.read_csv(report.parent/"tests.csv").agent_return)*1000)
     assert json.loads((report.parent/"plan.json").read_text())["stage_one_source"]["checkpoint_id"] == checkpoint_id
+    changed_path = tmp_path / "changed.yml"
+    changed_path.write_text(yaml.safe_dump({**definition, "learning_rate": .0001}))
+    with pytest.raises(RuntimeError, match="changed"):
+        execute(factory, changed_path, project_root=root, max_cycles=3, live=False)
     protocol_path.write_text(yaml.safe_dump({**definition,"source_checkpoint_id":forbidden}))
     with pytest.raises(ValueError, match="Stage one|Stage-one"):
         prepare(protocol_path, root, factory)

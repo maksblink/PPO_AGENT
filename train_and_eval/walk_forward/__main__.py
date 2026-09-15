@@ -14,7 +14,7 @@ def main():
         sub.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[2])
         if name == "run":
             sub.add_argument("--max-cycles", type=int, help="Execute through this cycle number; rerun without it to continue")
-            sub.add_argument("--plain-output", action="store_true")
+            sub.add_argument("--plain-output", action="store_true", help="Print study snapshots at start, cycle completion and exit instead of refreshing a live panel")
         else:
             sub.add_argument("--output", type=Path, help="Optional JSON plan destination, e.g. /tmp/ppo_plan.json")
     report = commands.add_parser("report")

@@ -20,7 +20,7 @@ from train_and_eval.market_data.load_market_data import load_market_data
 from train_and_eval.reproducibility import require_clean_git
 from train_and_eval.run_config import RunConfig, normalize_config, validate_resume_compatibility
 from train_and_eval.training.service import train_ppo_run
-from train_and_eval.training.progress import LiveTrainingProgress
+from train_and_eval.walk_forward.progress import WalkForwardProgress
 from train_and_eval.walk_forward.config import build_plan, digest, load_protocol, stage_config
 
 
@@ -149,7 +149,7 @@ def _source(factory, checkpoint_id):
         return run.name, checkpoint.id
 
 
-def _run_stage(factory, protocol, cycle, role, source, root, live):
+def _run_stage(factory, protocol, cycle, role, source, root, progress):
     if source is None:
         raise ValueError("Every stage-two training run must resume a checkpoint")
     config = stage_config(protocol, cycle.plan, role=role, source=source)
@@ -168,21 +168,17 @@ def _run_stage(factory, protocol, cycle, role, source, root, live):
             if len(checkpoints) != 1:
                 raise RuntimeError("Completed stage must have one final checkpoint")
             return existing.id, checkpoints[0].id
-    print(f"Cycle {cycle.number}: {role} | LR={config.ppo.learning_rate} | {config.data.train_range.start} -> {config.data.train_range.end}", flush=True)
-    window = cycle.plan["refit_window" if role == "refit" else "candidate_window"]
-    print(f"  available scored steps={window['train']['rows']}, context={window['history_rows']}, "
-          f"trimmed={window['trimmed_steps']}, prepended={window['prepended_steps']}", flush=True)
     with tempfile.TemporaryDirectory(prefix="ppo-walk-forward-") as temporary:
         path = Path(temporary) / "stage.yml"
         path.write_text(yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False))
         result = train_ppo_run(factory, config_path=path, project_root=root,
                                data_directory=root/"data", manifest_path=root/"train_and_eval/market_data/manifest.json",
                                cycle_id=cycle.id, stage_role=role, candidate_id="0" if role == "candidate" else None,
-                               progress_reporter=LiveTrainingProgress(stream=sys.stdout) if live else None)
+                               progress_reporter=progress)
     return result.run.run_id, result.checkpoint.checkpoint_id
 
 
-def _evaluation(factory, checkpoint_id, bounds, scope, root):
+def _evaluation(factory, checkpoint_id, bounds, scope, root, progress):
     # Reuse a completed exact evaluation after interruption, never overwrite its result.
     with factory() as session:
         checkpoint = session.get(Checkpoint, checkpoint_id)
@@ -203,9 +199,33 @@ def _evaluation(factory, checkpoint_id, bounds, scope, root):
         factory, checkpoint_id=checkpoint_id, trigger="final", policy_mode="deterministic_argmax",
         evaluation_range=(bounds["start_index"], bounds["end_index"]), data_scope=scope,
         project_root=root, data_directory=root/"data", manifest_path=root/"train_and_eval/market_data/manifest.json",
-        persist_trajectory=True,
+        persist_trajectory=True, progress_callback=progress.evaluation_update,
     )
     return result.evaluation_id
+
+
+
+def _restore_progress(factory, progress, cycles):
+    """Rebuild counters and metrics from persisted completed stages on resume."""
+    with factory() as session:
+        for cycle in cycles:
+            if cycle.selected_checkpoint_id is not None:
+                progress.number = max(progress.number, cycle.number)
+                progress.complete(cycle.plan, "base", render=False)
+                evaluation = session.get(Evaluation, cycle.selection["winner"]["evaluation_id"])
+                progress.complete(cycle.plan, "validation", _metrics(evaluation), render=False)
+            if cycle.reference_evaluation_id is not None:
+                progress.complete(cycle.plan, "reference", render=False)
+            if cycle.refit_checkpoint_id is not None:
+                progress.complete(cycle.plan, "refit", render=False)
+            if cycle.test_evaluation_id is not None:
+                evaluation = session.get(Evaluation, cycle.test_evaluation_id)
+                progress.complete(cycle.plan, "test", _metrics(evaluation), render=False)
+
+
+def _metrics(evaluation):
+    return {key: getattr(evaluation, key) for key in
+            ("balanced_score", "agent_return", "agent_max_drawdown")}
 
 
 def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
@@ -234,9 +254,12 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
             study.status = "running"
             session.commit()
         current_id = None
+        progress = WalkForwardProgress(protocol, plan, stream=sys.stdout, live=live, max_cycles=max_cycles)
         try:
             with factory() as session:
                 cycles = list(session.scalars(select(WalkForwardCycle).where(WalkForwardCycle.study_id == study_id).order_by(WalkForwardCycle.number)))
+            _restore_progress(factory, progress, cycles)
+            progress.render(force=True)
             previous = protocol.source_checkpoint_id
             for cycle in cycles:
                 if max_cycles is not None and cycle.number > max_cycles:
@@ -252,7 +275,8 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
                 _set_cycle(factory, cycle.id, source_checkpoint_id=previous, status="running", error=None)
                 if cycle.selection is None:
                     records = []
-                    run_id, checkpoint_id = _run_stage(factory, protocol, cycle, "candidate", source, root, live)
+                    progress.begin(cycle.plan, "base")
+                    run_id, checkpoint_id = _run_stage(factory, protocol, cycle, "candidate", source, root, progress)
                     with factory() as session:
                         evaluations = list(session.scalars(select(Evaluation).where(
                             Evaluation.checkpoint_id == checkpoint_id,
@@ -261,6 +285,8 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
                         if len(evaluations) != 1:
                             raise RuntimeError("Candidate must have exactly one final validation")
                         evaluation = evaluations[0]
+                        progress.complete(cycle.plan, "base")
+                        progress.complete(cycle.plan, "validation", _metrics(evaluation))
                         run = session.get(Run, run_id)
                         records.append({"candidate_order": 0, "learning_rate": protocol.learning_rate, "seed": protocol.seed,
                                         "run_id": run_id, "checkpoint_id": checkpoint_id,
@@ -278,23 +304,32 @@ def execute(factory, config_path, *, project_root, max_cycles=None, live=True):
                         raise RuntimeError("Persisted selection is inconsistent")
                 # Reference is diagnostic only and is never eligible for selection.
                 if cycle.reference_evaluation_id is None:
-                    reference = _evaluation(factory, previous, cycle.plan["candidate_window"]["validation"], EvaluationDataScope.CUSTOM_RANGE, root)
+                    progress.begin(cycle.plan, "reference")
+                    reference = _evaluation(factory, previous, cycle.plan["candidate_window"]["validation"], EvaluationDataScope.CUSTOM_RANGE, root, progress)
                     _set_cycle(factory, cycle.id, reference_evaluation_id=reference)
+                    progress.complete(cycle.plan, "reference")
                 selected = winner["checkpoint_id"]
                 selected_source = _source(factory, selected)
-                _, refit = _run_stage(factory, protocol, cycle, "refit", selected_source, root, live)
+                progress.begin(cycle.plan, "refit")
+                _, refit = _run_stage(factory, protocol, cycle, "refit", selected_source, root, progress)
                 _set_cycle(factory, cycle.id, refit_checkpoint_id=refit)
+                progress.complete(cycle.plan, "refit")
                 # The test is first read by the evaluator only after selection and refit are persisted.
-                test_id = _evaluation(factory, refit, cycle.plan["test_rows"], EvaluationDataScope.EXTENDED_OUT_OF_SAMPLE, root)
+                progress.begin(cycle.plan, "test")
+                test_id = _evaluation(factory, refit, cycle.plan["test_rows"], EvaluationDataScope.EXTENDED_OUT_OF_SAMPLE, root, progress)
                 _set_cycle(factory, cycle.id, test_evaluation_id=test_id, status="completed")
                 previous = selected  # Deliberately never refit.
-                print(f"Cycle {cycle.number} completed: base={selected}, trading={refit}, test={test_id}", flush=True)
+                with factory() as session:
+                    progress.complete(cycle.plan, "test", _metrics(session.get(Evaluation, test_id)), render=False)
+                progress.cycle_completed(cycle.number)
                 current_id = None
             with factory() as session:
                 remaining = session.scalar(select(WalkForwardCycle.id).where(WalkForwardCycle.study_id == study_id, WalkForwardCycle.status != "completed").limit(1))
                 session.get(WalkForwardStudy, study_id).status = "paused" if remaining is not None else "completed"
                 session.commit()
+            progress.close("PAUSED" if remaining is not None else "COMPLETED")
         except BaseException as error:
+            progress.close("FAILED")
             if current_id is not None:
                 _set_cycle(factory, current_id, status="failed", error=f"{type(error).__name__}: {error}")
             with factory() as session:

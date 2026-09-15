@@ -75,7 +75,7 @@ def synthetic_project(tmp_path, end="2026-04-13"):
     return root, config_path
 
 
-def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path):
+def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsys):
     from train_and_eval.training.service import train_ppo_run
     from train_and_eval.walk_forward.service import prepare
     factory, engine = database
@@ -150,6 +150,26 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path):
     assert summary["capitalization"] is False
     assert summary["agent"]["total_pnl_pln"] == pytest.approx(sum(pd.read_csv(report.parent/"tests.csv").agent_return)*1000)
     assert json.loads((report.parent/"plan.json").read_text())["stage_one_source"]["checkpoint_id"] == checkpoint_id
+    from train_and_eval.walk_forward.progress import WalkForwardProgress
+    from train_and_eval.walk_forward.service import _restore_progress
+    from io import StringIO
+    restored = WalkForwardProgress(protocol, plan, stream=StringIO(), live=False)
+    with factory() as session:
+        saved_cycles = list(session.scalars(select(WalkForwardCycle).order_by(WalkForwardCycle.number)))
+    _restore_progress(factory, restored, saved_cycles)
+    assert sum(restored.done["base"].values()) == 3
+    assert sum(restored.done["refit"].values()) == 12
+    assert sum(restored.done["validation"].values()) == 12
+    assert sum(restored.done["reference"].values()) == 12
+    assert sum(restored.done["test"].values()) == 3
+    assert len(restored.results["test"]) == 3
+    assert len(restored.results["validation"]) == 3
+    output = capsys.readouterr().out
+    assert "CYCLE COMPLETED" in output
+    assert "agent_max_drawdown" in output
+    assert "PPO TRAINING RESOLUTION" not in output
+    assert "not run yet" not in output
+
     changed_path = tmp_path / "changed.yml"
     changed_path.write_text(yaml.safe_dump({**definition, "learning_rate": .0001}))
     with pytest.raises(RuntimeError, match="changed"):

@@ -1523,6 +1523,36 @@ in use. Reports are saved under artifacts/walk_forward/<study-id>/report.html.
 Only consecutive non-overlapping tests contribute to the combined capital and
 global drawdown curves.
 
+### Stage-two terminal progress
+
+Stage two shows one study panel instead of per-run PPO preflight, loss metrics
+and validation progress panels. Stage-one terminal output is unchanged.
+The panel refreshes during training rollouts and evaluation callbacks (at most
+twice per second), and immediately after operations complete. The timer measures
+the current invocation, not previous sessions.
+
+Week counters show completed / total / remaining work for base training, trading
+refit, candidate validation, unchanged-source reference validation and test.
+Training counts nominal calendar weeks multiplied by the configured data epochs.
+Overlapping validation/refit windows count again each time they are processed.
+Warm-up context and batch-alignment prepends do not add nominal weeks. Counters
+advance when an operation finishes; a separate percentage describes the active
+operation. These are workload counters, not unique weeks of market history.
+
+Validation and test have separate running best/worst values (with cycle and UTC
+[start, end) dates), means and medians for balanced_score, agent_return and
+agent_max_drawdown. Validation statistics describe entire validation windows;
+test statistics describe test windows (one week by default). Each metric has its
+own best/worst window. For signed drawdown, the value closest to zero is best.
+Only completed results enter statistics, with no reference evaluations mixed in.
+These metrics are display-only and do not affect checkpoint choice.
+
+On resume the panel rebuilds counters and statistics from persisted cycle results.
+Totals cover the full study even with --max-cycles; the invocation limit is shown
+separately. Without an interactive terminal, or with --plain-output, output is
+limited to snapshots at start, cycle completion and exit. Each snapshot includes
+the aggregate statistics. Errors still propagate normally.
+
 ### Tests for the two-stage workflow
 
 ```bash

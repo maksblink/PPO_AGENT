@@ -28,7 +28,8 @@ class WalkForwardProgress:
         self.number = 0
         self.started = time.monotonic()
         self.last_render = 0.
-        self.screen_open = False
+        self.rendered_lines = 0
+        self.rendered_size = None
         self.active_fraction = 0.
         self.total = {key: sum(self.amount(c, key) for c in self.cycles) for key in self.done}
 
@@ -115,31 +116,36 @@ class WalkForwardProgress:
         if not force and (not self.interactive or now - self.last_render < .5):
             return
         size = shutil.get_terminal_size((120, 24))
-        # A full-screen panel avoids cursor-up escaping the visible viewport.
-        # Small terminals use complete plain snapshots instead of dropping metrics.
-        fits = size.columns >= 80 and size.lines >= 24
         terminal_phase = self.phase in ("PAUSED", "COMPLETED", "FAILED")
-        live_screen = self.interactive and fits and not terminal_phase
-        if not live_screen:
-            self.leave_screen()
-            if self.phase not in ("INITIALIZING", "CYCLE COMPLETED", "PAUSED", "COMPLETED", "FAILED"):
-                return
-            self.stream.write("\n".join(self.panel_lines()) + "\n")
+        # Reserve a row for the cursor after the final newline. Otherwise the
+        # first panel row scrolls out of view and cursor-up cannot reach it.
+        lines = self.panel_lines(compact=size.columns < 150)[:-1]
+        fits = size.columns >= 80 and len(lines) < size.lines
+        live_panel = self.interactive and fits and not terminal_phase
+        if not live_panel and self.phase not in (
+                "INITIALIZING", "CYCLE COMPLETED", "PAUSED", "COMPLETED", "FAILED"):
+            return
+        if self.interactive:
+            self.clear_previous(size)
+        if live_panel:
+            self.stream.write("\n".join(line[:size.columns-1] for line in lines) + "\n")
+            self.rendered_lines = len(lines)
+            self.rendered_size = size
         else:
-            if not self.screen_open:
-                self.stream.write("\033[?1049h\033[?25l")
-                self.screen_open = True
-            lines = self.panel_lines(compact=size.columns < 150)
-            self.stream.write("\033[H\033[J")
-            # No newline on the bottom row, so drawing never scrolls the viewport.
-            self.stream.write("\n".join(line[:size.columns-1] for line in lines))
+            self.stream.write("\n".join(self.panel_lines()) + "\n")
         self.stream.flush()
         self.last_render = now
 
-    def leave_screen(self):
-        if self.screen_open:
-            self.stream.write("\033[?25h\033[?1049l")
-            self.screen_open = False
+    def clear_previous(self, size):
+        # After a resize the terminal may have reflowed the old panel. Do not
+        # guess cursor offsets and risk overwriting unrelated shell history.
+        if self.rendered_lines and size == self.rendered_size:
+            self.stream.write(f"\033[{self.rendered_lines}A")
+            for _ in range(self.rendered_lines):
+                self.stream.write("\r\033[2K\n")
+            self.stream.write(f"\033[{self.rendered_lines}A")
+        self.rendered_lines = 0
+        self.rendered_size = None
 
     def cycle_completed(self, number):
         self.number = number

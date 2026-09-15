@@ -1536,14 +1536,16 @@ show completed test cycles and the active operation. Validation and test tables
 have Metric, Mean, Median, Best and Worst columns. Values remain raw fractions,
 as in the saved reports; DD is agent_max_drawdown.
 
-Interactive terminals of at least 80 columns by 24 rows use an alternate screen
-with a fixed-height layout, preventing leftover fragments in scrollback. Live
-extrema identify cycles; terminals at least 150 columns wide and the final printed
-tables include full UTC date ranges.
-On completion, pause or failure the normal screen and cursor are restored and
-a complete final snapshot is printed. Smaller terminals use complete plain
-snapshots without live redraw; enlarge the terminal to enable the live panel.
-
+Interactive terminals of at least 80 columns by 24 rows refresh the panel inline,
+in the normal terminal buffer, like stage-one progress. Shell scrollback remains
+available: the renderer does not switch screens, hide the cursor or clear the
+terminal. It replaces only its own previous panel and reserves a row for the
+cursor to prevent the first panel line scrolling out of reach.
+Live extrema identify cycles; terminals at least 150 columns wide and the final
+printed tables include full UTC date ranges. The final snapshot stays in history.
+After a terminal resize a fresh panel is appended because old cursor offsets
+may no longer be valid. Smaller terminals use complete plain snapshots without
+live redraw. Training still occupies the foreground shell until it ends.
 
 Week counters show completed / total / remaining work for base training, trading
 refit, candidate validation, unchanged-source reference validation and test.

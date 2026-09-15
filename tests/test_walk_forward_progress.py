@@ -105,7 +105,7 @@ def test_bars_are_bounded_and_active_progress_does_not_complete_weeks():
     assert sum(p.done["base"].values()) == 0
 
 
-def test_alternate_screen_restored_and_final_snapshot_has_dates(monkeypatch):
+def test_inline_panel_preserves_screen_and_final_snapshot_has_dates(monkeypatch):
     import os
     monkeypatch.setattr("train_and_eval.walk_forward.progress.shutil.get_terminal_size", lambda _: os.terminal_size((80, 24)))
     class Terminal(StringIO):
@@ -116,10 +116,12 @@ def test_alternate_screen_restored_and_final_snapshot_has_dates(monkeypatch):
     p.complete(p.cycles[0], "test", {"balanced_score": .1, "agent_return": .2, "agent_max_drawdown": -.1})
     p.close("PAUSED")
     text = p.stream.getvalue()
-    assert text.count("\033[?1049h") == 1
-    assert text.count("\033[?1049l") == 1
-    assert "\033[?25h" in text
-    assert "[2020-02-17, 2020-02-24)" in text.split("\033[?1049l")[1]
+    assert "\033[?" not in text
+    assert "\033[H" not in text
+    assert "\033[J" not in text
+    assert "\033[23A" in text
+    assert "[2020-02-17, 2020-02-24)" in text
+    assert p.rendered_lines == 0
 
 
 def test_small_terminal_uses_complete_plain_tables(monkeypatch):
@@ -136,3 +138,24 @@ def test_small_terminal_uses_complete_plain_tables(monkeypatch):
     assert "\033" not in text
     assert text.count("WALK FORWARD") == 2
     assert "Worst" in text
+
+
+def test_resize_does_not_rewind_into_shell_history(monkeypatch):
+    import os
+    size = [os.terminal_size((80, 24))]
+    monkeypatch.setattr("train_and_eval.walk_forward.progress.shutil.get_terminal_size", lambda _: size[0])
+    class Terminal(StringIO):
+        def isatty(self):
+            return True
+    stream = Terminal()
+    p = make_progress(stream, live=True)
+    p.begin(p.cycles[0], "base")
+    assert p.rendered_lines == 23
+    assert p.rendered_lines < size[0].lines
+    stream.seek(0)
+    stream.truncate()
+    size[0] = os.terminal_size((100, 30))
+    p.render(force=True)
+    assert "\033" not in stream.getvalue()
+    p.render(force=True)
+    assert "\033[23A" in stream.getvalue()

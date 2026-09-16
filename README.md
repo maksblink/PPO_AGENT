@@ -1547,6 +1547,14 @@ After a terminal resize a fresh panel is appended because old cursor offsets
 may no longer be valid. Smaller terminals use complete plain snapshots without
 live redraw. Training still occupies the foreground shell until it ends.
 
+During stage-two training and evaluation, Python warnings and writes through
+sys.stdout/sys.stderr clear the current panel before printing. Messages remain
+in scrollback; the next refresh draws the panel below them. Warning filters and
+warning-as-error behavior are preserved, and stream/warning hooks are restored
+even if an operation raises. This does not intercept native writes directly to
+file descriptors or log handlers holding their own pre-existing stream.
+
+
 Week counters show completed / total / remaining work for base training, trading
 refit, candidate validation, unchanged-source reference validation and test.
 Training counts nominal calendar weeks multiplied by the configured data epochs.

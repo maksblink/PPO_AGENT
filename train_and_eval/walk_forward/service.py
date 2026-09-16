@@ -171,10 +171,11 @@ def _run_stage(factory, protocol, cycle, role, source, root, progress):
     with tempfile.TemporaryDirectory(prefix="ppo-walk-forward-") as temporary:
         path = Path(temporary) / "stage.yml"
         path.write_text(yaml.safe_dump(config.model_dump(mode="json"), sort_keys=False))
-        result = train_ppo_run(factory, config_path=path, project_root=root,
-                               data_directory=root/"data", manifest_path=root/"train_and_eval/market_data/manifest.json",
-                               cycle_id=cycle.id, stage_role=role, candidate_id="0" if role == "candidate" else None,
-                               progress_reporter=progress)
+        with progress.external_output():
+            result = train_ppo_run(factory, config_path=path, project_root=root,
+                                   data_directory=root/"data", manifest_path=root/"train_and_eval/market_data/manifest.json",
+                                   cycle_id=cycle.id, stage_role=role, candidate_id="0" if role == "candidate" else None,
+                                   progress_reporter=progress)
     return result.run.run_id, result.checkpoint.checkpoint_id
 
 
@@ -195,12 +196,13 @@ def _evaluation(factory, checkpoint_id, bounds, scope, root, progress):
             raise RuntimeError("Ambiguous completed evaluation; refusing to choose using test results")
         if rows:
             return rows[0].id
-    result = evaluate_run_validation_checkpoint(
-        factory, checkpoint_id=checkpoint_id, trigger="final", policy_mode="deterministic_argmax",
-        evaluation_range=(bounds["start_index"], bounds["end_index"]), data_scope=scope,
-        project_root=root, data_directory=root/"data", manifest_path=root/"train_and_eval/market_data/manifest.json",
-        persist_trajectory=True, progress_callback=progress.evaluation_update,
-    )
+    with progress.external_output():
+        result = evaluate_run_validation_checkpoint(
+            factory, checkpoint_id=checkpoint_id, trigger="final", policy_mode="deterministic_argmax",
+            evaluation_range=(bounds["start_index"], bounds["end_index"]), data_scope=scope,
+            project_root=root, data_directory=root/"data", manifest_path=root/"train_and_eval/market_data/manifest.json",
+            persist_trajectory=True, progress_callback=progress.evaluation_update,
+        )
     return result.evaluation_id
 
 

@@ -1,7 +1,10 @@
 """Compact study progress; rendering never changes training or selection."""
 from __future__ import annotations
 
+from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from datetime import datetime
+import sys
+import warnings
 import math
 import shutil
 import statistics
@@ -30,8 +33,37 @@ class WalkForwardProgress:
         self.last_render = 0.
         self.rendered_lines = 0
         self.rendered_size = None
+        self.message_pending = False
         self.active_fraction = 0.
         self.total = {key: sum(self.amount(c, key) for c in self.cycles) for key in self.done}
+
+    @contextmanager
+    def external_output(self):
+        """Keep Python warnings and incidental prints above the live panel."""
+        if not self.interactive:
+            yield
+            return
+        stdout = _PanelOutput(self, sys.stdout)
+        stderr = _PanelOutput(self, sys.stderr)
+        with redirect_stdout(stdout), redirect_stderr(stderr), warnings.catch_warnings():
+            original_showwarning = warnings.showwarning
+
+            def showwarning(message, category, filename, lineno, file=None, line=None):
+                original_showwarning(message, category, filename, lineno,
+                                     file=stderr if file is None else file, line=line)
+
+            warnings.showwarning = showwarning
+            yield
+
+    def external_write(self, target, text):
+        if not text:
+            return 0
+        self.clear_previous(shutil.get_terminal_size((120, 24)))
+        self.stream.flush()
+        result = target.write(text)
+        target.flush()
+        self.message_pending = not text.endswith("\n")
+        return result
 
     def amount(self, cycle, key):
         if key == "base":
@@ -127,6 +159,9 @@ class WalkForwardProgress:
             return
         if self.interactive:
             self.clear_previous(size)
+            if self.message_pending:
+                self.stream.write("\n")
+                self.message_pending = False
         if live_panel:
             self.stream.write("\n".join(line[:size.columns-1] for line in lines) + "\n")
             self.rendered_lines = len(lines)
@@ -194,3 +229,20 @@ class WalkForwardProgress:
 
     def fail(self, error, **kwargs):
         self.close("FAILED")
+
+
+class _PanelOutput:
+    """Delegate stream capabilities while notifying the panel about writes."""
+
+    def __init__(self, panel, target):
+        self.panel = panel
+        self.target = target
+
+    def write(self, text):
+        return self.panel.external_write(self.target, text)
+
+    def flush(self):
+        return self.target.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.target, name)

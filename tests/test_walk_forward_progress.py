@@ -159,3 +159,86 @@ def test_resize_does_not_rewind_into_shell_history(monkeypatch):
     assert "\033" not in stream.getvalue()
     p.render(force=True)
     assert "\033[23A" in stream.getvalue()
+
+
+def test_warning_survives_redraw_and_streams_are_restored(monkeypatch):
+    import os
+    import sys
+    import warnings
+
+    class Terminal(StringIO):
+        def isatty(self):
+            return True
+
+    stream = Terminal()
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    monkeypatch.setattr("train_and_eval.walk_forward.progress.shutil.get_terminal_size",
+                        lambda _: os.terminal_size((143, 67)))
+
+    def showwarning(message, category, filename, lineno, file=None, line=None):
+        (file or sys.stderr).write(warnings.formatwarning(message, category, filename, lineno))
+    monkeypatch.setattr(warnings, "showwarning", showwarning)
+    p = make_progress(stream, live=True)
+    p.begin(p.cycles[0], "base")
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        with p.external_output():
+            warnings.warn("warning between frames", UserWarning)
+            assert p.rendered_lines == 0
+            marker = len(stream.getvalue())
+            p.render(force=True)
+            # The new frame starts below the warning, never rewinds over it.
+            assert "\033[23A" not in stream.getvalue()[marker:]
+    assert stream.getvalue().count("UserWarning: warning between frames") == 1
+    assert "\033[23A" in stream.getvalue().split("warning between frames")[0]
+    assert sys.stdout is stream and sys.stderr is stream
+    assert warnings.showwarning is showwarning
+
+
+def test_partial_print_gets_newline_before_panel_and_exception_restores_streams(monkeypatch):
+    import os
+    import sys
+
+    class Terminal(StringIO):
+        def isatty(self):
+            return True
+
+    stream = Terminal()
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    monkeypatch.setattr("train_and_eval.walk_forward.progress.shutil.get_terminal_size",
+                        lambda _: os.terminal_size((80, 24)))
+    p = make_progress(stream, live=True)
+    p.begin(p.cycles[0], "base")
+    with pytest.raises(RuntimeError, match="test failure"):
+        with p.external_output():
+            print("partial message", end="")
+            p.render(force=True)
+            raise RuntimeError("test failure")
+    assert "partial message\nWALK FORWARD" in stream.getvalue()
+    assert sys.stdout is stream and sys.stderr is stream
+
+
+def test_plain_output_does_not_redirect_streams():
+    import sys
+    import warnings
+    p = make_progress()
+    stdout, stderr, showwarning = sys.stdout, sys.stderr, warnings.showwarning
+    with p.external_output():
+        assert sys.stdout is stdout
+        assert sys.stderr is stderr
+        assert warnings.showwarning is showwarning
+
+
+def test_warning_as_error_is_not_suppressed(monkeypatch):
+    import warnings
+    class Terminal(StringIO):
+        def isatty(self):
+            return True
+    p = make_progress(Terminal(), live=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        with pytest.raises(UserWarning, match="must propagate"):
+            with p.external_output():
+                warnings.warn("must propagate", UserWarning)

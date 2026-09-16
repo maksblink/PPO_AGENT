@@ -11,7 +11,7 @@ refit_epochs: 1
 # Options are tried in deterministic Cartesian order; omitted fields are inherited.
 # Add values deliberately before starting a new study.
 grid:
-  ppo.learning_rate: [0.000075]
+  ppo.learning_rate: [0.000075, 0.00015]
 selection_rule: first_strict_improvement
 optimizer_policy: preserve_independent_copy
 partial_test: skip

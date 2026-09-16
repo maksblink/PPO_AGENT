@@ -30,6 +30,7 @@ def main():
         finally:
             engine.dispose()
         print(f"Study: {protocol.name}; seed={protocol.seed}; full tests={len(plan['cycles'])}")
+        print(f"Grid: {len(plan['grid_candidates'])} combinations per cycle (first strict improvement)")
         print(f"Initial A: {plan['initial_train']}")
         if "stage_one_source" in plan:
             print(f"Stage-one source: {plan['stage_one_source']}")

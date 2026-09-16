@@ -1,18 +1,19 @@
 # Set source_checkpoint_id to a validated stage-one checkpoint before use.
 # Architecture, environment, data path, device and reporting settings are inherited.
-schema_version: 2
-name: nq5m_stage_two_v1_seed3
+schema_version: 3
+name: nq5m_stage_two_grid_v1_seed3
 seed: 3
 validation_weeks: 4
 test_weeks: 1
 step_weeks: 1
 update_epochs: 1
 refit_epochs: 1
-# Shared by base updates and trading-copy refit.
-learning_rate: 0.000075
-selection_rule: final_checkpoint
+# Options are tried in deterministic Cartesian order; omitted fields are inherited.
+# Add values deliberately before starting a new study.
+grid:
+  ppo.learning_rate: [0.000075]
+selection_rule: first_strict_improvement
 optimizer_policy: preserve_independent_copy
-reject_updates: false
 partial_test: skip
 source_checkpoint_id: null
 bootstrap_epochs: 1

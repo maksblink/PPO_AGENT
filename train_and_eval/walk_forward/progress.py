@@ -24,6 +24,8 @@ class WalkForwardProgress:
         self.protocol = protocol
         self.cycles = plan["cycles"]
         self.limit = min(max_cycles or len(self.cycles), len(self.cycles))
+        self.candidate_order = None
+        self.candidate_count = len(plan.get("grid_candidates", [{}]))
         self.done = {key: {} for key in ("base", "refit", "validation", "reference", "test")}
         self.results = {"validation": {}, "test": {}}
         self.active = None
@@ -35,7 +37,8 @@ class WalkForwardProgress:
         self.rendered_size = None
         self.message_pending = False
         self.active_fraction = 0.
-        self.total = {key: sum(self.amount(c, key) for c in self.cycles) for key in self.done}
+        self.total = {key: sum(self.amount(c, key) for c in self.cycles) *
+                      (self.candidate_count if key in ("base", "validation") else 1) for key in self.done}
 
     @contextmanager
     def external_output(self):
@@ -82,7 +85,9 @@ class WalkForwardProgress:
         self.render(force=True)
 
     def complete(self, cycle, key, metrics=None, *, render=True):
-        self.done[key][cycle["number"]] = self.amount(cycle, key)
+        identity = ((cycle["number"], self.candidate_order) if
+                    key in ("base", "validation") and self.candidate_order is not None else cycle["number"])
+        self.done[key][identity] = self.amount(cycle, key)
         if metrics is not None and key in self.results:
             self.results[key][cycle["number"]] = (cycle[key], metrics)
         if self.active and self.active[0]["number"] == cycle["number"] and self.active[1] == key:
@@ -138,9 +143,11 @@ class WalkForwardProgress:
             rows.append([key, f"{done:g}", f"{total:g}", f"{max(0., total-done):g}", self.bar(done, total)])
         lines += self.table(["Week work", "Done", "Total", "Left", "Progress"], rows)
         active = "Active: " + (self.bar(self.active_fraction, 1) if self.active else "none")
+        if self.candidate_order is not None:
+            active += f" | candidate {self.candidate_order + 1}/{self.candidate_count}"
         lines.append(active)
         lines += self.metric_lines("validation", compact=compact) + self.metric_lines("test", compact=compact)
-        lines.append("Weeks include repeated work/epochs. DD: closer to 0 is better.")
+        lines.append("Base/val totals: maximum grid work. Weeks include epochs. DD: closer to 0 wins.")
         return lines
 
     def render(self, *, force=False):
@@ -148,14 +155,14 @@ class WalkForwardProgress:
         if not force and (not self.interactive or now - self.last_render < .5):
             return
         size = shutil.get_terminal_size((120, 24))
-        terminal_phase = self.phase in ("PAUSED", "COMPLETED", "FAILED")
+        terminal_phase = self.phase in ("PAUSED", "COMPLETED", "FAILED", "STOPPED")
         # Reserve a row for the cursor after the final newline. Otherwise the
         # first panel row scrolls out of view and cursor-up cannot reach it.
         lines = self.panel_lines(compact=size.columns < 150)[:-1]
         fits = size.columns >= 80 and len(lines) < size.lines
         live_panel = self.interactive and fits and not terminal_phase
         if not live_panel and self.phase not in (
-                "INITIALIZING", "CYCLE COMPLETED", "PAUSED", "COMPLETED", "FAILED"):
+                "INITIALIZING", "CYCLE COMPLETED", "PAUSED", "COMPLETED", "FAILED", "STOPPED"):
             return
         if self.interactive:
             self.clear_previous(size)
@@ -220,9 +227,8 @@ class WalkForwardProgress:
 
     def validation_completed(self, metrics):
         cycle, _ = self.active
-        self.complete(cycle, "validation", {
-            key: getattr(metrics, key) for key in ("balanced_score", "agent_return", "agent_max_drawdown")
-        })
+        self.complete(cycle, "validation")  # Statistics contain accepted candidates only.
+
 
     def finish(self, **kwargs):
         pass

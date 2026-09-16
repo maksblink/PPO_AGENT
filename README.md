@@ -1381,7 +1381,7 @@ available and compatible.
 
 The recommended workflow separates model development from weekly walk-forward.
 Stage one uses the existing training CLI and ordinary RunConfig YAML files.
-Stage two uses a checkpoint-based walk-forward protocol (schema_version: 2).
+Stage two uses a checkpoint-based walk-forward protocol (schema_version: 3).
 Nothing automatically launches stage two after stage one finishes.
 
 ### Stage one: explicit dates, ordinary training and validation
@@ -1460,37 +1460,105 @@ a completed validation. The entire resume ancestry must use the same explicit
 training/validation ranges and dataset; walk-forward candidate/refit runs are not
 accepted as stage-one sources. The seed must match the source.
 
-Stage two inherits architecture, observation context, trading environment/costs,
-data path, device, checkpoint cadence and logging settings from the persisted
-source configuration. Its YAML contains the source ID and walk-forward settings,
-without a duplicate run template or a percentage-based split. The current protocol
-requires deterministic_argmax, forced position closing and batch-aligned n_steps.
+Stage two inherits architecture, observation context, stake_pln, fee_bps, swap_bps,
+trading/session rules, data path, device, checkpoint cadence and logging settings
+from the persisted stage-one source. Costs and stake cannot be grid options.
+The protocol requires deterministic_argmax, forced position closing and
+batch-aligned n_steps. Stage one is unchanged.
 
-- Cycle 1 loads the chosen checkpoint, including optimizer state, and trains on
-  the ENTIRE stage-one validation period using bootstrap_epochs. Its final
-  checkpoint is evaluated on the next validation_weeks weeks.
-- That final pre-refit checkpoint becomes the continuing base. A separate copy
-  trains on the current validation window using refit_epochs; its final checkpoint
-  is frozen for the following test window.
-- Later cycles update the previous pre-refit base on the oldest step_weeks leaving
-  validation using update_epochs. Trading/refit copies never replace the base.
+### Stage-two grid: first strict validation improvement
 
-Stage two accepts exactly one scalar learning_rate (default 0.000075), shared by
-bootstrap, weekly base updates and trading refits. Lists of LRs and a separate
-refit LR are rejected. The default budgets are each one data epoch.
-The selection_rule is final_checkpoint: the only updated candidate's final
-checkpoint is accepted even when its validation score is worse than the source.
-Validation must complete with a finite score; it does not rank configurations.
-The unchanged source is only a diagnostic reference. Refit has no validation or
-checkpoint reselection. Every update/refit prepends up to batch_size - 1
-historical candles to align minibatches, with a separate full context before
-that extended range.
+Stage-two YAML uses schema_version: 3. The old scalar learning_rate,
+reject_updates and final_checkpoint selection rule are not accepted. Existing
+studies/results remain stored and reportable, but cannot be continued with this
+new protocol. Use a new study name and commit the configuration before running.
+The supplied seed configs have new study names and preserve their checkpoint IDs.
 
-Only checkpoint-based stage-two protocols (schema_version: 2) are accepted.
-The all-in-one walk-forward mode, automatic initial split in stage two and old
-configs/walk_forward definitions have been removed. Stage one still uses the
-ordinary RunConfig schema and its explicit date ranges. Existing database rows,
-checkpoints and report artifacts are not modified or removed.
+```yaml
+schema_version: 3
+name: nq5m_stage_two_grid_example
+seed: 1
+source_checkpoint_id: 68  # Replace with your validated stage-one checkpoint.
+validation_weeks: 4
+test_weeks: 1
+step_weeks: 1
+bootstrap_epochs: 1
+update_epochs: 1
+refit_epochs: 1
+grid:
+  ppo.learning_rate: [0.000075]
+  environment.turnover_penalty: [0.0]
+selection_rule: first_strict_improvement
+optimizer_policy: preserve_independent_copy
+partial_test: skip
+```
+
+This is a syntax example, not a recommended search space. Supplied configs keep
+only the previous learning rate as a one-option grid and otherwise inherit the
+source. Add options deliberately before starting a new study. Every grid value
+must be a nonempty list; duplicate and nonfinite options are rejected. Fields
+are sorted alphabetically, options retain their listed order, and the rightmost
+field changes fastest in the Cartesian product. Config mapping order does not
+change the search. An empty grid means one candidate with inherited settings.
+
+Allowed fields:
+
+- PPO: ppo.n_steps, ppo.batch_size, ppo.n_epochs, ppo.learning_rate, ppo.gamma,
+  ppo.gae_lambda, ppo.clip_range, ppo.clip_range_vf, ppo.normalize_advantage,
+  ppo.ent_coef, ppo.vf_coef, ppo.max_grad_norm, ppo.target_kl.
+- Reward: environment.reward_scale, environment.exposure_penalty,
+  environment.turnover_penalty, environment.drawdown_penalty,
+  environment.profit_reward_mult, environment.loss_reward_mult.
+
+All other fields are inherited and forbidden in the grid, including stake and
+fees/swaps, observation shape, position_side, architecture, device and session
+rules. Omitted settings are inherited from the original stage-one configuration,
+not from a previous cycle's winning options. Nullable PPO settings accept null;
+normalize_advantage accepts true/false. Normal RunConfig constraints still apply.
+All combinations are validated before any study/run writes; invalid combinations
+are errors, not silently skipped trials. Calendar plans include candidate/refit
+row bounds for each combination, since batch_size can change prepended rows.
+
+Each cycle:
+
+1. Evaluate the unchanged base on the current validation window as reference.
+2. For each grid combination, reload an independent copy of that same base
+   checkpoint and optimizer state with the same seed. Train on the cycle's update
+   window, then validate its final checkpoint on the same window as reference.
+   Rejected trials never become the next trial's starting point.
+3. Accept the FIRST candidate with balanced_score strictly greater than reference.
+   Ties are rejected. Stop searching immediately; later combinations are not run.
+   This is first improvement, not the best score over the entire grid.
+4. Keep the accepted pre-refit checkpoint as the next cycle's base. Refit a separate
+   copy on the whole validation window using the accepted grid options and the
+   predetermined refit_epochs budget. Refit has no validation/checkpoint selection.
+5. Freeze the refitted copy and evaluate the following test window. Test results
+   never influence candidate acceptance.
+
+Cycle 1 candidates train on the ENTIRE stage-one validation period using
+bootstrap_epochs. Later cycles train on the oldest step_weeks leaving validation
+using update_epochs. Each training window prepends up to batch_size - 1 historical
+candles for batch alignment, with a separate full preceding context. Missing
+candles are not imputed. Trading/refit copies never replace the base.
+
+If every combination fails to improve, the cycle and study become stopped.
+There is NO refit, test or advance to the next cycle. The terminal prints the
+cycle, attempt count, reference score and best candidate score. Earlier tests,
+all attempted runs/checkpoints and their validation results remain available.
+A report is also generated when no test has completed; it contains validation
+and stopping details without inventing a test P&L. Re-running an exhausted study
+does not create additional trials. Changing the grid requires a new study name.
+A nonfinite score or an operational failure is an error, not ordinary exhaustion.
+
+Each completed attempt is persisted immediately, including order, overrides,
+seed, source identity, run/checkpoint/evaluation IDs and validation score.
+After interruption between completed attempts, continuation reuses those attempts;
+interrupted/failed training runs are not silently retrained. A new study name is
+required in that case. Independent optimizer copies remain mandatory.
+
+Only checkpoint-based stage-two protocols (schema_version: 3) are accepted.
+No automatic stage-one training or backward-compatible scalar/grid mode is added.
+No database migration is required; existing experiments/artifacts are not deleted.
 
 For the supplied stage-one dates, cycle 1 updates on 2018-07-30 to 2019-07-01,
 validates on 2019-07-01 to 2019-07-29, then tests on 2019-07-29 to 2019-08-05.
@@ -1569,7 +1637,8 @@ agent_max_drawdown. Validation statistics describe entire validation windows;
 test statistics describe test windows (one week by default). Each metric has its
 own best/worst window. For signed drawdown, the value closest to zero is best.
 Only completed results enter statistics, with no reference evaluations mixed in.
-These metrics are display-only and do not affect checkpoint choice.
+These aggregate means/medians/extrema are display-only. Acceptance uses the
+individual candidate balanced_score versus reference on the same window.
 
 On resume the panel rebuilds counters and statistics from persisted cycle results.
 Totals cover the full study even with --max-cycles; the invocation limit is shown
@@ -1593,7 +1662,7 @@ same isolated test database/schema cleanup described below.
 
 `walk_forward_studies` stores the frozen protocol and calendar. Each row in
 `walk_forward_cycles` stores its source/selected/refit checkpoint IDs, candidate
-selection evidence, diagnostic reference evaluation and final test evaluation.
+selection evidence, reference evaluation used for acceptance and final test evaluation.
 Existing `runs` rows record cycle, stage role and candidate identity.
 
 `runs.window_metadata` is authoritative for temporal runs: it stores the full
@@ -1608,7 +1677,7 @@ in PPO's epoch-update counter, actual optimizer-step calls, initial policy hash
 and initial checkpoint where applicable. PPO epochs and optimizer steps are
 separate quantities.
 
-Candidate validations use `run_validation`, unchanged-source diagnostics use
+Candidate validations use `run_validation`, unchanged-source reference evaluations use
 `custom_range`, and test evaluations use `extended_out_of_sample`. Replay of a
 persisted evaluation uses its own archived start/end indices, including when
 regenerating a missing test trajectory. Dataset and checkpoint identity checks
@@ -1706,3 +1775,20 @@ python -m pytest -q -s tests/test_walk_forward_integration.py
 
 The downgrade refuses to discard existing walk-forward history or invalidate
 training-only temporal runs.
+
+### Grid search reporting and progress
+
+The terminal shows the active candidate number. Base/validation work counts all
+completed attempts (including rejected ones); their totals and remaining budgets
+are upper bounds assuming every combination runs in every cycle. Early acceptance
+skips unused combinations, so these bars need not reach 100% even when all tests
+complete. Refit/reference/test retain their usual cycle-based counts. Epochs and
+overlapping windows are counted as repeated work, not distinct calendar history.
+Validation statistics contain accepted candidates only; rejected attempts remain
+in validation.csv and attempts.json. Test statistics contain completed tests only.
+The inline panel preserves terminal history and warning messages as before.
+
+Reports include attempts.json with all attempted cycle selections and stop reasons,
+plus validation.csv with candidates and reference, including an exhausted cycle.
+Only the consecutive completed tests contribute to P&L, aggregate drawdown and
+weekly test statistics. No capitalization is introduced.

@@ -75,7 +75,8 @@ def synthetic_project(tmp_path, end="2026-04-13"):
     return root, config_path
 
 
-def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsys):
+@pytest.mark.parametrize("outcome", ["accept", "exhaust_first", "exhaust_second"])
+def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsys, monkeypatch, outcome):
     from train_and_eval.training.service import train_ppo_run
     from train_and_eval.walk_forward.service import prepare
     factory, engine = database
@@ -94,13 +95,76 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     with factory() as session:
         assert len(list(session.scalars(select(Run)))) == 1  # Stage one never launches stage two.
     protocol_path = tmp_path / "stage_two.yml"
-    definition = {"schema_version": 2, "name": "manual_stage_two", "seed": 1,
-                  "source_checkpoint_id": checkpoint_id, "bootstrap_epochs": 1}
+    definition = {"schema_version": 3, "name": "manual_stage_two", "seed": 1,
+                  "source_checkpoint_id": checkpoint_id, "bootstrap_epochs": 1,
+                  "grid": {"ppo.learning_rate": [.00005, .000075, .0001], "environment.turnover_penalty": [.001]}}
     protocol_path.write_text(yaml.safe_dump(definition))
     protocol, plan = prepare(protocol_path, root, factory)
     assert plan["cycles"][0]["update"] == protocol.run.data.validation_range.model_dump()
     assert plan["cycles"][0]["validation"]["start"] == "2026-03-09T00:00:00+00:00"
+    # Real training/checkpoint I/O and PostgreSQL persistence; controlled validation
+    # scores exercise selection branches independently of stochastic policy quality.
+    from train_and_eval.walk_forward import service
+    from train_and_eval.database.models import WalkForwardStudy
+    original_stage, original_evaluation = service._run_stage, service._evaluation
+    def scored_stage(factory, protocol, cycle, role, source, root, progress, candidate_order=0):
+        run_id, cp_id = original_stage(factory, protocol, cycle, role, source, root, progress, candidate_order)
+        if role == "candidate":
+            fail = outcome == "exhaust_first" or (outcome == "exhaust_second" and cycle.number == 2)
+            with factory() as session:
+                evaluation = session.scalar(select(Evaluation).where(Evaluation.checkpoint_id == cp_id))
+                evaluation.balanced_score = 10. if fail or candidate_order == 0 else 11.
+                session.commit()
+        return run_id, cp_id
+    def scored_reference(*args, **kwargs):
+        result = original_evaluation(*args, **kwargs)
+        from train_and_eval.database.models import EvaluationDataScope
+        if args[3] == EvaluationDataScope.CUSTOM_RANGE:
+            with factory() as session:
+                session.get(Evaluation, result).balanced_score = 10.
+                session.commit()
+        return result
+    monkeypatch.setattr(service, "_run_stage", scored_stage)
+    monkeypatch.setattr(service, "_evaluation", scored_reference)
+    if outcome == "accept":
+        def interrupt_between_attempts(*args, **kwargs):
+            if args[-1] == 1:
+                raise RuntimeError("simulated interruption between trials")
+            return scored_stage(*args, **kwargs)
+        monkeypatch.setattr(service, "_run_stage", interrupt_between_attempts)
+        with pytest.raises(RuntimeError, match="simulated interruption"):
+            execute(factory, protocol_path, project_root=root, max_cycles=1, live=False)
+        with factory() as session:
+            interrupted = session.scalar(select(WalkForwardCycle).where(WalkForwardCycle.number == 1))
+            assert len(interrupted.selection["candidates"]) == 1
+            assert interrupted.selected_checkpoint_id is None
+        monkeypatch.setattr(service, "_run_stage", scored_stage)
     study_id = execute(factory, protocol_path, project_root=root, max_cycles=1, live=False)
+    if outcome != "accept":
+        if outcome == "exhaust_second":
+            execute(factory, protocol_path, project_root=root, max_cycles=3, live=False)
+        with factory() as session:
+            failed_number = 1 if outcome == "exhaust_first" else 2
+            stopped = session.scalar(select(WalkForwardCycle).where(WalkForwardCycle.number == failed_number))
+            assert stopped.status == "stopped"
+            assert stopped.selected_checkpoint_id is None
+            assert stopped.refit_checkpoint_id is None and stopped.test_evaluation_id is None
+            assert len(stopped.selection["candidates"]) == 3
+            assert stopped.selection["exhausted"] is True
+            assert session.get(WalkForwardStudy, study_id).status == "stopped"
+            run_count = len(list(session.scalars(select(Run))))
+        assert execute(factory, protocol_path, project_root=root, max_cycles=3, live=False) == study_id
+        with factory() as session:
+            assert len(list(session.scalars(select(Run)))) == run_count
+        report = generate_report(factory, study_id, project_root=root)
+        summary = json.loads((report.parent/"summary.json").read_text())
+        assert summary["status"] == "stopped"
+        assert summary["completed_tests"] == (failed_number - 1)
+        attempts = json.loads((report.parent/"attempts.json").read_text())
+        assert len(attempts[-1]["selection"]["candidates"]) == 3
+        assert len(pd.read_csv(report.parent/"validation.csv")) == (4 if failed_number == 1 else 7)
+        assert "Grid exhausted" in capsys.readouterr().out
+        return
     with factory() as session:
         first = session.scalar(select(WalkForwardCycle).where(WalkForwardCycle.number == 1))
         first_test_id = first.test_evaluation_id
@@ -111,12 +175,14 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
         completed = [c for c in cycles if c.status == "completed"]
         assert len(completed) == 3
         runs = list(session.scalars(select(Run)))
-        assert len(runs) == 7
+        assert len(runs) == 10
         for i, cycle in enumerate(completed):
             expected = checkpoint_id if i == 0 else completed[i-1].selected_checkpoint_id
             assert cycle.source_checkpoint_id == expected
             candidates = [r for r in runs if r.cycle_id == cycle.id and r.stage_role == "candidate"]
-            assert len(candidates) == 1
+            assert len(candidates) == 2
+            assert cycle.selection["winner"]["candidate_order"] == 1
+            assert cycle.selection["reference_score"] == 10.
             assert all(r.source_checkpoint_id == expected for r in candidates)
             assert len({r.stage_summary["initial_policy_sha256"] for r in candidates}) == 1
             assert all(r.window_metadata["alignment"] == "prepend" for r in candidates)
@@ -125,8 +191,8 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
             assert refit.window_metadata["train"]["end_index"] <= cycle.plan["test_rows"]["start_index"]
             assert refit.validation_rows == 0
             assert refit.stage_summary["optimizer_steps"] > 0
-            assert refit.normalized_config_json["ppo"]["learning_rate"] == protocol.learning_rate
-            assert candidates[0].normalized_config_json["ppo"]["learning_rate"] == protocol.learning_rate
+            assert refit.normalized_config_json["ppo"]["learning_rate"] == .000075
+            assert candidates[0].normalized_config_json["ppo"]["learning_rate"] == .00005
             test = session.get(Evaluation, cycle.test_evaluation_id)
             assert test.checkpoint_id == cycle.refit_checkpoint_id
         assert session.get(Evaluation, first_test_id).agent_return == first_test_return
@@ -134,7 +200,7 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
         forbidden = completed[0].refit_checkpoint_id
     assert execute(factory, protocol_path, project_root=root, max_cycles=3, live=False) == study_id
     with factory() as session:
-        assert len(list(session.scalars(select(Run)))) == 7
+        assert len(list(session.scalars(select(Run)))) == 10
         assert len(list(session.scalars(select(Evaluation)))) == before_count
     # The aggregate report must reproduce a missing TEST trajectory using its own bounds.
     from train_and_eval.reporting.artifacts import evaluation_artifact_directory
@@ -157,9 +223,9 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     with factory() as session:
         saved_cycles = list(session.scalars(select(WalkForwardCycle).order_by(WalkForwardCycle.number)))
     _restore_progress(factory, restored, saved_cycles)
-    assert sum(restored.done["base"].values()) == 3
+    assert sum(restored.done["base"].values()) == 6
     assert sum(restored.done["refit"].values()) == 12
-    assert sum(restored.done["validation"].values()) == 12
+    assert sum(restored.done["validation"].values()) == 24
     assert sum(restored.done["reference"].values()) == 12
     assert sum(restored.done["test"].values()) == 3
     assert len(restored.results["test"]) == 3
@@ -171,7 +237,7 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     assert "not run yet" not in output
 
     changed_path = tmp_path / "changed.yml"
-    changed_path.write_text(yaml.safe_dump({**definition, "learning_rate": .0001}))
+    changed_path.write_text(yaml.safe_dump({**definition, "grid": {"ppo.learning_rate": [.0001]}}))
     with pytest.raises(RuntimeError, match="changed"):
         execute(factory, changed_path, project_root=root, max_cycles=3, live=False)
     protocol_path.write_text(yaml.safe_dump({**definition,"source_checkpoint_id":forbidden}))

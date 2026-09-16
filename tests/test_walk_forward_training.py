@@ -75,3 +75,26 @@ def test_final_short_rollout_still_uses_full_minibatches():
     handle.remove()
     assert result.rollout_sizes == (8,4)
     assert len(counts) == 3 * model.n_epochs
+
+
+def test_resume_applies_mutable_ppo_settings_before_learning(tmp_path):
+    source = _trained_model()
+    path = save_ppo_model_file(source, tmp_path/"mutable.zip")
+    cfg = _ppo_config().model_copy(update={
+        "n_steps": 12, "batch_size": 4, "n_epochs": 2, "learning_rate": .0001,
+        "gamma": .9, "gae_lambda": .8, "clip_range": .3, "clip_range_vf": .2,
+        "normalize_advantage": False, "ent_coef": .01, "vf_coef": .7,
+        "max_grad_norm": .2, "target_kl": .3,
+    })
+    model = load_ppo_model_file(path, environment=TinyEnvironment(), device="cpu",
+                               custom_objects=ppo_resume_custom_objects(cfg, seed=123))
+    assert model.rollout_buffer.buffer_size == 12
+    assert model.rollout_buffer.gamma == .9 and model.rollout_buffer.gae_lambda == .8
+    assert model.clip_range(1.) == .3 and model.clip_range_vf(1.) == .2
+    assert model.normalize_advantage is False
+    assert model.ent_coef == .01 and model.vf_coef == .7
+    assert model.max_grad_norm == .2 and model.target_kl == .3
+    result = learn_ppo_exact_timesteps(model, total_timesteps=24)
+    assert result.rollout_sizes == (12, 12)
+    assert model.batch_size == 4 and model.n_epochs == 2
+    assert model.policy.optimizer.param_groups[0]["lr"] == .0001

@@ -96,7 +96,7 @@ def test_protocol_rejects_overlapping_tests_and_bad_lrs(protocol):
     with pytest.raises(ValidationError, match="non-overlapping"):
         type(protocol).model_validate(raw)
     raw["test_weeks"] = 1
-    raw["learning_rate"] = float("nan")
+    raw["grid"] = {"ppo.learning_rate": [float("nan")]}
     with pytest.raises(ValidationError, match="finite"):
         type(protocol).model_validate(raw)
 
@@ -110,5 +110,5 @@ def test_refit_has_no_validation_and_prescribed_budget(protocol):
     assert refit.data.validation_range is None
     assert refit.data.train_range == config.data.validation_range
     assert refit.evaluation.training_mode == "none"
-    assert refit.ppo.learning_rate == config.ppo.learning_rate == protocol.learning_rate
+    assert refit.ppo.learning_rate == config.ppo.learning_rate == protocol.grid["ppo.learning_rate"][0]
     assert refit.training.duration_amount == 1

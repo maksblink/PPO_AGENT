@@ -9,7 +9,7 @@ from tests.test_walk_forward_windows import frame_between
 
 def test_checkpoint_plan_starts_after_stage_one_validation():
     base = RunConfig.model_validate(yaml.safe_load(Path('configs/stage_one/nq5m_v1_seed1.yml').read_text()))
-    protocol = CheckpointWalkForwardConfig(name='stage_two',seed=1,source_checkpoint_id=17).model_copy(update={'run':base})
+    protocol = CheckpointWalkForwardConfig(name='stage_two',seed=1,source_checkpoint_id=17, grid={'ppo.batch_size': [64, 256]}).model_copy(update={'run':base})
     frame = frame_between('2010-06-07','2026-09-09')
     frame.attrs['source_path'] = base.data.path
     manifest = {'files': {'5m': {'sha256': 'a'*64,'first_timestamp':frame.DT.iloc[0].isoformat(),'last_timestamp':frame.DT.iloc[-1].isoformat()}},
@@ -22,6 +22,11 @@ def test_checkpoint_plan_starts_after_stage_one_validation():
     assert first['validation']['start'] == '2019-07-01T00:00:00+00:00'
     assert first['test']['start'] == '2019-07-29T00:00:00+00:00'
     assert len(plan['cycles']) == 371
+    windows = plan['cycles'][1]['grid_windows']
+    assert len(windows) == 2
+    assert windows[0]['candidate_window']['validation'] == windows[1]['candidate_window']['validation']
+    assert windows[0]['candidate_window']['prepended_steps'] == 32
+    assert windows[1]['candidate_window']['prepended_steps'] == 96
     assert first['candidate_window']['alignment'] == 'prepend'
     for prev, current in zip(plan['cycles'],plan['cycles'][1:]):
         assert current['update']['start'] == prev['validation']['start']

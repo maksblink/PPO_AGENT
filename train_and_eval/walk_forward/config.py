@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import itertools
+import math
 from pathlib import Path
 from typing import Literal
 
@@ -17,10 +19,27 @@ def digest(value: dict) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
+GRID_FIELDS = frozenset({
+    "ppo.n_steps", "ppo.batch_size", "ppo.n_epochs", "ppo.learning_rate",
+    "ppo.gamma", "ppo.gae_lambda", "ppo.clip_range", "ppo.clip_range_vf",
+    "ppo.normalize_advantage", "ppo.ent_coef", "ppo.vf_coef", "ppo.max_grad_norm",
+    "ppo.target_kl", "environment.reward_scale", "environment.exposure_penalty",
+    "environment.turnover_penalty", "environment.drawdown_penalty",
+    "environment.profit_reward_mult", "environment.loss_reward_mult",
+})
+
+
+def grid_candidates(protocol):
+    """Sorted field names; YAML option order; rightmost field changes fastest."""
+    names = sorted(protocol.grid)
+    return [dict(zip(names, values)) for values in
+            itertools.product(*(protocol.grid[name] for name in names))]
+
+
 class CheckpointWalkForwardConfig(StrictConfigModel):
     """Stage two starts from an explicitly chosen stage-one checkpoint."""
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
     seed: int = Field(ge=0, strict=True)
     source_checkpoint_id: int = Field(ge=1, strict=True)
@@ -30,10 +49,9 @@ class CheckpointWalkForwardConfig(StrictConfigModel):
     bootstrap_epochs: int = Field(default=1, ge=1, strict=True)
     update_epochs: int = Field(default=1, ge=1, strict=True)
     refit_epochs: int = Field(default=1, ge=1, strict=True)
-    learning_rate: float = Field(default=0.000075, gt=0, allow_inf_nan=False)
-    selection_rule: Literal["final_checkpoint"] = "final_checkpoint"
+    grid: dict[str, list[float | int | bool | None]] = Field(default_factory=dict)
+    selection_rule: Literal["first_strict_improvement"] = "first_strict_improvement"
     optimizer_policy: Literal["preserve_independent_copy"] = "preserve_independent_copy"
-    reject_updates: Literal[False] = False
     partial_test: Literal["skip"] = "skip"
     # Resolved from the persisted stage-one run, never accepted from YAML.
     run: RunConfig | None = Field(default=None, exclude=True)
@@ -46,6 +64,15 @@ class CheckpointWalkForwardConfig(StrictConfigModel):
             raise ValueError("test_weeks must equal step_weeks: tests must be consecutive and non-overlapping")
         if self.step_weeks > self.validation_weeks:
             raise ValueError("step_weeks cannot exceed validation_weeks")
+        for name, options in self.grid.items():
+            if name not in GRID_FIELDS:
+                raise ValueError(f"Grid field is not resume-safe or is inherited: {name}")
+            if not options:
+                raise ValueError(f"Grid options cannot be empty: {name}")
+            if any(isinstance(v, float) and not math.isfinite(v) for v in options):
+                raise ValueError(f"Grid options must be finite: {name}")
+            if len({json.dumps(v) for v in options}) != len(options):
+                raise ValueError(f"Duplicate grid options: {name}")
         return self
 
 
@@ -54,12 +81,15 @@ def load_protocol(path: str | Path) -> CheckpointWalkForwardConfig:
 
 
 def stage_config(protocol: CheckpointWalkForwardConfig, cycle: dict, *, role: Literal["candidate", "refit"],
-                 source: tuple[str, int] | None = None) -> RunConfig:
+                 source: tuple[str, int] | None = None, candidate_order: int = 0) -> RunConfig:
     if protocol.run is None:
         raise ValueError("Resolve the stage-one run before building stage configs")
     raw = protocol.run.model_dump(mode="json")
+    for name, value in grid_candidates(protocol)[candidate_order].items():
+        section, field = name.split(".")
+        raw[section][field] = value
     is_refit = role == "refit"
-    raw["run"] = {"name": f"{protocol.name}_s{protocol.seed}_c{cycle['number']:04d}_{role}_00", "seed": protocol.seed}
+    raw["run"] = {"name": f"{protocol.name}_s{protocol.seed}_c{cycle['number']:04d}_{role}_{candidate_order:04d}", "seed": protocol.seed}
     # A source-free config is used only for planning row ranges, never execution.
     raw["continuation"] = ({"mode": "fresh"} if source is None else
                            {"mode": "resume", "source_run": source[0], "checkpoint": str(source[1])})
@@ -70,7 +100,6 @@ def stage_config(protocol: CheckpointWalkForwardConfig, cycle: dict, *, role: Li
     first_epochs = protocol.bootstrap_epochs
     epochs = protocol.refit_epochs if is_refit else (first_epochs if cycle["number"] == 1 else protocol.update_epochs)
     raw["training"] = {"duration_unit": "data_epochs", "duration_amount": epochs}
-    raw["ppo"]["learning_rate"] = protocol.learning_rate
     raw["evaluation"]["training_mode"] = "none" if is_refit else "final_only"
     raw["artifacts"]["validation_trajectory"]["mode"] = "all"
     # Candidate selection and aggregate reporting use immutable final checkpoint IDs.
@@ -101,6 +130,15 @@ def build_plan(protocol: CheckpointWalkForwardConfig, frame: pd.DataFrame, manif
     if (pd.Timestamp(initial["start"]) < start or initial["end"] != bootstrap["start"]
             or boundary > end or source["data_sha256"] != identity["sha256"]):
         raise ValueError("Stage-one ranges or data identity do not match this dataset")
+    candidates = grid_candidates(protocol)
+    # Validate every complete configuration, including cross-field constraints,
+    # before a study or training run can be created.
+    for overrides in candidates:
+        raw = protocol.run.model_dump(mode="json")
+        for name, value in overrides.items():
+            section, field = name.split(".")
+            raw[section][field] = value
+        RunConfig.model_validate(raw)
     cycles = []
     vs = boundary
     while vs + pd.Timedelta(weeks=protocol.validation_weeks + protocol.test_weeks) <= end:
@@ -111,8 +149,18 @@ def build_plan(protocol: CheckpointWalkForwardConfig, frame: pd.DataFrame, manif
                  "update": bootstrap if number == 1 else {"start": (vs-pd.Timedelta(weeks=protocol.step_weeks)).isoformat(), "end": vs.isoformat()},
                  "validation": {"start": vs.isoformat(), "end": ve.isoformat()},
                  "test": {"start": ve.isoformat(), "end": te.isoformat()}}
-        cycle["candidate_window"] = split_time_ranges(frame, stage_config(protocol, cycle, role="candidate"), validate_order=False).window_metadata
-        cycle["refit_window"] = split_time_ranges(frame, stage_config(protocol, cycle, role="refit"), validate_order=False).window_metadata
+        cycle["grid_windows"] = []
+        by_batch = {}
+        for order in range(len(candidates)):
+            candidate_config = stage_config(protocol, cycle, role="candidate", candidate_order=order)
+            batch = candidate_config.ppo.batch_size
+            if batch not in by_batch:
+                by_batch[batch] = {
+                    "candidate_window": split_time_ranges(frame, candidate_config, validate_order=False).window_metadata,
+                    "refit_window": split_time_ranges(frame, stage_config(protocol, cycle, role="refit", candidate_order=order), validate_order=False).window_metadata,
+                }
+            cycle["grid_windows"].append(by_batch[batch])
+        cycle.update(cycle["grid_windows"][0])
         cycle["test_rows"] = range_record(frame, **cycle["test"])
         if cycle["test_rows"]["start_index"] < cycle["refit_window"]["train"]["end_index"]:
             raise ValueError("Test overlaps refit")
@@ -124,7 +172,7 @@ def build_plan(protocol: CheckpointWalkForwardConfig, frame: pd.DataFrame, manif
             "manifest_canonical_sha256": digest(manifest), "data_sha256": identity["sha256"], "data_rows": len(frame),
             "coverage_start": start.isoformat(), "coverage_end_exclusive": end.isoformat(),
             "initial_train": initial,
-            "cycles": cycles, "unused_tail_start": cycles[-1]["test"]["end"],
+            "grid_candidates": candidates, "cycles": cycles, "unused_tail_start": cycles[-1]["test"]["end"],
             "unused_tail_end": end.isoformat()}
 
     result["stage_one_source"] = source

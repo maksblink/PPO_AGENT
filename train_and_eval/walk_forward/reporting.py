@@ -80,8 +80,9 @@ def generate_report(factory, study_id: int, *, project_root) -> Path:
         if study is None:
             raise ValueError("Study does not exist")
         cycles = list(session.scalars(select(WalkForwardCycle).where(
-            WalkForwardCycle.study_id == study_id, WalkForwardCycle.status == "completed").order_by(WalkForwardCycle.number)))
-        if not cycles or [c.number for c in cycles] != list(range(1, len(cycles)+1)):
+            WalkForwardCycle.study_id == study_id).order_by(WalkForwardCycle.number)))
+        completed = [c for c in cycles if c.status == "completed"]
+        if [c.number for c in completed] != list(range(1, len(completed)+1)):
             raise ValueError("Report requires a consecutive completed prefix of cycles")
         runs = list(session.scalars(select(Run).join(WalkForwardCycle, Run.cycle_id == WalkForwardCycle.id).where(
             WalkForwardCycle.study_id == study_id).order_by(Run.id)))
@@ -91,7 +92,7 @@ def generate_report(factory, study_id: int, *, project_root) -> Path:
         validation_rows, test_rows, parts = [], [], []
         stake = float(study.protocol["run"]["environment"]["stake_pln"])
         for cycle in cycles:
-            for candidate in cycle.selection["candidates"]:
+            for candidate in (cycle.selection or {}).get("candidates", []):
                 evaluation = session.get(Evaluation, candidate["evaluation_id"])
                 validation_rows.append({"cycle": cycle.number, **candidate,
                                         "selected": candidate["checkpoint_id"] == cycle.selected_checkpoint_id,
@@ -101,6 +102,8 @@ def generate_report(factory, study_id: int, *, project_root) -> Path:
                 validation_rows.append({"cycle": cycle.number, "checkpoint_id": cycle.source_checkpoint_id,
                                         "evaluation_id": reference.id, "selected": False,
                                         "role": "unchanged_reference", **cycle.plan["validation"], **_metrics(reference)})
+            if cycle.status != "completed":
+                continue
             evaluation = session.get(Evaluation, cycle.test_evaluation_id)
             checkpoint = session.get(Checkpoint, cycle.refit_checkpoint_id)
             if evaluation.checkpoint_id != checkpoint.id:
@@ -134,11 +137,29 @@ def generate_report(factory, study_id: int, *, project_root) -> Path:
                               "always_long_fee_return": baseline_fee,
                               "always_long_swap_return": baseline_cost-baseline_fee,
                               **_metrics(evaluation)})
+        attempts = [{"cycle": c.number, "status": c.status, "error": c.error,
+                     "reference_evaluation_id": c.reference_evaluation_id, "selection": c.selection} for c in cycles
+                    if c.selection is not None or c.reference_evaluation_id is not None]
         protocol, plan = study.protocol, study.plan
         identity = {"study_id": study.id, "name": study.name, "status": study.status,
                     "git_commit": study.git_commit, "protocol_sha256": study.protocol_sha256}
     validation = pd.DataFrame(validation_rows)
     tests = pd.DataFrame(test_rows)
+    (directory/"attempts.json").write_text(json.dumps(attempts, indent=2, allow_nan=False))
+    if not parts:
+        summary = {**identity, "completed_tests": 0, "planned_tests": len(plan["cycles"]),
+                   "stake_pln": stake, "capitalization": False,
+                   "message": "No completed tests; validation attempts are not test results."}
+        for name, value in (("summary", summary), ("protocol", protocol), ("plan", plan), ("stages", stages)):
+            (directory/f"{name}.json").write_text(json.dumps(value, indent=2, allow_nan=False))
+        validation.to_csv(directory/"validation.csv", index=False)
+        pd.DataFrame(columns=["cycle", "start", "end", "agent_return"]).to_csv(directory/"tests.csv", index=False)
+        report = (f"<!doctype html><html lang='en'><meta charset='utf-8'><h1>{html.escape(identity['name'])}</h1>"
+                  f"<pre>{html.escape(json.dumps(summary, indent=2))}</pre>"
+                  f"<h2>Stop / attempt details</h2><pre>{html.escape(json.dumps(attempts, indent=2))}</pre>"
+                  f"<h2>Validation</h2>{validation.to_html(index=False)}</html>")
+        (directory/"report.html").write_text(report)
+        return directory/"report.html"
     curve, summary = combine_tests(parts, stake)
     summary.update(identity)
     summary.update({"completed_tests": len(tests), "planned_tests": len(plan["cycles"]),
@@ -204,10 +225,12 @@ Validation evaluates the selected model before refit. Tests evaluate its separat
 P&L is additive on a fixed {stake:g} PLN stake; drawdown is measured on that same nominal.
 Always-long closes and reopens at each test boundary, with identical fees and swaps.
 Exposure is weighted by available bars. Missing candles are not imputed.</p>
+<h2>Study status</h2><p>{html.escape(identity["status"])}</p>
+<pre>{html.escape(json.dumps([{ "cycle": a["cycle"], "error": a["error"]} for a in attempts if a["error"]], indent=2))}</pre>
 <h2>Summary</h2><pre>{html.escape(json.dumps(summary, indent=2))}</pre>{images}
 <h2>Weekly tests</h2>{tests[['cycle','start','end','agent_return','always_long_return','agent_max_drawdown','market_exposure','round_trips','total_cost_return']].to_html(index=False)}
 <h2>Validation before refit</h2>{validation[['cycle','role','checkpoint_id','selected','balanced_score','agent_return','agent_max_drawdown']].to_html(index=False)}
-<p>Full provenance: protocol.json, plan.json, stages.json. Detailed metrics: validation.csv, tests.csv.
+<p>Full provenance: protocol.json, plan.json, stages.json, attempts.json. Detailed metrics: validation.csv, tests.csv.
 The complete non-overlapping path is test_trajectory.parquet. Training checkpoints and individual trajectories remain under artifacts/runs.</p></html>'''
     (directory/"report.html").write_text(report)
     return directory/"report.html"

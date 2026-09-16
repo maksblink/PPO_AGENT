@@ -22,13 +22,3 @@ def test_test_path_includes_initial_zero_peak():
     assert summary["agent"]["max_drawdown_pln"] == -100
     with pytest.raises(ValueError, match="overlap"):
         combine_tests([part,part], 1000)
-
-
-def test_single_candidate_requires_finite_validation():
-    candidate = {"candidate_order": 0, "balanced_score": -.4}
-    assert select_candidate([candidate]) == candidate
-    for records in ([], [candidate, candidate]):
-        with pytest.raises(ValueError, match="exactly one"):
-            select_candidate(records)
-    with pytest.raises(ValueError, match="finite"):
-        select_candidate([{**candidate, "balanced_score": float("nan")}])

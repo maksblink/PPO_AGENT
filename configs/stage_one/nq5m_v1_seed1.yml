@@ -60,8 +60,9 @@ ppo:
   value_head_init_scale: 0.003
   initial_long_probability: 0.55
 evaluation:
-  eval_every_steps: 32768
-  checkpoint_every_steps: 32768
+  # For 554240 steps/data epoch: four scheduled evaluations plus the final one.
+  eval_every_steps: 111616
+  checkpoint_every_steps: 111616
   policy_mode: deterministic_argmax
   threshold_action: null
   probability_threshold: null

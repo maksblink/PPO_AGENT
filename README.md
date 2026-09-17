@@ -1792,3 +1792,63 @@ Reports include attempts.json with all attempted cycle selections and stop reaso
 plus validation.csv with candidates and reference, including an exhausted cycle.
 Only the consecutive completed tests contribute to P&L, aggregate drawdown and
 weekly test statistics. No capitalization is introduced.
+
+## Cleaning experiment stages
+
+`extra_tools/clean_training.py` removes experiment records and their registered
+artifacts. Stop training, evaluation and report processes before use. The script
+refuses to proceed while the database records running work, locks the experiment
+tables during planning/deletion, prints the exact scope, and requires typing
+`DELETE <mode>` before deletion. There is no unattended confirmation flag.
+
+Modes:
+
+- `clean-first-stage`: ordinary runs (`cycle_id` and `stage_role` both null),
+  including their checkpoints, evaluations and training metrics. Use repeated
+  `--run-id` arguments to select specific runs; without filters it selects all
+  ordinary runs, including historical experiments. Dependencies from retained
+  runs/studies block deletion. Clean stage two first or use `clean-all`.
+- `clean-second-stage`: complete walk-forward studies with all cycles, candidate
+  and refit runs, checkpoints, metrics, evaluations and study reports. Select
+  studies with repeated `--study-id`; `--run-id` expands to the complete owning
+  study and the expanded scope is printed. No filters means all studies. Reference
+  evaluations attached to stage-one checkpoints are removed if no retained cycle
+  uses them. Stage-one training checkpoints and validations are preserved.
+- `clean-all`: all experiment rows in the six experiment tables, plus their
+  registered run/study artifacts. It does not accept ID filters.
+
+Examples (each modifying invocation asks for confirmation):
+
+```bash
+python extra_tools/clean_training.py clean-first-stage --run-id 13 --dry-run
+python extra_tools/clean_training.py clean-second-stage --study-id 8 --dry-run
+python extra_tools/clean_training.py clean-second-stage
+python extra_tools/clean_training.py clean-first-stage
+python extra_tools/clean_training.py clean-all
+```
+
+`--dry-run` prints the plan without modifying records or files. The script uses
+DATABASE_URL and the project's .env through the existing database module.
+`--project-root` can explicitly select the project directory.
+
+Market data, manifest, configurations, migrations, schema and ID sequences are
+preserved. Artifact deletion is restricted to selected `artifacts/runs/<id>` and
+`artifacts/walk_forward/<id>` directories, plus owned reference evaluation
+subdirectories. Symlink paths and nonstandard checkpoint locations are rejected.
+Manual exports (for example diagnostic CSV/plots under /tmp), copied files, and
+orphan directories with no database ownership are not automatically classified
+or deleted. This tool does not sweep unrelated folders.
+
+Before database commit, artifacts are renamed into a temporary directory under
+artifacts. A durable artifacts/.cleanup_pending.json journal allows recovery after
+an exception/interruption. Rerun the script and type RECOVER when prompted: if the
+experiment rows still exist, artifacts are restored; if the transaction committed,
+staged artifacts are deleted. Keep the same database/project and do not start
+training or manually remove the journal/staged files before recovery. Recovery
+refuses inconsistent or ambiguous database state. This is interruption recovery,
+not a backup after successful deletion.
+
+The dedicated tests cover both stage selections, shared reference preservation,
+blocking dependent deletions, confirmation/dry-run, complete deletion, rollback
+recovery, post-commit recovery and path restrictions. Database tests use the
+existing isolated test database/schema helper and never the experiment database.

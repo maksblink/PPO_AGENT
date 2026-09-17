@@ -1,5 +1,5 @@
 # Set source_checkpoint_id to a validated stage-one checkpoint before use.
-# Architecture, environment, data path, device and reporting settings are inherited.
+# Architecture, costs, session rules, data path, device and reporting settings are inherited.
 schema_version: 3
 name: nq5m_stage_two_grid_v1_seed3
 seed: 3
@@ -8,10 +8,28 @@ test_weeks: 1
 step_weeks: 1
 update_epochs: 1
 refit_epochs: 1
-# Options are tried in deterministic Cartesian order; omitted fields are inherited.
+# All 19 grid fields are required; no grid parameter is inherited.
 # Add values deliberately before starting a new study.
 grid:
+  ppo.n_steps: [1024]
+  ppo.batch_size: [256]
+  ppo.n_epochs: [3]
   ppo.learning_rate: [0.000075]
+  ppo.gamma: [0.9]
+  ppo.gae_lambda: [0.85]
+  ppo.clip_range: [0.2]
+  ppo.clip_range_vf: [null]
+  ppo.normalize_advantage: [true]
+  ppo.ent_coef: [0.0002]
+  ppo.vf_coef: [0.5]
+  ppo.max_grad_norm: [0.5]
+  ppo.target_kl: [null]
+  environment.reward_scale: [1.0]
+  environment.exposure_penalty: [0.0]
+  environment.turnover_penalty: [0.0]
+  environment.drawdown_penalty: [0.0]
+  environment.profit_reward_mult: [1.0]
+  environment.loss_reward_mult: [1.0]
 selection_rule: first_strict_improvement
 optimizer_policy: preserve_independent_copy
 partial_test: skip

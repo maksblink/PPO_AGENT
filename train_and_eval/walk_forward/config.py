@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Literal
 
 import pandas as pd
-from pydantic import Field, model_validator
+from pydantic import Field, TypeAdapter, ValidationError, model_validator
 import yaml
 
-from train_and_eval.run_config import RunConfig, StrictConfigModel
+from train_and_eval.run_config import EnvironmentSection, PPOSection, RunConfig, StrictConfigModel
 from train_and_eval.walk_forward.windows import range_record, split_time_ranges
 
 
@@ -49,12 +49,64 @@ class CheckpointWalkForwardConfig(StrictConfigModel):
     bootstrap_epochs: int = Field(default=1, ge=1, strict=True)
     update_epochs: int = Field(default=1, ge=1, strict=True)
     refit_epochs: int = Field(default=1, ge=1, strict=True)
-    grid: dict[str, list[float | int | bool | None]] = Field(default_factory=dict)
+    grid: dict[str, list[float | int | bool | None]]
     selection_rule: Literal["first_strict_improvement"] = "first_strict_improvement"
     optimizer_policy: Literal["preserve_independent_copy"] = "preserve_independent_copy"
     partial_test: Literal["skip"] = "skip"
     # Resolved from the persisted stage-one run, never accepted from YAML.
     run: RunConfig | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_explicit_grid(cls, raw):
+        if not isinstance(raw, dict):
+            return raw
+        grid = raw.get("grid", {})
+        if not isinstance(grid, dict):
+            raise ValueError("grid must be a mapping with all 19 required fields")
+        errors = [f"grid.{name}: required; define a nonempty list of options"
+                  for name in sorted(GRID_FIELDS - grid.keys())]
+        for name, options in grid.items():
+            if name not in GRID_FIELDS:
+                errors.append(f"grid.{name}: not resume-safe or is inherited; remove this field")
+                continue
+            if not isinstance(options, list) or not options:
+                errors.append(f"grid.{name}: must be a nonempty list of options")
+                continue
+            section, field = name.split(".")
+            model = PPOSection if section == "ppo" else EnvironmentSection
+            adapter = TypeAdapter(model.model_fields[field].rebuild_annotation())
+            seen = set()
+            for index, value in enumerate(options):
+                label = f"grid.{name}[{index}]"
+                if isinstance(value, float) and not math.isfinite(value):
+                    errors.append(f"{label}: must be finite")
+                    continue
+                # Reject YAML strings and booleans used as numeric values.
+                if isinstance(value, bool) and field != "normalize_advantage":
+                    errors.append(f"{label}: expected a number, not a boolean")
+                    continue
+                try:
+                    adapter.validate_python(value, strict=True)
+                except ValidationError as error:
+                    errors.extend(f"{label}: {item['msg']}" for item in error.errors())
+                    continue
+                if field in {"clip_range_vf", "target_kl"} and value is not None and value <= 0:
+                    errors.append(f"{label}: must be greater than zero or null")
+                    continue
+                key = json.dumps(value)
+                if key in seen:
+                    errors.append(f"{label}: duplicate grid option")
+                seen.add(key)
+        if not errors:
+            for steps in grid["ppo.n_steps"]:
+                for batch in grid["ppo.batch_size"]:
+                    if batch > steps or steps % batch:
+                        errors.append(f"grid.ppo.batch_size={batch} must divide grid.ppo.n_steps={steps} exactly "
+                                      "and cannot be greater than n_steps")
+        if errors:
+            raise ValueError("Invalid stage-two grid:\n" + "\n".join(errors))
+        return raw
 
     @model_validator(mode="after")
     def validate_protocol(self):
@@ -64,15 +116,6 @@ class CheckpointWalkForwardConfig(StrictConfigModel):
             raise ValueError("test_weeks must equal step_weeks: tests must be consecutive and non-overlapping")
         if self.step_weeks > self.validation_weeks:
             raise ValueError("step_weeks cannot exceed validation_weeks")
-        for name, options in self.grid.items():
-            if name not in GRID_FIELDS:
-                raise ValueError(f"Grid field is not resume-safe or is inherited: {name}")
-            if not options:
-                raise ValueError(f"Grid options cannot be empty: {name}")
-            if any(isinstance(v, float) and not math.isfinite(v) for v in options):
-                raise ValueError(f"Grid options must be finite: {name}")
-            if len({json.dumps(v) for v in options}) != len(options):
-                raise ValueError(f"Duplicate grid options: {name}")
         return self
 
 

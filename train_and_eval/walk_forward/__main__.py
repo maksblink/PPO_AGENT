@@ -21,6 +21,20 @@ def main():
     report.add_argument("--study-id", required=True, type=int)
     report.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
+    if args.command in {"plan", "run"}:
+        from pydantic import ValidationError
+        import yaml
+        from train_and_eval.walk_forward.config import load_protocol
+        try:
+            load_protocol(args.config)
+        except ValidationError as error:
+            details = "\n".join(
+                f"{'.'.join(map(str, item['loc'])) or 'config'}: {item['msg']}"
+                for item in error.errors(include_url=False, include_input=False)
+            )
+            parser.exit(2, f"Invalid stage-two configuration:\n{details}\n")
+        except (OSError, ValueError, yaml.YAMLError) as error:
+            parser.exit(2, f"Cannot load stage-two configuration: {error}\n")
     from train_and_eval.walk_forward.service import prepare, execute
     if args.command == "plan":
         from train_and_eval.database.session import create_database_engine, create_session_factory

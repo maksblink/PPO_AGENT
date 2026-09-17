@@ -96,7 +96,7 @@ def test_protocol_rejects_overlapping_tests_and_bad_lrs(protocol):
     with pytest.raises(ValidationError, match="non-overlapping"):
         type(protocol).model_validate(raw)
     raw["test_weeks"] = 1
-    raw["grid"] = {"ppo.learning_rate": [float("nan")]}
+    raw["grid"]["ppo.learning_rate"] = [float("nan")]
     with pytest.raises(ValidationError, match="finite"):
         type(protocol).model_validate(raw)
 

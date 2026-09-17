@@ -5,11 +5,12 @@ import yaml
 from train_and_eval.run_config import RunConfig
 from train_and_eval.walk_forward.config import CheckpointWalkForwardConfig, build_plan, stage_config
 from tests.test_walk_forward_windows import frame_between
+from tests.test_stage_two_grid import complete_grid
 
 
 def test_checkpoint_plan_starts_after_stage_one_validation():
     base = RunConfig.model_validate(yaml.safe_load(Path('configs/stage_one/nq5m_v1_seed1.yml').read_text()))
-    protocol = CheckpointWalkForwardConfig(name='stage_two',seed=1,source_checkpoint_id=17, grid={'ppo.batch_size': [64, 256]}).model_copy(update={'run':base})
+    protocol = CheckpointWalkForwardConfig(name='stage_two',seed=1,source_checkpoint_id=17, grid=complete_grid() | {'ppo.batch_size': [64, 256]}).model_copy(update={'run':base})
     frame = frame_between('2010-06-07','2026-09-09')
     frame.attrs['source_path'] = base.data.path
     manifest = {'files': {'5m': {'sha256': 'a'*64,'first_timestamp':frame.DT.iloc[0].isoformat(),'last_timestamp':frame.DT.iloc[-1].isoformat()}},
@@ -39,7 +40,7 @@ def test_checkpoint_plan_starts_after_stage_one_validation():
 
 
 def test_stage_two_requires_checkpoint_and_forbids_percentages_or_template():
-    raw = dict(name='stage_two',seed=1,source_checkpoint_id=17)
+    raw = dict(name='stage_two',seed=1,source_checkpoint_id=17,grid=complete_grid())
     for changes in ({'source_checkpoint_id':None},{'initial_time_fraction':.5},{'run':None}):
         with pytest.raises(ValidationError):
             CheckpointWalkForwardConfig(**(raw | changes))

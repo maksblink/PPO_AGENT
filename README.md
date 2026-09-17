@@ -1486,20 +1486,46 @@ bootstrap_epochs: 1
 update_epochs: 1
 refit_epochs: 1
 grid:
+  ppo.n_steps: [1024]
+  ppo.batch_size: [256]
+  ppo.n_epochs: [3]
   ppo.learning_rate: [0.000075]
+  ppo.gamma: [0.9]
+  ppo.gae_lambda: [0.85]
+  ppo.clip_range: [0.2]
+  ppo.clip_range_vf: [null]
+  ppo.normalize_advantage: [true]
+  ppo.ent_coef: [0.0002]
+  ppo.vf_coef: [0.5]
+  ppo.max_grad_norm: [0.5]
+  ppo.target_kl: [null]
+  environment.reward_scale: [1.0]
+  environment.exposure_penalty: [0.0]
   environment.turnover_penalty: [0.0]
+  environment.drawdown_penalty: [0.0]
+  environment.profit_reward_mult: [1.0]
+  environment.loss_reward_mult: [1.0]
 selection_rule: first_strict_improvement
 optimizer_policy: preserve_independent_copy
 partial_test: skip
 ```
 
-This is a syntax example, not a recommended search space. Supplied configs keep
-only the previous learning rate as a one-option grid and otherwise inherit the
-source. Add options deliberately before starting a new study. Every grid value
-must be a nonempty list; duplicate and nonfinite options are rejected. Fields
-are sorted alphabetically, options retain their listed order, and the rightmost
-field changes fastest in the Cartesian product. Config mapping order does not
-change the search. An empty grid means one candidate with inherited settings.
+This is a syntax example, not a recommended search space. All 19 grid fields
+listed below are mandatory, including fields with only one option. Supplied seed
+configs explicitly list every option; no grid parameter falls back to stage one.
+Review the values before starting a new study. Each field must be a nonempty list;
+duplicates, nonfinite numbers, invalid types/ranges and invalid n_steps/batch_size
+pairs are rejected. Use [null] to explicitly disable clip_range_vf or target_kl;
+null alone is not a list. normalize_advantage requires boolean options.
+
+Both plan and run validate the YAML before connecting to the database. Missing
+fields are reported together as grid.<field>: required, alongside invalid options
+and their zero-based list indexes. Partial/empty grids are rejected; there is no
+fallback for previous incomplete configs. Every Cartesian combination must be
+valid even if an earlier candidate might pass validation first.
+
+Fields are sorted alphabetically, options retain their listed order, and the
+rightmost field changes fastest. Config mapping order does not change the search.
 
 Allowed fields:
 
@@ -1512,9 +1538,9 @@ Allowed fields:
 
 All other fields are inherited and forbidden in the grid, including stake and
 fees/swaps, observation shape, position_side, architecture, device and session
-rules. Omitted settings are inherited from the original stage-one configuration,
-not from a previous cycle's winning options. Nullable PPO settings accept null;
-normalize_advantage accepts true/false. Normal RunConfig constraints still apply.
+rules. Only these non-grid settings are inherited from the original stage-one
+configuration. Candidate training and final refit use the explicitly selected
+grid values. Normal RunConfig constraints still apply.
 All combinations are validated before any study/run writes; invalid combinations
 are errors, not silently skipped trials. Calendar plans include candidate/refit
 row bounds for each combination, since batch_size can change prepended rows.

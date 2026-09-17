@@ -20,6 +20,7 @@ import yaml
 from train_and_eval.database.models import Checkpoint, Evaluation, Run, WalkForwardCycle
 from train_and_eval.database.session import create_session_factory
 from train_and_eval.walk_forward.service import execute
+from train_and_eval.walk_forward.config import GRID_FIELDS
 from train_and_eval.walk_forward.reporting import generate_report
 
 
@@ -97,7 +98,8 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     protocol_path = tmp_path / "stage_two.yml"
     definition = {"schema_version": 3, "name": "manual_stage_two", "seed": 1,
                   "source_checkpoint_id": checkpoint_id, "bootstrap_epochs": 1,
-                  "grid": {"ppo.learning_rate": [.00005, .000075, .0001], "environment.turnover_penalty": [.001]}}
+                  "grid": {name: [base[name.split(".")[0]][name.split(".")[1]]] for name in GRID_FIELDS}}
+    definition["grid"].update({"ppo.learning_rate": [.00005, .000075, .0001], "environment.turnover_penalty": [.001]})
     protocol_path.write_text(yaml.safe_dump(definition))
     protocol, plan = prepare(protocol_path, root, factory)
     assert plan["cycles"][0]["update"] == protocol.run.data.validation_range.model_dump()
@@ -237,7 +239,7 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     assert "not run yet" not in output
 
     changed_path = tmp_path / "changed.yml"
-    changed_path.write_text(yaml.safe_dump({**definition, "grid": {"ppo.learning_rate": [.0001]}}))
+    changed_path.write_text(yaml.safe_dump({**definition, "grid": {**definition["grid"], "ppo.learning_rate": [.0001]}}))
     with pytest.raises(RuntimeError, match="changed"):
         execute(factory, changed_path, project_root=root, max_cycles=3, live=False)
     protocol_path.write_text(yaml.safe_dump({**definition,"source_checkpoint_id":forbidden}))

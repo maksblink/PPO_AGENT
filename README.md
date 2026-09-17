@@ -1817,7 +1817,8 @@ Modes:
 - `clean-all`: all experiment rows in the six experiment tables, plus their
   registered run/study artifacts and orphan numeric directories discovered on
   disk under artifacts/runs and artifacts/walk_forward. It also works when the
-  database is empty. It does not accept ID filters.
+  database is empty. All six experiment ID sequences restart at 1. It does not
+  accept ID filters.
 
 Examples (each modifying invocation asks for confirmation):
 
@@ -1833,8 +1834,20 @@ python extra_tools/clean_training.py clean-all
 DATABASE_URL and the project's .env through the existing database module.
 `--project-root` can explicitly select the project directory.
 
-Market data, manifest, configurations, migrations, schema and ID sequences are
-preserved. Artifact deletion is restricted to selected `artifacts/runs/<id>` and
+Market data, manifest, configurations, migrations and schema are preserved.
+Stage-specific cleanup preserves ID sequences. After `clean-all`, the next
+insert into each experiment table receives ID 1: runs, checkpoints, evaluations,
+training_metrics, walk_forward_cycles and walk_forward_studies. Migration history
+is retained, so the experiment database is empty and ready for new runs without
+recreating its schema. Configured checkpoint IDs are not rewritten automatically.
+
+The preview lists `sequence_resets`, including the actual sequence names and
+restart values. Resetting an already empty database also requires `SURE`.
+`--dry-run` never resets counters. For cleanup with artifacts, counters restart
+only after artifact deletion completes, including recovery after an interruption.
+The reset checks that all six tables are empty and uses transactional
+`ALTER SEQUENCE ... RESTART WITH 1` under experiment-table locks.
+ Artifact deletion is restricted to selected `artifacts/runs/<id>` and
 `artifacts/walk_forward/<id>` directories, plus owned reference evaluation
 subdirectories. Symlink paths and nonstandard checkpoint locations are rejected.
 For clean-all, the preview includes orphan_paths: canonical positive ID directories
@@ -1865,5 +1878,6 @@ back. The recovery hint is printed on errors only when the journal exists.
 
 The dedicated tests cover both stage selections, shared reference preservation,
 blocking dependent deletions, confirmation/dry-run, complete deletion, rollback
-recovery, post-commit recovery, orphan discovery/deletion/recovery and path restrictions. Database tests use the
+recovery, post-commit recovery, orphan discovery/deletion/recovery, path restrictions,
+all six sequence resets, empty-database resets and transactional reset rollback. Database tests use the
 existing isolated test database/schema helper and never the experiment database.

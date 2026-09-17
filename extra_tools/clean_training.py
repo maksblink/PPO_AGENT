@@ -2,7 +2,8 @@
 """Delete selected PPO_AGENT experiments and their registered artifacts.
 
 Run from the repository: python extra_tools/clean_training.py MODE [--dry-run].
-No sequence resets, schema changes, data/config deletion, or implicit cascades.
+clean-all resets experiment ID sequences; stage-specific modes preserve them.
+No schema changes, data/config deletion, or implicit cascades.
 Stop trainers/evaluators before use. Stage-two selection always covers a study.
 """
 from __future__ import annotations
@@ -27,6 +28,8 @@ from train_and_eval.database.models import (
     Run, Checkpoint, Evaluation, TrainingMetric, WalkForwardCycle, WalkForwardStudy,
 )
 from train_and_eval.database.session import create_database_engine, get_database_url
+
+EXPERIMENT_MODELS = (Run, Checkpoint, Evaluation, TrainingMetric, WalkForwardCycle, WalkForwardStudy)
 
 CP_FIELDS = ('source_checkpoint_id', 'selected_checkpoint_id', 'refit_checkpoint_id')
 EV_FIELDS = ('reference_evaluation_id', 'test_evaluation_id')
@@ -71,6 +74,33 @@ def orphan_directories(root, run_ids, study_ids):
             if child.is_dir() and identity not in owners:
                 result.append(relative)
     return result
+
+
+def sequence_plan(connection):
+    """Resolve owned ID sequences from PostgreSQL, including the active schema."""
+    result = []
+    for model in EXPERIMENT_MODELS:
+        row = connection.execute(text(
+            "SELECT n.nspname AS schema, c.relname AS name FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE c.oid = CAST(pg_get_serial_sequence(:table_name, 'id') AS regclass) "
+            "AND c.relkind = 'S'"), {'table_name': model.__tablename__}).mappings().one_or_none()
+        if row is None:
+            raise ValueError(f'Missing owned ID sequence for {model.__tablename__}')
+        result.append({'table': model.__tablename__, 'schema': row['schema'],
+                       'name': row['name'], 'restart_with': 1})
+    return result
+
+
+def reset_sequences(connection):
+    """Caller holds experiment-table locks; ALTER SEQUENCE rolls back with the transaction."""
+    for model in EXPERIMENT_MODELS:
+        if connection.scalar(select(model.id).limit(1)) is not None:
+            raise ValueError('Cannot reset IDs while any experiment table contains records')
+    quote = connection.dialect.identifier_preparer.quote_identifier
+    for item in sequence_plan(connection):
+        identifier = quote(item['schema']) + '.' + quote(item['name'])
+        connection.execute(text(f'ALTER SEQUENCE {identifier} RESTART WITH 1'))
 
 
 def make_plan(connection, root, mode, run_ids=(), study_ids=()):
@@ -155,7 +185,8 @@ def make_plan(connection, root, mode, run_ids=(), study_ids=()):
             'evaluation_ids': sorted(selected_ev), 'training_metrics': count,
             'runs': [{'id': i, 'name': by_run[i]['name']} for i in sorted(selected_runs)],
             'studies': [{'id': i, 'name': by_study[i]['name']} for i in sorted(selected_studies)],
-            'orphan_paths': orphan_paths, 'paths': sorted(paths)}
+            'orphan_paths': orphan_paths, 'paths': sorted(paths),
+            'sequence_resets': sequence_plan(connection) if mode == 'clean-all' else []}
 
 
 def delete_rows(connection, plan):
@@ -258,6 +289,8 @@ def finish_pending(connection, root, identity):
     trash = safe_path(root, pending['trash'] + '/placeholder').parent
     if trash.exists():
         trash.rmdir()
+    if plan['mode'] == 'clean-all' and not existing:
+        reset_sequences(connection)
     path.unlink()
     print('Pending cleanup recovered: ' + ('artifacts restored (database rollback).' if existing else 'artifact deletion completed.'))
 
@@ -279,12 +312,18 @@ def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm
             plan = make_plan(connection, root, mode, run_ids, study_ids)
             print(json.dumps(plan, indent=2))
             print(f'Database: {identity[0]}; schema: {identity[1]}; project: {root}')
-            if dry_run or not (plan['run_ids'] or plan['study_ids'] or plan['orphan_paths']):
+            if dry_run or not (plan['run_ids'] or plan['study_ids'] or plan['orphan_paths'] or plan['sequence_resets']):
                 print('Preview only; nothing deleted.')
                 return False
-            if confirm('Type SURE to permanently delete the listed records and artifacts: ') != 'SURE':
+            if plan['sequence_resets']:
+                print('All six experiment ID sequences will restart at 1 after artifact cleanup.')
+            if confirm('Type SURE to apply the listed cleanup and sequence resets: ') != 'SURE':
                 print('Cancelled; nothing deleted.')
                 return False
+            if not (plan['run_ids'] or plan['study_ids'] or plan['orphan_paths']):
+                reset_sequences(connection)
+                print('Cleanup completed: empty experiment database; all six ID sequences restarted at 1.')
+                return True
             trash = 'artifacts/.cleanup-trash-' + uuid.uuid4().hex
             moves = [{'original': path, 'staged': f'{trash}/{index}'} for index, path in enumerate(plan['paths'])
                      if safe_path(root, path).exists()]
@@ -299,7 +338,8 @@ def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm
             delete_rows(connection, plan)
         with locked(connection):
             finish_pending(connection, root, identity)
-    print('Cleanup completed. Market data, configs, migrations and ID sequences were preserved.')
+    print('Cleanup completed. Market data, configs and migrations were preserved.')
+    print('Experiment ID sequences restarted at 1.' if mode == 'clean-all' else 'ID sequences were preserved.')
     return True
 
 

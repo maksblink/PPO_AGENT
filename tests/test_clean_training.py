@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import pytest
-from sqlalchemy import select, func, update, delete
+from sqlalchemy import select, func, update, delete, text
 from sqlalchemy.orm import Session
 from train_and_eval.database.models import Base, Run, Checkpoint, Evaluation, TrainingMetric, WalkForwardStudy, WalkForwardCycle
 from extra_tools import clean_training as tool
@@ -59,6 +59,21 @@ def count(engine, model):
  with engine.connect() as c:return c.scalar(select(func.count()).select_from(model))
 
 
+def sequence_state(engine):
+ with engine.connect() as connection:
+  quote=connection.dialect.identifier_preparer.quote_identifier
+  return {item['table']: tuple(connection.execute(text(
+   'SELECT last_value, is_called FROM '+quote(item['schema'])+'.'+quote(item['name']))).one())
+   for item in tool.sequence_plan(connection)}
+
+
+def next_ids_for_all_tables(engine):
+ with engine.begin() as connection:
+  return {model.__tablename__:connection.scalar(text(
+   "SELECT nextval(CAST(pg_get_serial_sequence(:name, 'id') AS regclass))"),
+   {'name':model.__tablename__}) for model in tool.EXPERIMENT_MODELS}
+
+
 def test_real_database_cleanup_and_recovery(tmp_path, monkeypatch, cleanup_database):
  engine=cleanup_database
  data=tmp_path/'data/source.parquet';data.parent.mkdir();data.write_text('market')
@@ -80,8 +95,10 @@ def test_real_database_cleanup_and_recovery(tmp_path, monkeypatch, cleanup_datab
   session.add(shared);session.flush();shared_id=shared.id
   session.add(WalkForwardCycle(study_id=shared_id,number=1,plan={},status='pending',reference_evaluation_id=ids['ref']))
   session.commit()
+ before_sequences=sequence_state(engine)
  assert tool.cleanup(engine,tmp_path,'clean-second-stage',run_ids=[ids['second']],confirm=lambda _: 'SURE')
  assert count(engine,Run)==2 and count(engine,WalkForwardStudy)==1
+ assert sequence_state(engine)==before_sequences
  with engine.connect() as c:
   assert c.scalar(select(Evaluation.id).where(Evaluation.id==ids['ref'])) == ids['ref']
   assert c.scalar(select(Evaluation.id).where(Evaluation.id==ids['first_ev']))==ids['first_ev']
@@ -91,6 +108,7 @@ def test_real_database_cleanup_and_recovery(tmp_path, monkeypatch, cleanup_datab
  assert (tmp_path/f"artifacts/runs/{ids['first']:08d}/checkpoints/source.zip").read_text()=='weights'
  assert tool.cleanup(engine,tmp_path,'clean-first-stage',run_ids=[ids['first']],confirm=lambda _: 'SURE')
  assert count(engine,Run)==1
+ assert sequence_state(engine)==before_sequences
  assert (tmp_path/f"artifacts/runs/{ids['other']:08d}/checkpoints/source.zip").exists()
  # Mixed database + orphan cleanup must restore both on rollback.
  mixed_orphan=tmp_path/'artifacts/runs/99999990'
@@ -104,6 +122,7 @@ def test_real_database_cleanup_and_recovery(tmp_path, monkeypatch, cleanup_datab
  with pytest.raises(RuntimeError,match='injected'):
   tool.cleanup(engine,tmp_path,'clean-all',confirm=lambda _: 'SURE')
  assert count(engine,Run)==1 and tool.journal_path(tmp_path).exists()
+ assert sequence_state(engine)==before_sequences
  monkeypatch.setattr(tool,'delete_rows',original)
  answers=iter(['RECOVER','no'])
  assert not tool.cleanup(engine,tmp_path,'clean-all',confirm=lambda _: next(answers))
@@ -113,7 +132,7 @@ def test_real_database_cleanup_and_recovery(tmp_path, monkeypatch, cleanup_datab
  assert tool.cleanup(engine,tmp_path,'clean-all',confirm=lambda _: 'SURE')
  # Full deletion includes the circular run/checkpoint/cycle references.
  next_ids=seed(engine,tmp_path)
- assert next_ids['first'] > ids['other']  # ID sequences were not reset.
+ assert next_ids['first'] == 1  # clean-all restarts IDs after artifact removal.
  # Crash after commit: retry must purge, never restore deleted experiments.
  finish=tool.finish_pending
  def crash_after(*args):raise RuntimeError('injected after commit')
@@ -121,6 +140,7 @@ def test_real_database_cleanup_and_recovery(tmp_path, monkeypatch, cleanup_datab
  with pytest.raises(RuntimeError,match='after commit'):
   tool.cleanup(engine,tmp_path,'clean-all',confirm=lambda _: 'SURE')
  assert count(engine,Run)==0
+ assert any(called for _,called in sequence_state(engine).values())  # Not reset before file cleanup.
  monkeypatch.setattr(tool,'finish_pending',finish)
  tool.cleanup(engine,tmp_path,'clean-all',confirm=lambda _: 'RECOVER')
  for model in (Run,Checkpoint,Evaluation,TrainingMetric,WalkForwardCycle,WalkForwardStudy):assert count(engine,model)==0
@@ -171,6 +191,26 @@ def test_real_database_cleanup_and_recovery(tmp_path, monkeypatch, cleanup_datab
  orphans[0].mkdir()
  assert tool.cleanup(engine,tmp_path,'clean-all',confirm=lambda _: 'SURE')
  assert not orphans[0].exists()
+ assert set(sequence_state(engine).values())=={(1,False)}
+ # Consume all sequence counters without inserting rows, like rolled-back inserts.
+ assert set(next_ids_for_all_tables(engine).values())=={1}
+ before=sequence_state(engine)
+ assert not tool.cleanup(engine,tmp_path,'clean-all',dry_run=True)
+ assert not tool.cleanup(engine,tmp_path,'clean-all',confirm=lambda _: 'no')
+ assert sequence_state(engine)==before
+ assert not tool.cleanup(engine,tmp_path,'clean-first-stage',confirm=lambda _: 'SURE')
+ assert not tool.cleanup(engine,tmp_path,'clean-second-stage',confirm=lambda _: 'SURE')
+ assert sequence_state(engine)==before
+ # Transactional restart must roll back, unlike setval().
+ with engine.connect() as connection:
+  with pytest.raises(RuntimeError,match='rollback reset'):
+   with tool.locked(connection):
+    tool.reset_sequences(connection)
+    raise RuntimeError('rollback reset')
+ assert sequence_state(engine)==before
+ assert tool.cleanup(engine,tmp_path,'clean-all',confirm=lambda _: 'SURE')
+ assert set(next_ids_for_all_tables(engine).values())=={1}
+ assert not tool.journal_path(tmp_path).exists()
  engine.dispose()
 
 

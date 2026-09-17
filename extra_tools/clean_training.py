@@ -12,6 +12,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sys
@@ -52,7 +53,29 @@ def safe_path(root, relative):
     return current
 
 
+def orphan_directories(root, run_ids, study_ids):
+    """Only canonical numeric experiment directories absent from this database."""
+    result = []
+    for category, owners in (('runs', set(run_ids)), ('walk_forward', set(study_ids))):
+        parent = safe_path(root, f'artifacts/{category}/_scan').parent
+        if not parent.exists():
+            continue
+        for child in sorted(parent.iterdir()):
+            if not re.fullmatch(r'[0-9]{8,}', child.name):
+                continue
+            identity = int(child.name)
+            if identity < 1 or child.name != f'{identity:08d}':
+                continue
+            relative = f'artifacts/{category}/{child.name}'
+            safe_path(root, relative)  # Reject symlinks, including dangling links.
+            if child.is_dir() and identity not in owners:
+                result.append(relative)
+    return result
+
+
 def make_plan(connection, root, mode, run_ids=(), study_ids=()):
+    if mode not in ('clean-first-stage', 'clean-second-stage', 'clean-all'):
+        raise ValueError(f'Unknown cleanup mode: {mode}')
     runs, checkpoints, evaluations, cycles, studies = (
         rows(connection, cls) for cls in (Run, Checkpoint, Evaluation, WalkForwardCycle, WalkForwardStudy))
     by_run = {r['id']: r for r in runs}
@@ -122,6 +145,8 @@ def make_plan(connection, root, mode, run_ids=(), study_ids=()):
             if not relative.is_relative_to(expected):
                 raise ValueError(f"Checkpoint #{c['id']} has a nonstandard artifact path: {relative}; nothing deleted")
             safe_path(root, relative)
+    orphan_paths = orphan_directories(root, by_run, by_study) if mode == 'clean-all' else []
+    paths.update(orphan_paths)
     for path in paths:
         safe_path(root, path)
     count = connection.scalar(select(func.count()).select_from(TrainingMetric).where(TrainingMetric.run_id.in_(selected_runs)))
@@ -130,7 +155,7 @@ def make_plan(connection, root, mode, run_ids=(), study_ids=()):
             'evaluation_ids': sorted(selected_ev), 'training_metrics': count,
             'runs': [{'id': i, 'name': by_run[i]['name']} for i in sorted(selected_runs)],
             'studies': [{'id': i, 'name': by_study[i]['name']} for i in sorted(selected_studies)],
-            'paths': sorted(paths)}
+            'orphan_paths': orphan_paths, 'paths': sorted(paths)}
 
 
 def delete_rows(connection, plan):
@@ -191,10 +216,34 @@ def finish_pending(connection, root, identity):
     total = len(plan['run_ids']) + len(plan['study_ids'])
     existing = connection.scalar(select(func.count()).select_from(Run).where(Run.id.in_(plan['run_ids'])))
     existing += connection.scalar(select(func.count()).select_from(WalkForwardStudy).where(WalkForwardStudy.id.in_(plan['study_ids'])))
-    if total == 0 or existing not in (0, total):
+    orphan_only = total == 0
+    if orphan_only:
+        # There was no database mutation to roll back. The durable journal records
+        # the confirmed scope; finish removing those orphans even after a crash
+        # between individual renames. Never remove an ID that gained an owner.
+        approved = set(plan.get('orphan_paths', []))
+        originals = {item['original'] for item in pending['moves']}
+        if plan['mode'] != 'clean-all' or not originals or originals != approved:
+            raise ValueError('Invalid orphan-only recovery scope; preserve the journal')
+        for relative in originals:
+            parts = Path(relative).parts
+            if len(parts) != 3 or parts[0] != 'artifacts' or parts[1] not in ('runs', 'walk_forward'):
+                raise ValueError('Invalid orphan recovery path')
+            name = parts[2]
+            if not re.fullmatch(r'[0-9]{8,}', name) or int(name) < 1 or name != f'{int(name):08d}':
+                raise ValueError('Invalid orphan recovery ID')
+            model = Run if parts[1] == 'runs' else WalkForwardStudy
+            if connection.scalar(select(model.id).where(model.id == int(name))) is not None:
+                raise ValueError(f'Orphan acquired a database owner: {relative}; recovery stopped')
+    if existing not in (0, total):
         raise ValueError('Ambiguous pending cleanup state; preserve the journal and staged files for inspection')
     for item in pending['moves']:
         original, staged = (safe_path(root, item[k]) for k in ('original', 'staged'))
+        if orphan_only and original.exists():
+            if staged.exists():
+                raise ValueError(f'Both original and staged artifact exist: {original}')
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            original.rename(staged)
         if existing:
             if staged.exists():
                 if original.exists():
@@ -230,10 +279,10 @@ def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm
             plan = make_plan(connection, root, mode, run_ids, study_ids)
             print(json.dumps(plan, indent=2))
             print(f'Database: {identity[0]}; schema: {identity[1]}; project: {root}')
-            if dry_run or not (plan['run_ids'] or plan['study_ids']):
+            if dry_run or not (plan['run_ids'] or plan['study_ids'] or plan['orphan_paths']):
                 print('Preview only; nothing deleted.')
                 return False
-            if confirm(f'Type DELETE {mode} to permanently delete the listed records and artifacts: ') != f'DELETE {mode}':
+            if confirm('Type SURE to permanently delete the listed records and artifacts: ') != 'SURE':
                 print('Cancelled; nothing deleted.')
                 return False
             trash = 'artifacts/.cleanup-trash-' + uuid.uuid4().hex
@@ -268,7 +317,8 @@ def main():
         cleanup(engine, root, args.mode, args.run_id, args.study_id, args.dry_run)
     except (Exception, KeyboardInterrupt) as error:
         print(f'Cleanup stopped: {error}', file=sys.stderr)
-        print('If artifacts/.cleanup_pending.json exists, rerun this tool to recover before starting training.', file=sys.stderr)
+        if (root / 'artifacts' / '.cleanup_pending.json').exists():
+            print('Pending cleanup journal exists: artifacts/.cleanup_pending.json. Rerun this tool to recover before starting training.', file=sys.stderr)
         return 1
     finally:
         engine.dispose()

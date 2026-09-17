@@ -1799,7 +1799,7 @@ weekly test statistics. No capitalization is introduced.
 artifacts. Stop training, evaluation and report processes before use. The script
 refuses to proceed while the database records running work, locks the experiment
 tables during planning/deletion, prints the exact scope, and requires typing
-`DELETE <mode>` before deletion. There is no unattended confirmation flag.
+`SURE` (exactly, uppercase, without surrounding spaces) before deletion. There is no unattended confirmation flag.
 
 Modes:
 
@@ -1815,7 +1815,9 @@ Modes:
   evaluations attached to stage-one checkpoints are removed if no retained cycle
   uses them. Stage-one training checkpoints and validations are preserved.
 - `clean-all`: all experiment rows in the six experiment tables, plus their
-  registered run/study artifacts. It does not accept ID filters.
+  registered run/study artifacts and orphan numeric directories discovered on
+  disk under artifacts/runs and artifacts/walk_forward. It also works when the
+  database is empty. It does not accept ID filters.
 
 Examples (each modifying invocation asks for confirmation):
 
@@ -1835,9 +1837,15 @@ Market data, manifest, configurations, migrations, schema and ID sequences are
 preserved. Artifact deletion is restricted to selected `artifacts/runs/<id>` and
 `artifacts/walk_forward/<id>` directories, plus owned reference evaluation
 subdirectories. Symlink paths and nonstandard checkpoint locations are rejected.
-Manual exports (for example diagnostic CSV/plots under /tmp), copied files, and
-orphan directories with no database ownership are not automatically classified
-or deleted. This tool does not sweep unrelated folders.
+For clean-all, the preview includes orphan_paths: canonical positive ID directories
+(e.g. 00000001) with no matching run/study in the connected database. These are
+included in paths and removed only after SURE. Ownership is relative to the
+connected database; verify the displayed database/project before confirming.
+Stage-specific modes do not infer the stage of orphan runs and leave these
+unowned directories alone. Parent directories, README.md, .gitignore, ordinary
+files and noncanonical names remain. Symlinks are rejected rather than followed.
+Manual exports (for example diagnostic CSV/plots under /tmp) and unrelated folders
+are not swept. The check reads the filesystem, independently of IDE refresh timing.
 
 Before database commit, artifacts are renamed into a temporary directory under
 artifacts. A durable artifacts/.cleanup_pending.json journal allows recovery after
@@ -1848,7 +1856,14 @@ training or manually remove the journal/staged files before recovery. Recovery
 refuses inconsistent or ambiguous database state. This is interruption recovery,
 not a backup after successful deletion.
 
+For an orphan-only operation there are no database records to roll back. Its
+journal records the confirmed deletion scope: RECOVER finishes removing both
+staged and not-yet-staged orphan directories. Recovery refuses deletion if an ID
+has since acquired an owner in the connected database. In a mixed operation,
+orphans are restored along with registered artifacts if the DB transaction rolls
+back. The recovery hint is printed on errors only when the journal exists.
+
 The dedicated tests cover both stage selections, shared reference preservation,
 blocking dependent deletions, confirmation/dry-run, complete deletion, rollback
-recovery, post-commit recovery and path restrictions. Database tests use the
+recovery, post-commit recovery, orphan discovery/deletion/recovery and path restrictions. Database tests use the
 existing isolated test database/schema helper and never the experiment database.

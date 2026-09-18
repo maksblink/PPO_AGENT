@@ -35,3 +35,6 @@ data/
 # Generated market-data validation manifest
 train_and_eval/market_data/manifest.json
 train_and_eval/market_data/manifest.json.tmp
+
+# Local command reference (not published)
+/INSTRUCTIONS.md

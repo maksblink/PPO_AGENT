@@ -246,7 +246,7 @@ baseline context and batch size, 6,145 context rows are reserved and 214 scored
 rows trimmed, leaving 554,240 steps per data epoch. These counts are dataset and
 configuration dependent.
 
-The current stage-one seed configurations use one data epoch, LR 0.0003, rollout
+The original top-level stage-one seed configurations use one data epoch, LR 0.0003, rollout
 size 1,024 and batch size 256. Evaluation and checkpoint cadence of 111,616 gives
 four scheduled boundaries plus the final boundary at 554,240 when the epoch is
 completed. This is a fixed interval, not a dynamic evaluations-per-epoch setting.
@@ -259,6 +259,34 @@ final checkpoint. Its ordinary temporal run must be completed, its validation
 completed, and its seed compatible. Its full resume ancestry must use the same
 explicit ranges and dataset. Walk-forward candidate/refit runs cannot serve as
 stage-one sources.
+
+### Stage-one way1: four runs per seed
+
+`configs/stage_one/seed1_way1/`, `seed2_way1/` and `seed3_way1/` each contain the
+same four-phase schedule. Corresponding configurations differ only in the seed
+and the unique run/source names needed to keep their checkpoint lineages separate.
+
+| File | Start | Learning rate | Budget |
+|---|---|---:|---|
+| `00_fresh_lr_0p00075.yml` | Fresh model | 0.00075 | 1 data epoch |
+| `01_resume_lr_0p0003.yml` | Best checkpoint from phase 00 | 0.0003 | 1 data epoch |
+| `02_resume_lr_0p00015.yml` | Best checkpoint from phase 01 | 0.00015 | 1 data epoch |
+| `03_resume_lr_0p000075.yml` | Best checkpoint from phase 02 | 0.000075 | 1 data epoch |
+
+The sequence repeats the historical 5m learning-rate path on the current
+stage-one dataset and ranges. It retains the current rollout size 1,024, batch
+size 256, PPO n_epochs 3, gamma 0.9, GAE 0.85, entropy coefficient 0.0002 and zero
+exposure/turnover penalties. Evaluation/checkpoint cadence is 111,616 steps.
+It does not recreate the historical dataset, split or rollout/batch sizes.
+
+Each phase is a separate run. `checkpoint: best` selects the previous run's
+highest completed validation balanced score, rather than necessarily its final
+checkpoint. All phases use the same explicit training and validation ranges;
+validation does not become training within this stage. Consequently, four
+one-epoch run budgets need not yield four full epochs of history in the final
+model: a resume may branch from an earlier checkpoint. Each seed starts fresh,
+without sharing a trained source with other seeds. The stage-two source is still
+selected manually after this stage-one development.
 
 ### Stage two: explicit grid and two model branches
 

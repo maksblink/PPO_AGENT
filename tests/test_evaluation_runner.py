@@ -99,7 +99,8 @@ def _environment_config(
         rth_close="16:00",
         stake_pln=1000.0,
         fee_bps=1.0,
-        swap_bps=0.0,
+        swap_long_bps=0.0,
+        swap_short_bps=0.0,
         swap_time="17:00",
         swap_timezone="America/New_York",
         force_close_on_done=True,
@@ -405,3 +406,26 @@ def test_runner_reports_real_evaluation_progress() -> None:
 
     assert result.steps_completed == 4
     assert updates == [(2, 4), (4, 4)]
+
+
+@pytest.mark.parametrize("side", ["long_only", "short_only"])
+@pytest.mark.parametrize("long_rate,short_rate", [(2., 7.), (0., 7.), (2., 0.)])
+def test_benchmarks_use_independent_directional_swaps(side, long_rate, short_rate):
+    frame = _market_frame()
+    frame['DT'] = pd.date_range('2026-01-01 12:00:00+00:00', periods=8, freq='1D')
+    for column in ['Open', 'High', 'Low', 'Close']:
+        frame[column] = 100.0
+    config = _environment_config(side).model_copy(update={
+        'fee_bps': 0., 'swap_long_bps': long_rate, 'swap_short_bps': short_rate,
+    })
+    result = run_ppo_evaluation(
+        _model(side, logits=[0., 2.]), frame, config,
+        evaluation_start_index=4, evaluation_end_index=8,
+        lookback_rows=2, policy_mode='deterministic_argmax', seed=123,
+    )
+    # Opens at index 4; the position crosses three daily rollover boundaries.
+    assert result.metrics.always_long_return == pytest.approx(-3 * long_rate / 10000)
+    assert result.metrics.always_short_return == pytest.approx(-3 * short_rate / 10000)
+    assert result.metrics.agent_return == pytest.approx(
+        -3 * (long_rate if side == "long_only" else short_rate) / 10000
+    )

@@ -258,10 +258,12 @@ class TradingEnvironment(
             float(config.fee_bps)
             / 10_000.0
         )
-        self.swap_rate = (
-            float(config.swap_bps)
+        self.swap_long_rate = (
+            float(config.swap_long_bps)
             / 10_000.0
         )
+
+        self.swap_short_rate = float(config.swap_short_bps) / 10_000.0
 
         self._reset_state(
             self._resolve_start_index(
@@ -583,10 +585,10 @@ class TradingEnvironment(
         before_index: int,
         after_index: int,
     ) -> tuple[float, int]:
-        if (
-            self.position == 0
-            or self.swap_rate <= 0.0
-        ):
+        if self.position == 0:
+            return 0.0, 0
+        swap_rate = self.swap_long_rate if self.position > 0 else self.swap_short_rate
+        if swap_rate <= 0.0:
             return 0.0, 0
 
         count = count_swap_boundaries(
@@ -602,7 +604,7 @@ class TradingEnvironment(
             return 0.0, 0
 
         cost = (
-            self.swap_rate
+            swap_rate
             * float(count)
         )
 

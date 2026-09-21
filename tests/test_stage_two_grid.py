@@ -35,7 +35,7 @@ def test_cartesian_order_is_independent_of_yaml_key_order():
     assert set(actual[0]) == GRID_FIELDS
 
 
-@pytest.mark.parametrize("name", ["environment.stake_pln", "environment.fee_bps", "environment.swap_bps",
+@pytest.mark.parametrize("name", ["environment.stake_pln", "environment.fee_bps", "environment.swap_bps", "environment.swap_long_bps", "environment.swap_short_bps",
     "environment.window", "environment.context", "environment.position_side", "environment.force_close_on_done",
     "ppo.hidden_sizes", "ppo.activation", "ppo.device", "unknown"])
 def test_inherited_or_structural_fields_cannot_be_grid_options(name):
@@ -58,6 +58,9 @@ def test_old_protocol_is_rejected(fields):
 
 def test_candidate_and_refit_use_selected_options_and_inherit_costs():
     p = protocol({"ppo.learning_rate": [.0001, .0002], "environment.turnover_penalty": [.003]})
+    p = p.model_copy(update={"run": p.run.model_copy(update={
+        "environment": p.run.environment.model_copy(update={"swap_long_bps": 2., "swap_short_bps": 7.})
+    })})
     for order, lr in enumerate([.0001, .0002]):
         candidate = stage_config(p, CYCLE, role="candidate", source=(p.run.run.name, 68), candidate_order=order)
         refit = stage_config(p, CYCLE, role="refit", source=(candidate.run.name, 69), candidate_order=order)
@@ -66,7 +69,7 @@ def test_candidate_and_refit_use_selected_options_and_inherit_costs():
         assert refit.ppo.learning_rate == candidate.ppo.learning_rate == lr
         assert refit.environment.turnover_penalty == .003
         assert refit.evaluation.training_mode == "none"
-        for name in ["stake_pln", "fee_bps", "swap_bps"]:
+        for name in ["stake_pln", "fee_bps", "swap_long_bps", "swap_short_bps"]:
             assert getattr(candidate.environment, name) == getattr(refit.environment, name) == getattr(p.run.environment, name)
     assert stage_config(p, CYCLE, role="candidate", candidate_order=0).run.name != stage_config(p, CYCLE, role="candidate", candidate_order=1).run.name
 

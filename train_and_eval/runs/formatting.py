@@ -609,7 +609,10 @@ def render_run_show(
         (
             ("Stake PLN", str(_config_value(config, "environment", "stake_pln"))),
             ("Fee bps", str(_config_value(config, "environment", "fee_bps"))),
-            ("Swap bps", str(_config_value(config, "environment", "swap_bps"))),
+            ("Swap long bps", str(config.get("environment", {}).get(
+                "swap_long_bps", config.get("environment", {}).get("swap_bps", "n/a")))),
+            ("Swap short bps", str(config.get("environment", {}).get(
+                "swap_short_bps", config.get("environment", {}).get("swap_bps", "n/a")))),
             ("Reward scale", str(_config_value(config, "environment", "reward_scale"))),
             ("Exposure penalty", str(_config_value(config, "environment", "exposure_penalty"))),
             ("Turnover penalty", str(_config_value(config, "environment", "turnover_penalty"))),

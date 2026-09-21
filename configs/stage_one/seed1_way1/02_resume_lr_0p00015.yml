@@ -29,7 +29,8 @@ environment:
   rth_close: '16:00'
   stake_pln: 1000.0
   fee_bps: 1.0
-  swap_bps: 3.0
+  swap_long_bps: 3.0
+  swap_short_bps: 3.0
   swap_time: '17:00'
   swap_timezone: America/New_York
   force_close_on_done: true

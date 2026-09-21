@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from train_and_eval.run_config import parse_persisted_run_config
+
 from contextlib import contextmanager
 import hashlib
 import json
@@ -62,7 +64,7 @@ def prepare(config_path, root, factory=None):
         run = session.get(Run, checkpoint.run_id)
         template = dict(run.normalized_config_json)
         template["continuation"] = {"mode": "fresh"}
-        inherited = RunConfig.model_validate(template)
+        inherited = parse_persisted_run_config(template)
         if (not inherited.environment.force_close_on_done
                 or inherited.evaluation.policy_mode != "deterministic_argmax"
                 or inherited.ppo.n_steps % inherited.ppo.batch_size):
@@ -85,7 +87,7 @@ def _stage_one_source(factory, protocol):
         if checkpoint is None:
             raise ValueError("Stage-one checkpoint does not exist")
         selected_run = session.get(Run, checkpoint.run_id)
-        source_config = RunConfig.model_validate(selected_run.normalized_config_json)
+        source_config = parse_persisted_run_config(selected_run.normalized_config_json)
         train = source_config.data.train_range
         validation = source_config.data.validation_range
         if train is None or validation is None or source_config.data.alignment != "trim_start":
@@ -100,7 +102,7 @@ def _stage_one_source(factory, protocol):
             if run.id in seen:
                 raise ValueError("Cyclic checkpoint ancestry")
             seen.add(run.id)
-            cfg = RunConfig.model_validate(run.normalized_config_json)
+            cfg = parse_persisted_run_config(run.normalized_config_json)
             if (run.status != RunStatus.COMPLETED or run.cycle_id is not None or run.stage_role is not None
                     or cfg.data.train_range != train or cfg.data.validation_range != validation
                     or run.data_sha256 != selected_run.data_sha256 or run.data_path != protocol.run.data.path):

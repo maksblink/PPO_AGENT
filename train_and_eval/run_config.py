@@ -308,7 +308,8 @@ class EnvironmentSection(StrictConfigModel):
     stake_pln: PositiveFloat
     fee_bps: float = Field(ge=0.0)
 
-    swap_bps: float = Field(ge=0.0)
+    swap_long_bps: float = Field(ge=0.0, allow_inf_nan=False)
+    swap_short_bps: float = Field(ge=0.0, allow_inf_nan=False)
     swap_time: str
     swap_timezone: str
 
@@ -597,6 +598,24 @@ RESUME_IMMUTABLE_FIELDS = (
     "ppo.value_head_init_scale",
     "ppo.initial_long_probability",
 )
+
+
+def parse_persisted_run_config(raw: dict[str, Any]) -> RunConfig:
+    """Read immutable historical configs without accepting old YAML inputs.
+
+    The old common swap charged both directions equally. Expand it only in
+    memory; persisted JSON and its reproducibility hashes remain unchanged.
+    Mixed old/new fields are invalid and are rejected by normal validation.
+    """
+    environment = raw.get("environment")
+    if (isinstance(environment, dict) and "swap_bps" in environment
+            and "swap_long_bps" not in environment
+            and "swap_short_bps" not in environment):
+        environment = dict(environment)
+        rate = environment.pop("swap_bps")
+        environment.update(swap_long_bps=rate, swap_short_bps=rate)
+        raw = dict(raw, environment=environment)
+    return RunConfig.model_validate(raw)
 
 
 def _resume_field_value(

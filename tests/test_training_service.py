@@ -2090,3 +2090,17 @@ def test_short_training_duration_error_shows_floor_calculation() -> None:
             requested_steps=20,
             batch_size=1_024,
         )
+
+
+def test_resume_reads_historical_common_swap_without_rewriting_source():
+    from copy import deepcopy
+    from train_and_eval.training.service import _source_config
+    _, source_run, _ = _source_run_and_config()
+    env = source_run.normalized_config_json['environment']
+    del env['swap_long_bps'], env['swap_short_bps']
+    env['swap_bps'] = 3.0
+    original = deepcopy(source_run.normalized_config_json)
+    config = _source_config(source_run)
+    assert config.environment.swap_long_bps == 3.0
+    assert config.environment.swap_short_bps == 3.0
+    assert source_run.normalized_config_json == original

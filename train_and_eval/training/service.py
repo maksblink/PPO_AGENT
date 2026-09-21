@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from train_and_eval.run_config import parse_persisted_run_config
+
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -169,7 +171,7 @@ def _source_config(
         )
 
     try:
-        config = RunConfig.model_validate(
+        config = parse_persisted_run_config(
             normalized_config
         )
     except ValidationError as error:

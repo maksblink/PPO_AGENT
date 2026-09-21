@@ -42,7 +42,8 @@ def _config(
     *,
     position_side: str = "long_only",
     fee_bps: float = 0.0,
-    swap_bps: float = 0.0,
+    swap_long_bps: float = 0.0,
+    swap_short_bps: float = 0.0,
     force_close_on_done: bool = True,
     exposure_penalty: float = 0.0,
     turnover_penalty: float = 0.0,
@@ -57,7 +58,8 @@ def _config(
         rth_close="16:00",
         stake_pln=1000.0,
         fee_bps=fee_bps,
-        swap_bps=swap_bps,
+        swap_long_bps=swap_long_bps,
+        swap_short_bps=swap_short_bps,
         swap_time="17:00",
         swap_timezone="America/New_York",
         force_close_on_done=force_close_on_done,
@@ -567,7 +569,8 @@ def test_step_without_observation_matches_regular_step() -> None:
     config = _config(
         position_side="long_only",
         fee_bps=1.0,
-        swap_bps=3.0,
+        swap_long_bps=3.0,
+        swap_short_bps=3.0,
     )
 
     regular = TradingEnvironment(

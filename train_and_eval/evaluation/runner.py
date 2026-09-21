@@ -582,24 +582,22 @@ def run_ppo_evaluation(
                 "are not symmetric."
             )
 
-        if float(
-            long_info["swap_cost"]
-        ) != float(
-            short_info["swap_cost"]
+        for label, info, rate in (
+            ("LONG", long_info, environment_config.swap_long_bps),
+            ("SHORT", short_info, environment_config.swap_short_bps),
         ):
-            raise EvaluationRunnerError(
-                "LONG and SHORT benchmark swap costs "
-                "are not symmetric."
-            )
+            expected_swap = float(rate) / 10_000.0 * int(info["swap_events_on_step"])
+            if float(info["swap_cost"]) != expected_swap:
+                raise EvaluationRunnerError(
+                    f"{label} benchmark swap cost does not match its configured rate."
+                )
 
-        if int(
-            long_info["swap_events_on_step"]
-        ) != int(
-            short_info["swap_events_on_step"]
-        ):
+        # A zero-rate direction does not count charged swap events.
+        if (environment_config.swap_long_bps > 0
+                and environment_config.swap_short_bps > 0
+                and int(long_info["swap_events_on_step"]) != int(short_info["swap_events_on_step"])):
             raise EvaluationRunnerError(
-                "LONG and SHORT benchmarks crossed "
-                "different swap boundaries."
+                "LONG and SHORT benchmarks crossed different swap boundaries."
             )
 
         agent_equity.append(

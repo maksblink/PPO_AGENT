@@ -339,7 +339,7 @@ be valid, including combinations that might never execute after early acceptance
 Missing fields and invalid options are identified before database access; full
 resolved configurations and temporal plans are verified before study/run writes.
 All non-grid settings remain inherited. In particular, `stake_pln`, `fee_bps` and
-`swap_bps` cannot be changed through grid options.
+`swap_long_bps` and `swap_short_bps` cannot be changed through grid options.
 
 Field names are sorted alphabetically, option order follows the YAML lists, and
 the rightmost field changes fastest. Selection is **first strict improvement**,
@@ -606,3 +606,24 @@ configuration, connectivity or permissions fail tests rather than skipping them.
 
 Source, configuration and tests are versioned. Runtime data, secrets, generated
 artifacts and the local command reference are excluded from the public Git tree.
+
+### Directional swap costs
+
+Stage-one environment configuration requires both `swap_long_bps` and
+`swap_short_bps`, even in long-only or short-only mode. Both must be finite,
+nonnegative numbers; zero disables the cost for that direction. The old
+`swap_bps` field is rejected in new configuration files. Supplied configurations
+set both rates to 3.0 bps to preserve their previous cost assumptions.
+
+Swap is charged on the position held across each rollover boundary, using its
+actual direction. The boundary remains 17:00 America/New_York, including weekend
+boundaries across gaps. Always-long and always-short use their respective rates
+from the same environment configuration. Transaction fees are unchanged.
+
+Stage two inherits both swap rates from its source checkpoint configuration;
+neither is available as a grid option. New runs persist both rates in the
+existing configuration JSON, so no database schema migration is needed.
+Historical runs retain their original JSON, hashes, checkpoints and results.
+When reading such a run for resume, evaluation or reporting, its old common swap
+is interpreted in memory as the same rate for both directions. This historical
+reader does not make old YAML configurations valid for new runs.

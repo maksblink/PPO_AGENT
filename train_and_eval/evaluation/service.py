@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from train_and_eval.run_config import parse_persisted_run_config
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -235,7 +237,7 @@ def _source_config(
     source: CheckpointEvaluationSource,
 ) -> RunConfig:
     try:
-        config = RunConfig.model_validate(
+        config = parse_persisted_run_config(
             source.normalized_config_json
         )
     except ValidationError as error:

@@ -86,7 +86,6 @@ def test_queue_manifest_loading(
         "QUEUE_DIRECTORY",
         queue_directory,
     )
-    monkeypatch.setattr(queue, "DEFAULT_QUEUE", "test_queue")
 
     assert queue.discover_queue_manifests() == {
         "test_queue": manifest,
@@ -260,3 +259,100 @@ def test_main_preflight_blocks_existing_run_before_training(
     output = capsys.readouterr().out
     assert "QUEUE PREFLIGHT FAILED" in output
     assert "run=#84" in output
+
+
+@pytest.mark.parametrize("directory_exists", [False, True])
+def test_help_without_manifests(monkeypatch, tmp_path, capsys, directory_exists):
+    directory = tmp_path / "queues"
+    if directory_exists:
+        directory.mkdir()
+    monkeypatch.setattr(queue, "QUEUE_DIRECTORY", directory)
+    with pytest.raises(SystemExit) as result:
+        queue.parse_args(["--help"])
+    assert result.value.code == 0
+    assert "--queue" in capsys.readouterr().out
+
+
+def test_queue_name_is_required(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(queue, "QUEUE_DIRECTORY", tmp_path / "missing")
+    with pytest.raises(SystemExit) as result:
+        queue.parse_args([])
+    assert result.value.code == 2
+    assert "--queue" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_missing_or_empty_directory_is_a_cli_error(monkeypatch, tmp_path, capsys, empty):
+    directory = tmp_path / "queues"
+    if empty:
+        directory.mkdir()
+    monkeypatch.setattr(queue, "QUEUE_DIRECTORY", directory)
+    with pytest.raises(SystemExit) as result:
+        queue.parse_args(["--queue", "custom"])
+    assert result.value.code == 2
+    error = capsys.readouterr().err
+    assert "No queue manifests" in error if empty else "does not exist" in error
+    assert "Traceback" not in error
+
+
+def test_custom_queue_without_historical_default(monkeypatch, tmp_path, capsys):
+    manifest = tmp_path / "custom.yaml"
+    manifest.write_text("queue_schema_version: 1\nname: custom\nconfigs: [configs/custom.yml]\n")
+    monkeypatch.setattr(queue, "QUEUE_DIRECTORY", tmp_path)
+    assert queue.parse_args(["--queue", "custom", "--dry-run"]).queue == "custom"
+    with pytest.raises(SystemExit) as result:
+        queue.parse_args(["--queue", "missing"])
+    assert result.value.code == 2
+    assert "Available queues: custom" in capsys.readouterr().err
+    (tmp_path / "custom.yml").write_text(manifest.read_text())
+    with pytest.raises(SystemExit):
+        queue.parse_args(["--queue", "custom"])
+    assert "Duplicate queue manifest name" in capsys.readouterr().err
+
+
+def test_way1_manifest_order_and_resume_sources():
+    paths = queue.load_queue_config_paths("nq5m_stage_one_way1_all_seeds")
+    assert len(paths) == len(set(paths)) == 12
+    names = set()
+    for offset, seed in enumerate([1, 2, 3]):
+        previous = None
+        for phase, lr in enumerate([.00075, .0003, .00015, .000075]):
+            path = paths[offset * 4 + phase]
+            assert f"/seed{seed}_way1/{phase:02d}_" in path
+            raw = yaml.safe_load((queue.ROOT / path).read_text())
+            assert raw["run"]["seed"] == seed
+            assert raw["ppo"]["learning_rate"] == lr
+            assert raw["run"]["name"] not in names
+            names.add(raw["run"]["name"])
+            if previous is None:
+                assert raw["continuation"] == {"mode": "fresh"}
+            else:
+                assert raw["continuation"] == {"mode": "resume", "source_run": previous, "checkpoint": "best"}
+            previous = raw["run"]["name"]
+
+
+def test_way1_dry_run_never_touches_database_or_training(monkeypatch, capsys):
+    monkeypatch.setattr(queue.sys, "argv", ["run_search_queue.py", "--queue", "nq5m_stage_one_way1_all_seeds", "--dry-run"])
+    def forbidden(*args, **kwargs):
+        pytest.fail("Dry run must not access the database or start training")
+    monkeypatch.setattr(queue, "load_results_from_database", forbidden)
+    monkeypatch.setattr(queue, "run_config", forbidden)
+    assert queue.main() == 0
+    assert "selected 12 of 12" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("failure_at", [None, 3])
+def test_way1_execution_order_and_stop_on_failure(monkeypatch, failure_at):
+    monkeypatch.setattr(queue.sys, "argv", ["run_search_queue.py", "--queue", "nq5m_stage_one_way1_all_seeds"])
+    monkeypatch.setattr(queue, "assert_git_clean", lambda: None)
+    monkeypatch.setattr(queue, "load_results_from_database", lambda configs: [])
+    monkeypatch.setattr(queue, "print_summary", lambda results: None)
+    calls = []
+    def run(**kwargs):
+        calls.append(kwargs["config"].path.relative_to(queue.ROOT).as_posix())
+        return queue.RunResult(queue_index=kwargs["queue_position"], config=kwargs["config"],
+                               status="FAILED" if len(calls) == failure_at else "COMPLETED")
+    monkeypatch.setattr(queue, "run_config", run)
+    assert queue.main() == (1 if failure_at else 0)
+    expected = queue.load_queue_config_paths("nq5m_stage_one_way1_all_seeds")
+    assert calls == (expected[:failure_at] if failure_at else expected)

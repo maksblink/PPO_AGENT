@@ -67,10 +67,16 @@ flowchart TD
 | `artifacts/runs/` | Checkpoints, trajectories, metrics and run reports |
 | `artifacts/walk_forward/` | Study protocols, plans, attempts and aggregate reports |
 
-The optional queue runner remains in the source, but queue manifests are not
-included in the current configuration directories. Its discovery logic requires
-both a queue directory and the default `nq1h_search_v1` manifest. It is separate
-from the stage-two Cartesian grid.
+Queue manifests live under `configs/search_queues/`. The runner requires an
+explicit queue name and has no historical default dependency. Help is available
+even if that directory is absent or empty. Discovery accepts `.yml` and `.yaml`,
+rejects duplicate names and reports available names for an unknown selection.
+
+The supplied `nq5m_stage_one_way1_all_seeds` manifest contains 12 runs: positions
+1–4 are seed 1, 5–8 seed 2 and 9–12 seed 3. Each group follows fresh, then the three
+resume phases. These are sequential stage-one runs, separate from stage-two grid
+search. Training stops at the first failed child; an existing run is not retrained
+or resumed automatically by the queue runner.
 
 ## Runtime and reproducibility
 

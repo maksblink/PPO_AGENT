@@ -18,7 +18,6 @@ QUEUE_DIRECTORY = (
     ROOT / "configs" / "search_queues"
 )
 QUEUE_SCHEMA_VERSION = 1
-DEFAULT_QUEUE = "nq1h_search_v1"
 
 
 NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
@@ -130,11 +129,6 @@ def discover_queue_manifests() -> dict[str, Path]:
     if not manifests:
         raise RuntimeError(
             f"No queue manifests found in {QUEUE_DIRECTORY}"
-        )
-
-    if DEFAULT_QUEUE not in manifests:
-        raise RuntimeError(
-            f"Default queue manifest is missing: {DEFAULT_QUEUE}"
         )
 
     return manifests
@@ -1100,10 +1094,6 @@ def print_summary(results: list[RunResult]) -> None:
 def parse_args(
     argv: list[str] | None = None,
 ) -> argparse.Namespace:
-    queue_names = tuple(
-        discover_queue_manifests()
-    )
-
     parser = argparse.ArgumentParser(
         description=(
             "Run PPO experiment configs sequentially "
@@ -1113,12 +1103,8 @@ def parse_args(
 
     parser.add_argument(
         "--queue",
-        choices=queue_names,
-        default=DEFAULT_QUEUE,
-        help=(
-            "Experiment queue to run. "
-            f"Default: {DEFAULT_QUEUE}"
-        ),
+        required=True,
+        help="Queue manifest name from configs/search_queues (without .yml/.yaml).",
     )
 
     parser.add_argument(
@@ -1167,7 +1153,18 @@ def parse_args(
         ),
     )
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    # Help and missing-argument diagnostics must not depend on the filesystem.
+    try:
+        manifests = discover_queue_manifests()
+    except RuntimeError as error:
+        parser.error(str(error))
+    if args.queue not in manifests:
+        parser.error(
+            f"Unknown experiment queue: {args.queue}. "
+            f"Available queues: {', '.join(manifests)}"
+        )
+    return args
 
 
 def main() -> int:

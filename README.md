@@ -294,6 +294,26 @@ model: a resume may branch from an earlier checkpoint. Each seed starts fresh,
 without sharing a trained source with other seeds. The stage-two source is still
 selected manually after this stage-one development.
 
+### Stage-one way2: final-checkpoint continuations
+
+`configs/stage_one/seed1_way2/`, `seed2_way2/` and `seed3_way2/` copy the
+way1 learning-rate sequence and all other training, data and environment
+settings. Each seed starts fresh; its three continuations use `checkpoint: final`
+from the preceding way2 run. The separate `nq5m_stage_one_way2_all_seeds` queue
+executes all four phases for seed 1, then seed 2, then seed 3.
+
+Each run performs validation only at the end (`training_mode: final_only`).
+Both cadence fields are 555,008: the first multiple of the 1,024-step rollout
+above the current 554,240-step data epoch. This avoids periodic checkpoints and
+leaves one final checkpoint and one final evaluation per completed run.
+The final checkpoint is written at 554,240 steps, not at the cadence value.
+If the data ranges, rollout size or run budget change, revisit the checkpoint
+cadence to retain this final-only checkpoint schedule.
+
+With successful completion, each final model accumulates four full data epochs
+(2,216,960 model steps). Unlike way1, no continuation branches from an earlier
+validation-selected checkpoint. Run names and source names are separate from way1.
+
 ### Stage two: explicit grid and two model branches
 
 Protocols use `schema_version: 3` and an explicit `source_checkpoint_id`. A null

@@ -1,0 +1,16 @@
+# Sequential stage-one paths: seed 1, then seed 2, then seed 3.
+queue_schema_version: 1
+name: nq5m_stage_one_way2_all_seeds
+configs:
+- configs/stage_one/seed1_way2/00_fresh_lr_0p00075.yml
+- configs/stage_one/seed1_way2/01_resume_lr_0p0003.yml
+- configs/stage_one/seed1_way2/02_resume_lr_0p00015.yml
+- configs/stage_one/seed1_way2/03_resume_lr_0p000075.yml
+- configs/stage_one/seed2_way2/00_fresh_lr_0p00075.yml
+- configs/stage_one/seed2_way2/01_resume_lr_0p0003.yml
+- configs/stage_one/seed2_way2/02_resume_lr_0p00015.yml
+- configs/stage_one/seed2_way2/03_resume_lr_0p000075.yml
+- configs/stage_one/seed3_way2/00_fresh_lr_0p00075.yml
+- configs/stage_one/seed3_way2/01_resume_lr_0p0003.yml
+- configs/stage_one/seed3_way2/02_resume_lr_0p00015.yml
+- configs/stage_one/seed3_way2/03_resume_lr_0p000075.yml

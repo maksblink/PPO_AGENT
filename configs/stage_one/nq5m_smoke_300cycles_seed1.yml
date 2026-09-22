@@ -1,6 +1,6 @@
 config_schema_version: 1
 run:
-  name: nq5m_stage_one_smoke_300cycles_seed1__4
+  name: fresh_x2
   seed: 1
 continuation:
   mode: fresh
@@ -15,7 +15,7 @@ data:
   alignment: trim_start
 training:
   duration_unit: data_epochs
-  duration_amount: 1
+  duration_amount: 2
 environment:
   window: 40
   context: baseline_multiscale_v1

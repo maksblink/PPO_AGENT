@@ -1,20 +1,19 @@
-# Smoke: seed1 baseline with ranges leaving 300 full stage-two tests on the current release.
-# Ranges calculated by set_stage_one_ranges.py: train_fraction=0.576, train_split=0.9.
-# Stage one: explicit UTC ranges; no automatic stage-two launch.
 config_schema_version: 1
 run:
-  name: nq5m_stage_one_smoke_300cycles_seed1
+  name: test_seed1_phase1
   seed: 1
 continuation:
-  mode: fresh
+  mode: resume
+  source_run: test_seed1_phase0
+  checkpoint: best
 data:
-  path: data/NQ_CONTINUOUS_5m_WEEKDAYS_2010-06-07_00-00_2026-09-08_23-55_20260909_163317.parquet
+  path: data/test_market.parquet
   train_range:
     start: '2010-06-07T00:00:00+00:00'
-    end: '2019-10-21T00:00:00+00:00'
+    end: '2018-07-30T00:00:00+00:00'
   validation_range:
-    start: '2019-10-21T00:00:00+00:00'
-    end: '2020-11-09T00:00:00+00:00'
+    start: '2018-07-30T00:00:00+00:00'
+    end: '2019-07-01T00:00:00+00:00'
   alignment: trim_start
 training:
   duration_unit: data_epochs
@@ -27,9 +26,9 @@ environment:
   rth_open: 09:30
   rth_close: '16:00'
   stake_pln: 1000.0
-  fee_bps: 0.2
-  swap_long_bps: 2.12
-  swap_short_bps: 0.11
+  fee_bps: 1.0
+  swap_long_bps: 3.0
+  swap_short_bps: 3.0
   swap_time: '17:00'
   swap_timezone: America/New_York
   force_close_on_done: true
@@ -63,8 +62,8 @@ ppo:
   value_head_init_scale: 0.003
   initial_long_probability: 0.55
 evaluation:
-  eval_every_steps: 128000
-  checkpoint_every_steps: 128000
+  eval_every_steps: 111616
+  checkpoint_every_steps: 111616
   policy_mode: deterministic_argmax
   threshold_action: null
   probability_threshold: null
@@ -82,4 +81,4 @@ artifacts:
   validation_trajectory:
     mode: all
   plots:
-    during_run: true
+    during_run: false

@@ -10,13 +10,13 @@ from train_and_eval.walk_forward.service import select_candidate
 
 
 def complete_grid():
-    grid = yaml.safe_load(Path("configs/stage_two/nq5m_v1_seed1.yml").read_text())["grid"]
+    grid = yaml.safe_load(Path("tests/fixtures/walk_forward_protocol.yml").read_text())["grid"]
     # Unit cases start with one option per field; tests add their own search dimensions.
     return {name: [options[0]] for name, options in grid.items()}
 
 
 def protocol(grid):
-    base = RunConfig.model_validate(yaml.safe_load(Path("configs/stage_one/nq5m_v1_seed1.yml").read_text()))
+    base = RunConfig.model_validate(yaml.safe_load(Path("tests/fixtures/temporal_run.yml").read_text()))
     return CheckpointWalkForwardConfig(name="grid", seed=1, source_checkpoint_id=68, grid=complete_grid() | grid).model_copy(update={"run": base})
 
 
@@ -143,9 +143,10 @@ def test_explicit_options_override_different_stage_one_settings():
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
-def test_supplied_seed_configs_have_all_grid_fields(seed):
-    raw = yaml.safe_load(Path(f"configs/stage_two/nq5m_v1_seed{seed}.yml").read_text())
-    raw["source_checkpoint_id"] = 68  # Seed 2/3 templates intentionally require a real checkpoint.
+def test_protocol_fixture_supports_each_seed(seed):
+    raw = yaml.safe_load(Path("tests/fixtures/walk_forward_protocol.yml").read_text())
+    raw["seed"] = seed
+    raw["source_checkpoint_id"] = 68  # Synthetic identity; this test does not access PostgreSQL.
     p = CheckpointWalkForwardConfig.model_validate(raw)
     assert set(p.grid) == GRID_FIELDS
 

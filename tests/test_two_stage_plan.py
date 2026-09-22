@@ -9,7 +9,7 @@ from tests.test_stage_two_grid import complete_grid
 
 
 def test_checkpoint_plan_starts_after_stage_one_validation():
-    base = RunConfig.model_validate(yaml.safe_load(Path('configs/stage_one/nq5m_v1_seed1.yml').read_text()))
+    base = RunConfig.model_validate(yaml.safe_load(Path('tests/fixtures/temporal_run.yml').read_text()))
     protocol = CheckpointWalkForwardConfig(name='stage_two',seed=1,source_checkpoint_id=17, grid=complete_grid() | {'ppo.batch_size': [64, 256]}).model_copy(update={'run':base})
     frame = frame_between('2010-06-07','2026-09-09')
     frame.attrs['source_path'] = base.data.path

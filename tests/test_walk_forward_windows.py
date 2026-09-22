@@ -13,8 +13,8 @@ from train_and_eval.walk_forward.windows import split_time_ranges
 
 @pytest.fixture
 def protocol():
-    base = RunConfig.model_validate(yaml.safe_load(Path("configs/stage_one/nq5m_v1_seed1.yml").read_text()))
-    return load_protocol("configs/stage_two/nq5m_v1_seed1.yml").model_copy(update={"run": base})
+    base = RunConfig.model_validate(yaml.safe_load(Path("tests/fixtures/temporal_run.yml").read_text()))
+    return load_protocol("tests/fixtures/walk_forward_protocol.yml").model_copy(update={"run": base})
 
 
 def frame_between(start="2018-01-01", end="2018-06-01"):

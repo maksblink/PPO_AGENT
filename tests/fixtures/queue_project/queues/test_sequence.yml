@@ -1,0 +1,15 @@
+queue_schema_version: 1
+name: test_sequence
+configs:
+- runs/seed1/00_run.yml
+- runs/seed1/01_run.yml
+- runs/seed1/02_run.yml
+- runs/seed1/03_run.yml
+- runs/seed2/00_run.yml
+- runs/seed2/01_run.yml
+- runs/seed2/02_run.yml
+- runs/seed2/03_run.yml
+- runs/seed3/00_run.yml
+- runs/seed3/01_run.yml
+- runs/seed3/02_run.yml
+- runs/seed3/03_run.yml

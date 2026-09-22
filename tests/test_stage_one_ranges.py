@@ -20,7 +20,7 @@ def test_invalid_or_oversized_ranges_rejected(fraction, split):
 
 
 def test_confirm_changes_only_ranges_and_decline_preserves_file(tmp_path):
-    original = Path('configs/stage_one/nq5m_v1_seed1.yml').read_text()
+    original = Path('tests/fixtures/temporal_run.yml').read_text()
     original = original.replace('alignment: trim_start', '# Keep this comment\n  alignment: trim_start')
     path = tmp_path / 'config.yml'
     path.write_text(original)
@@ -52,7 +52,7 @@ def test_cli_previews_verified_windows_without_starting_training(monkeypatch, tm
     manifest = {'release_id':'preview', 'files':{'5m':{'first_timestamp':frame.DT.iloc[0].isoformat()}},
                 'build':{'target_end_exclusive_utc':'2026-05-11T00:00:00Z'}}
     path = tmp_path/'config.yml'
-    original = Path('configs/stage_one/nq5m_v1_seed1.yml').read_text()
+    original = Path('tests/fixtures/temporal_run.yml').read_text()
     path.write_text(original)
     monkeypatch.setattr(script,'load_manifest',lambda _:manifest)
     monkeypatch.setattr(script,'load_market_data',lambda *args,**kwargs:frame)

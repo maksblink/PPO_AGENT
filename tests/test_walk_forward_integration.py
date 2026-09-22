@@ -64,7 +64,7 @@ def synthetic_project(tmp_path, end="2026-04-13"):
                 "validation":{"status":"passed_with_warnings","structural_error_count":0,"warning_event_count":3,
                               "warning_counts":{"missing_minute":3},"warning_acceptance":{"required":True,"accepted":True,"mode":"cli_flag","accepted_at_utc":"2026-04-13T00:00:00Z"}}}
     (manifest_dir/"manifest.json").write_text(json.dumps(manifest))
-    config = yaml.safe_load(Path("configs/stage_one/nq5m_v1_seed1.yml").read_text())
+    config = yaml.safe_load(Path("tests/fixtures/temporal_run.yml").read_text())
     config["data"]["path"] = "data/synthetic.parquet"
     config["ppo"].update(device="cpu", hidden_sizes=[8], n_steps=256, batch_size=64, n_epochs=1)
     config["artifacts"]["training_metrics"]["every_steps"] = 256

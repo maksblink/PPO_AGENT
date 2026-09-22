@@ -6,7 +6,8 @@ The main workflow has two separately started stages: baseline development,
 followed by weekly walk-forward training, validation, refit and testing.
 
 This README describes the system, configuration contracts and interpretation of
-results. The local command reference is `INSTRUCTIONS.md`; it is intentionally
+metrics. Experiment-specific evidence and conclusions belong in `CONCLUSIONS.md`.
+The local command reference is `INSTRUCTIONS.md`; it is intentionally
 ignored by Git and is not distributed in the public repository.
 
 ## Contents
@@ -63,6 +64,7 @@ flowchart TD
 | `threshold_sweep.py` | Evaluation-only probability-threshold replay |
 | `alembic/versions/` | Database schema migrations |
 | `tests/` | Unit and integration tests |
+| `tests/fixtures/` | Versioned test-only configurations and inputs |
 | `data/` | Local, ignored market-data snapshots |
 | `artifacts/runs/` | Checkpoints, trajectories, metrics and run reports |
 | `artifacts/walk_forward/` | Study protocols, plans, attempts and aggregate reports |
@@ -72,11 +74,9 @@ explicit queue name and has no historical default dependency. Help is available
 even if that directory is absent or empty. Discovery accepts `.yml` and `.yaml`,
 rejects duplicate names and reports available names for an unknown selection.
 
-The supplied `nq5m_stage_one_way1_all_seeds` manifest contains 12 runs: positions
-1–4 are seed 1, 5–8 seed 2 and 9–12 seed 3. Each group follows fresh, then the three
-resume phases. These are sequential stage-one runs, separate from stage-two grid
-search. Training stops at the first failed child; an existing run is not retrained
-or resumed automatically by the queue runner.
+Queue execution is sequential and separate from stage-two grid search. Training
+stops at the first failed child; an existing run is not retrained or resumed
+automatically by the queue runner.
 
 ## Runtime and reproducibility
 
@@ -117,12 +117,10 @@ data root and are adapted in memory, without changing the published bytes.
 Files and manifest from different releases cannot be mixed. Historical replay
 requires the corresponding archived data, checkpoint and compatible code.
 
-The current research snapshot is
-`NQ_CONTINUOUS_WEEKDAYS_20260909T163317Z_7d5ce9278b18`. It includes 1m, 5m, 15m,
-30m and 1h data. The 5m file is
-`data/NQ_CONTINUOUS_5m_WEEKDAYS_2010-06-07_00-00_2026-09-08_23-55_20260909_163317.parquet`.
-Its calendar is Monday–Friday UTC. Missing candles and accepted producer warnings
-remain visible; windows use timestamps rather than a fixed candle count.
+Supported published intervals include 1m, 5m, 15m, 30m and 1h. Coverage and
+release identity come from the imported manifest. The supported calendar is
+Monday–Friday UTC. Missing candles and accepted producer warnings remain visible;
+windows use timestamps rather than a fixed candle count.
 
 ### Manifest contract and verification
 
@@ -187,6 +185,26 @@ Ordinary run configurations use `config_schema_version: 1`.
 evaluation and training without evaluation. Stage-two roles prescribe the latter
 two modes as part of their protocol.
 
+### Directional swap costs
+
+Stage-one environment configuration requires both `swap_long_bps` and
+`swap_short_bps`, even in long-only or short-only mode. Both must be finite,
+nonnegative numbers; zero disables the cost for that direction. The old
+`swap_bps` field is rejected in new configuration files.
+
+Swap is charged on the position held across each rollover boundary, using its
+actual direction. `swap_time` and `swap_timezone` define the rollover boundary,
+including weekend boundaries across gaps. Always-long and always-short use their respective rates
+from the same environment configuration. Transaction fees are unchanged.
+
+Stage two inherits both swap rates from its source checkpoint configuration;
+neither is available as a grid option. New runs persist both rates in the
+existing configuration JSON, so no database schema migration is needed.
+Historical runs retain their original JSON, hashes, checkpoints and results.
+When reading such a run for resume, evaluation or reporting, its old common swap
+is interpreted in memory as the same rate for both directions. This historical
+reader does not make old YAML configurations valid for new runs.
+
 ### Data epochs, rollouts and alignment
 
 A data epoch means a complete pass through the effective scored training data.
@@ -223,7 +241,7 @@ independent runs; they do not implement walk-forward acceptance.
 
 The stages start independently. Stage one never automatically starts stage two.
 Stage-one configurations are under `configs/stage_one/`; stage-two protocols are
-under `configs/stage_two/`, with templates for seeds 1, 2 and 3.
+under `configs/stage_two/`. Their presence is not required by the test suite.
 
 ### Stage one: baseline development
 
@@ -231,8 +249,8 @@ Stage one uses explicit half-open UTC ranges, `[start, end)`. Training reads tho
 dates directly; percentages are not recalculated at training startup or when new
 market data is published.
 
-The range helper initially allocates about 50% of the full calendar span to
-training. It rounds the training end upward to Monday 00:00 UTC, then calculates
+The range helper allocates a configurable fraction of the full calendar span to
+training (default 0.5). It rounds the training end upward to Monday 00:00 UTC, then calculates
 validation duration from that rounded training period and the requested split.
 Validation weeks equal `ceil(train_weeks * (1 - train_split) / train_split)`.
 Both ranges must fit within the published coverage. A dataset starting midweek
@@ -240,24 +258,9 @@ begins at the next Monday; an already aligned boundary remains unchanged. The
 helper previews changes and updates only the explicit ranges after confirmation,
 with concurrent-edit checks and an atomic write.
 
-For the current snapshot and a 0.5 training fraction with 0.9 split:
-
-| Range | Start UTC, inclusive | End UTC, exclusive | Calendar weeks |
-|---|---|---|---:|
-| Training | 2010-06-07 | 2018-07-30 | 425 |
-| Validation | 2018-07-30 | 2019-07-01 | 48 |
-
-The actual calendar split is `425 / 473`, approximately `0.89852`. With the
-baseline context and batch size, 6,145 context rows are reserved and 214 scored
-rows trimmed, leaving 554,240 steps per data epoch. These counts are dataset and
-configuration dependent.
-
-The original top-level stage-one seed configurations use one data epoch, LR 0.0003, rollout
-size 1,024 and batch size 256. Evaluation and checkpoint cadence of 111,616 gives
-four scheduled boundaries plus the final boundary at 554,240 when the epoch is
-completed. This is a fixed interval, not a dynamic evaluations-per-epoch setting.
-Early stopping still follows the configured scheduled-validation patience.
-Baseline settings are research starting points, not evidence of strategy quality.
+Range, context and alignment decisions determine the effective steps per data
+epoch. Checkpoint/evaluation cadence is a fixed step interval, not a dynamic
+count per epoch. Scheduled early stopping uses the configured validation patience.
 
 The stage-two source is selected using stage-one validation before stage-two test
 results are observed. It may be a validated periodic checkpoint rather than the
@@ -266,53 +269,10 @@ completed, and its seed compatible. Its full resume ancestry must use the same
 explicit ranges and dataset. Walk-forward candidate/refit runs cannot serve as
 stage-one sources.
 
-### Stage-one way1: four runs per seed
-
-`configs/stage_one/seed1_way1/`, `seed2_way1/` and `seed3_way1/` each contain the
-same four-phase schedule. Corresponding configurations differ only in the seed
-and the unique run/source names needed to keep their checkpoint lineages separate.
-
-| File | Start | Learning rate | Budget |
-|---|---|---:|---|
-| `00_fresh_lr_0p00075.yml` | Fresh model | 0.00075 | 1 data epoch |
-| `01_resume_lr_0p0003.yml` | Best checkpoint from phase 00 | 0.0003 | 1 data epoch |
-| `02_resume_lr_0p00015.yml` | Best checkpoint from phase 01 | 0.00015 | 1 data epoch |
-| `03_resume_lr_0p000075.yml` | Best checkpoint from phase 02 | 0.000075 | 1 data epoch |
-
-The sequence repeats the historical 5m learning-rate path on the current
-stage-one dataset and ranges. It retains the current rollout size 1,024, batch
-size 256, PPO n_epochs 3, gamma 0.9, GAE 0.85, entropy coefficient 0.0002 and zero
-exposure/turnover penalties. Evaluation/checkpoint cadence is 111,616 steps.
-It does not recreate the historical dataset, split or rollout/batch sizes.
-
-Each phase is a separate run. `checkpoint: best` selects the previous run's
-highest completed validation balanced score, rather than necessarily its final
-checkpoint. All phases use the same explicit training and validation ranges;
-validation does not become training within this stage. Consequently, four
-one-epoch run budgets need not yield four full epochs of history in the final
-model: a resume may branch from an earlier checkpoint. Each seed starts fresh,
-without sharing a trained source with other seeds. The stage-two source is still
-selected manually after this stage-one development.
-
-### Stage-one way2: final-checkpoint continuations
-
-`configs/stage_one/seed1_way2/`, `seed2_way2/` and `seed3_way2/` copy the
-way1 learning-rate sequence and all other training, data and environment
-settings. Each seed starts fresh; its three continuations use `checkpoint: final`
-from the preceding way2 run. The separate `nq5m_stage_one_way2_all_seeds` queue
-executes all four phases for seed 1, then seed 2, then seed 3.
-
-Each run performs validation only at the end (`training_mode: final_only`).
-Both cadence fields are 555,008: the first multiple of the 1,024-step rollout
-above the current 554,240-step data epoch. This avoids periodic checkpoints and
-leaves one final checkpoint and one final evaluation per completed run.
-The final checkpoint is written at 554,240 steps, not at the cadence value.
-If the data ranges, rollout size or run budget change, revisit the checkpoint
-cadence to retain this final-only checkpoint schedule.
-
-With successful completion, each final model accumulates four full data epochs
-(2,216,960 model steps). Unlike way1, no continuation branches from an earlier
-validation-selected checkpoint. Run names and source names are separate from way1.
+A sequence of resume runs can select either earlier validation-best checkpoints
+or final checkpoints. Resuming from an earlier checkpoint branches the model
+history; the sum of all run budgets need not equal the final model's trained
+steps. Each independent seed starts from its own model initialization.
 
 ### Stage two: explicit grid and two model branches
 
@@ -338,7 +298,7 @@ incompatible rollout/batch pairs are rejected. Every Cartesian combination must
 be valid, including combinations that might never execute after early acceptance.
 Missing fields and invalid options are identified before database access; full
 resolved configurations and temporal plans are verified before study/run writes.
-All non-grid settings remain inherited. In particular, `stake_pln`, `fee_bps` and
+All non-grid settings remain inherited. In particular, `stake_pln`, `fee_bps`,
 `swap_long_bps` and `swap_short_bps` cannot be changed through grid options.
 
 Field names are sorted alphabetically, option order follows the YAML lists, and
@@ -368,17 +328,10 @@ Later updates cover the oldest `step_weeks` leaving validation, using
 `test_weeks` must equal `step_weeks` for consecutive nonoverlapping tests, and the
 step cannot exceed validation length. The incomplete final test window is skipped.
 
-With the current dates and four-week validation, one-week test and one-week step:
-
-| Cycle | Base update | Validation and later refit | Frozen test |
-|---|---|---|---|
-| 1 | 2018-07-30 to 2019-07-01 | 2019-07-01 to 2019-07-29 | 2019-07-29 to 2019-08-05 |
-| 2 | 2019-07-01 to 2019-07-08 | 2019-07-08 to 2019-08-05 | 2019-08-05 to 2019-08-12 |
-
-All boundaries are UTC and end-exclusive. There are 371 complete weekly tests
-through 2026-09-07, subject to earlier grid exhaustion or operational failure.
-The unused tail is 2026-09-07 to 2026-09-09. A former test week may become future
-validation and later training; its original test result remains immutable.
+All boundaries are UTC and end-exclusive. The number of complete cycles is
+calculated from the source ranges, validation/test lengths and published data
+coverage. A former test window can later become validation and then training;
+its original test result remains immutable.
 
 If no candidate improves on reference, the cycle and study stop without refit,
 test or advancement. Attempted runs, reference, validation results and stop reason
@@ -551,12 +504,6 @@ Two-action trajectories may contain `policy_probability_action_0` (FLAT),
 tools compare final-checkpoint probability distributions and their evolution
 across periodic/final checkpoints, including histograms and confidence curves.
 
-One-hour experiments can support fast infrastructure checks and initial research,
-but their behavior does not establish a five-minute strategy. Observation count,
-turnover, fee impact and policy dynamics differ across intervals. Multiple seeds,
-checkpoint stability and the target data interval remain separate research checks.
-Backtest results do not establish future profitability.
-
 ## Experiment cleanup
 
 Selective cleanup respects run/checkpoint dependencies and shared reference
@@ -586,6 +533,11 @@ new training. Recovery is not a backup after successful deletion.
 Pytest covers configuration and CLI contracts, market-data verification,
 chronological windows, context/alignment, training/resume, checkpoints,
 evaluation, reporting, grid selection, progress rendering and cleanup/recovery.
+Test configurations and queue manifests live under `tests/fixtures/`; generated
+inputs use temporary test directories. Tests do not read experiment configs from
+`configs/` or require particular experiment names, results or artifacts. Queue
+tests override discovery to use their isolated fixture project.
+
 Schema changes are versioned through Alembic alongside model/persistence updates.
 The walk-forward downgrade refuses to discard existing history or invalidate
 training-only temporal runs.
@@ -606,24 +558,3 @@ configuration, connectivity or permissions fail tests rather than skipping them.
 
 Source, configuration and tests are versioned. Runtime data, secrets, generated
 artifacts and the local command reference are excluded from the public Git tree.
-
-### Directional swap costs
-
-Stage-one environment configuration requires both `swap_long_bps` and
-`swap_short_bps`, even in long-only or short-only mode. Both must be finite,
-nonnegative numbers; zero disables the cost for that direction. The old
-`swap_bps` field is rejected in new configuration files. Supplied configurations
-set both rates to 3.0 bps to preserve their previous cost assumptions.
-
-Swap is charged on the position held across each rollover boundary, using its
-actual direction. The boundary remains 17:00 America/New_York, including weekend
-boundaries across gaps. Always-long and always-short use their respective rates
-from the same environment configuration. Transaction fees are unchanged.
-
-Stage two inherits both swap rates from its source checkpoint configuration;
-neither is available as a grid option. New runs persist both rates in the
-existing configuration JSON, so no database schema migration is needed.
-Historical runs retain their original JSON, hashes, checkpoints and results.
-When reading such a run for resume, evaluation or reporting, its old common swap
-is interpreted in memory as the same rate for both directions. This historical
-reader does not make old YAML configurations valid for new runs.

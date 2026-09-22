@@ -8,6 +8,13 @@ import yaml
 import run_search_queue as queue
 
 
+@pytest.fixture(autouse=True)
+def isolated_queue_inputs(monkeypatch):
+    root = Path(__file__).resolve().parent / "fixtures" / "queue_project"
+    monkeypatch.setattr(queue, "ROOT", root)
+    monkeypatch.setattr(queue, "QUEUE_DIRECTORY", root / "queues")
+
+
 def test_parse_queue_selection_expands_ranges_and_deduplicates() -> None:
     assert queue.parse_queue_selection("5,2-4,3,8") == (
         2,
@@ -310,15 +317,15 @@ def test_custom_queue_without_historical_default(monkeypatch, tmp_path, capsys):
     assert "Duplicate queue manifest name" in capsys.readouterr().err
 
 
-def test_way1_manifest_order_and_resume_sources():
-    paths = queue.load_queue_config_paths("nq5m_stage_one_way1_all_seeds")
+def test_fixture_queue_manifest_order_and_resume_sources():
+    paths = queue.load_queue_config_paths("test_sequence")
     assert len(paths) == len(set(paths)) == 12
     names = set()
     for offset, seed in enumerate([1, 2, 3]):
         previous = None
         for phase, lr in enumerate([.00075, .0003, .00015, .000075]):
             path = paths[offset * 4 + phase]
-            assert f"/seed{seed}_way1/{phase:02d}_" in path
+            assert f"/seed{seed}/{phase:02d}_" in path
             raw = yaml.safe_load((queue.ROOT / path).read_text())
             assert raw["run"]["seed"] == seed
             assert raw["ppo"]["learning_rate"] == lr
@@ -331,8 +338,8 @@ def test_way1_manifest_order_and_resume_sources():
             previous = raw["run"]["name"]
 
 
-def test_way1_dry_run_never_touches_database_or_training(monkeypatch, capsys):
-    monkeypatch.setattr(queue.sys, "argv", ["run_search_queue.py", "--queue", "nq5m_stage_one_way1_all_seeds", "--dry-run"])
+def test_fixture_queue_dry_run_never_touches_database_or_training(monkeypatch, capsys):
+    monkeypatch.setattr(queue.sys, "argv", ["run_search_queue.py", "--queue", "test_sequence", "--dry-run"])
     def forbidden(*args, **kwargs):
         pytest.fail("Dry run must not access the database or start training")
     monkeypatch.setattr(queue, "load_results_from_database", forbidden)
@@ -342,8 +349,8 @@ def test_way1_dry_run_never_touches_database_or_training(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("failure_at", [None, 3])
-def test_way1_execution_order_and_stop_on_failure(monkeypatch, failure_at):
-    monkeypatch.setattr(queue.sys, "argv", ["run_search_queue.py", "--queue", "nq5m_stage_one_way1_all_seeds"])
+def test_fixture_queue_execution_order_and_stop_on_failure(monkeypatch, failure_at):
+    monkeypatch.setattr(queue.sys, "argv", ["run_search_queue.py", "--queue", "test_sequence"])
     monkeypatch.setattr(queue, "assert_git_clean", lambda: None)
     monkeypatch.setattr(queue, "load_results_from_database", lambda configs: [])
     monkeypatch.setattr(queue, "print_summary", lambda results: None)
@@ -354,5 +361,5 @@ def test_way1_execution_order_and_stop_on_failure(monkeypatch, failure_at):
                                status="FAILED" if len(calls) == failure_at else "COMPLETED")
     monkeypatch.setattr(queue, "run_config", run)
     assert queue.main() == (1 if failure_at else 0)
-    expected = queue.load_queue_config_paths("nq5m_stage_one_way1_all_seeds")
+    expected = queue.load_queue_config_paths("test_sequence")
     assert calls == (expected[:failure_at] if failure_at else expected)

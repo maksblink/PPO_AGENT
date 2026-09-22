@@ -1,6 +1,6 @@
 config_schema_version: 1
 run:
-  name: fresh_x2_v2
+  name: fresh_x2_v3
   seed: 1
 continuation:
   mode: fresh
@@ -47,7 +47,7 @@ ppo:
   n_steps: 1024
   batch_size: 256
   n_epochs: 3
-  learning_rate: 0.000875
+  learning_rate: 0.00087
   gamma: 0.9
   gae_lambda: 0.85
   clip_range: 0.2

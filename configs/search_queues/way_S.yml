@@ -4,3 +4,4 @@ name: way_S
 configs:
 - configs/stage_one/fresh_S.yml
 - configs/stage_one/resume_S.yml
+- configs/stage_one/resume_S1.yml

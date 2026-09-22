@@ -3,7 +3,7 @@
 # Stage one: explicit UTC ranges; no automatic stage-two launch.
 config_schema_version: 1
 run:
-  name: nq5m_stage_one_smoke_300cycles_seed1
+  name: nq5m_stage_one_smoke_300cycles_seed1__2
   seed: 1
 continuation:
   mode: fresh
@@ -50,7 +50,7 @@ ppo:
   n_steps: 1024
   batch_size: 256
   n_epochs: 3
-  learning_rate: 0.0009
+  learning_rate: 0.0008
   gamma: 0.9
   gae_lambda: 0.85
   clip_range: 0.2

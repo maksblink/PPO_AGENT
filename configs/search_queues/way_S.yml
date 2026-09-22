@@ -1,0 +1,6 @@
+# Sequential stage-one paths: seed 1, then seed 2, then seed 3.
+queue_schema_version: 1
+name: way_S
+configs:
+- configs/stage_one/fresh_S.yml
+- configs/stage_one/resume_S.yml

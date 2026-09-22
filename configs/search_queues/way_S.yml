@@ -2,6 +2,8 @@
 queue_schema_version: 1
 name: way_S
 configs:
-- configs/stage_one/fresh_S.yml
-- configs/stage_one/resume_S.yml
-- configs/stage_one/resume_S1.yml
+- configs/stage_one/resume_S1_425.yml
+- configs/stage_one/resume_S1_45.yml
+- configs/stage_one/resume_S1_55.yml
+- configs/stage_one/resume_S1_65.yml
+- configs/stage_one/resume_S1_75.yml

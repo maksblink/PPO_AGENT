@@ -4,7 +4,7 @@ run:
   seed: 1
 continuation:
   mode: resume
-  source_run: continuation:nq5m_stage_one_smoke_300cycles_seed1__4
+  source_run: nq5m_stage_one_smoke_300cycles_seed1__4
   checkpoint: final
 data:
   path: data/NQ_CONTINUOUS_5m_WEEKDAYS_2010-06-07_00-00_2026-09-08_23-55_20260909_163317.parquet

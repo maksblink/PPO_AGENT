@@ -4,5 +4,11 @@ configs:
 #- configs/stage_one/first_train_seed1/fresh_075_s1.yml
 #- configs/stage_one/first_train_seed1/fresh_085_s1.yml
 #- configs/stage_one/first_train_seed1/fresh_095_s1.yml
-- configs/stage_one/first_train_seed1/fresh_055_s1.yml
-- configs/stage_one/first_train_seed1/fresh_065_s1.yml
+#- configs/stage_one/first_train_seed1/fresh_055_s1.yml
+#- configs/stage_one/first_train_seed1/fresh_065_s1.yml
+
+- configs/stage_one/first_train_seed1/resume_v1_seed1/resume_075_s1.yml
+- configs/stage_one/first_train_seed1/resume_v1_seed1/resume_085_s1.yml
+- configs/stage_one/first_train_seed1/resume_v1_seed1/resume_095_s1.yml
+- configs/stage_one/first_train_seed1/resume_v1_seed1/resume_055_s1.yml
+- configs/stage_one/first_train_seed1/resume_v1_seed1/resume_065_s1.yml

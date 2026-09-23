@@ -547,8 +547,10 @@ def _render_evaluation_frames(
     outputs.append(path)
 
     fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(x, _additive_drawdown(frame["agent_equity"]), label="agent")
-    ax.plot(x, _additive_drawdown(frame["always_long_equity"]), label="always_long")
+    agent_drawdown = _additive_drawdown(frame["agent_equity"])
+    long_drawdown = _additive_drawdown(frame["always_long_equity"])
+    ax.plot(x, agent_drawdown, label=f"agent (Max DD {agent_drawdown.min(initial=0.0):.1%})")
+    ax.plot(x, long_drawdown, label=f"always_long (Max DD {long_drawdown.min(initial=0.0):.1%})")
     ax.axhline(0.0, linewidth=0.8)
     ax.set_title("Validation drawdown")
     ax.set_ylabel("drawdown")

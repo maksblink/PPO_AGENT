@@ -337,7 +337,8 @@ def final_evaluation(run: Run) -> Evaluation | None:
     checkpoint = final_checkpoint(run)
     if checkpoint is None:
         return None
-    evaluations = list(getattr(checkpoint, "evaluations", ()))
+    evaluations = [e for e in getattr(checkpoint, "evaluations", ())
+                   if _is_enum_value(e.data_scope, EvaluationDataScope.RUN_VALIDATION)]
     if not evaluations:
         return None
     return max(
@@ -368,7 +369,8 @@ def _checkpoint_for_evaluation(
 def _latest_checkpoint_evaluation(
     checkpoint: Checkpoint,
 ) -> Evaluation | None:
-    evaluations = list(getattr(checkpoint, "evaluations", ()))
+    evaluations = [e for e in getattr(checkpoint, "evaluations", ())
+                   if _is_enum_value(e.data_scope, EvaluationDataScope.RUN_VALIDATION)]
     if not evaluations:
         return None
     return max(evaluations, key=lambda evaluation: int(evaluation.id))
@@ -810,6 +812,7 @@ def render_evaluations(
                 str(evaluation.checkpoint_id),
                 _integer(None if checkpoint is None else checkpoint.run_step),
                 _enum_text(evaluation.trigger),
+                _enum_text(evaluation.data_scope),
                 _enum_text(evaluation.status),
                 _float(evaluation.agent_return),
                 _float(evaluation.always_long_return),
@@ -832,6 +835,7 @@ def render_evaluations(
             "CP",
             "STEP",
             "TRIGGER",
+            "SCOPE",
             "STATUS",
             "AGENT",
             "LONG",

@@ -258,7 +258,7 @@ class TrainingMetricsArtifactSection(StrictConfigModel):
     every_steps: PositiveInt = 10_000
 
 
-class ValidationTrajectoryArtifactSection(StrictConfigModel):
+class EvaluationTrajectoryArtifactSection(StrictConfigModel):
     """Persistence policy for full validation trajectories."""
 
     mode: Literal[
@@ -284,8 +284,8 @@ class ArtifactsSection(StrictConfigModel):
     training_metrics: TrainingMetricsArtifactSection = Field(
         default_factory=TrainingMetricsArtifactSection
     )
-    validation_trajectory: ValidationTrajectoryArtifactSection = Field(
-        default_factory=ValidationTrajectoryArtifactSection
+    evaluation_trajectory: EvaluationTrajectoryArtifactSection = Field(
+        default_factory=EvaluationTrajectoryArtifactSection
     )
     plots: PlotArtifactSection = Field(
         default_factory=PlotArtifactSection

@@ -64,21 +64,21 @@ def test_render_evaluation_plots_replaces_dense_position_timeline(
             "bars_held": [1, 2, 1],
         }
     )
-    frame.to_parquet(tmp_path / "trajectory.parquet", index=False)
-    events.to_parquet(tmp_path / "trade_events.parquet", index=False)
-    legacy = tmp_path / "position_timeline.png"
+    frame.to_parquet(tmp_path / "trajectory_val.parquet", index=False)
+    events.to_parquet(tmp_path / "trade_events_val.parquet", index=False)
+    legacy = tmp_path / "position_timeline_val.png"
     legacy.write_bytes(b"legacy")
 
     outputs = artifacts.render_evaluation_plots(tmp_path)
     names = {path.name for path in outputs}
 
     assert names == {
-        "equity_curve.png",
-        "drawdown_curve.png",
-        "market_and_exposure.png",
-        "cumulative_costs.png",
-        "trade_returns.png",
-        "holding_times.png",
+        "equity_curve_val.png",
+        "drawdown_curve_val.png",
+        "market_and_exposure_val.png",
+        "cumulative_costs_val.png",
+        "trade_returns_val.png",
+        "holding_times_val.png",
     }
     assert not legacy.exists()
     assert all(path.exists() for path in outputs)
@@ -255,7 +255,7 @@ def test_render_evaluation_plots_adds_policy_probability_diagnostics(
     )
 
     frame.to_parquet(
-        tmp_path / "trajectory.parquet",
+        tmp_path / "trajectory_val.parquet",
         index=False,
     )
 
@@ -271,12 +271,12 @@ def test_render_evaluation_plots_adds_policy_probability_diagnostics(
     }
 
     assert (
-        "policy_p_long_distribution.png"
+        "policy_p_long_distribution_val.png"
         in names
     )
 
     assert (
-        "policy_p_long_confidence_curve.png"
+        "policy_p_long_confidence_curve_val.png"
         in names
     )
 

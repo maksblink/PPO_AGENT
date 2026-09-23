@@ -76,7 +76,7 @@ artifacts:
   training_metrics:
     enabled: true
     every_steps: 1024
-  validation_trajectory:
+  evaluation_trajectory:
     mode: all
   plots:
     during_run: false

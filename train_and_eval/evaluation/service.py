@@ -8,6 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 import warnings
+import random
+from functools import wraps
+import numpy as np
 
 import pandas as pd
 from pydantic import ValidationError
@@ -341,6 +344,27 @@ def _load_source_market_data(
     return frame
 
 
+def preserve_random_state(function):
+    """Isolate checkpoint loading/replay from the live training RNG streams."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        import torch
+        python_state = random.getstate()
+        numpy_state = np.random.get_state()
+        torch_state = torch.random.get_rng_state()
+        cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else None
+        try:
+            return function(*args, **kwargs)
+        finally:
+            random.setstate(python_state)
+            np.random.set_state(numpy_state)
+            torch.random.set_rng_state(torch_state)
+            if cuda_state is not None:
+                torch.cuda.set_rng_state_all(cuda_state)
+    return wrapped
+
+
+@preserve_random_state
 def evaluate_run_validation_checkpoint(
     session_factory,
     *,
@@ -364,7 +388,7 @@ def evaluate_run_validation_checkpoint(
     data_scope: EvaluationDataScope | str | None = None,
 ) -> PersistedEvaluationState:
     """
-    Evaluate one persisted checkpoint on its archived validation range.
+    Evaluate one frozen checkpoint on its archived TRAIN/VAL or explicit range.
 
     The service derives the data path, chronological split,
     EnvironmentSection and PPO device from the source Run row.
@@ -402,7 +426,19 @@ def evaluate_run_validation_checkpoint(
         manifest_path=manifest_path,
     )
 
-    if evaluation_range is not None:
+    data_scope = EvaluationDataScope(data_scope or EvaluationDataScope.RUN_VALIDATION)
+    if data_scope == EvaluationDataScope.RUN_TRAINING:
+        if evaluation_range is not None:
+            raise EvaluationSourceMismatchError("TRAIN uses the archived effective training range")
+        if source.window_metadata is not None:
+            bounds = source.window_metadata["train"]
+            evaluation_start_index, evaluation_end_index = bounds["start_index"], bounds["end_index"]
+        else:
+            history = get_context_definition(config.environment.context).required_history_rows(config.environment.window)
+            usable = source.split_index - history
+            evaluation_start_index = history + usable % config.ppo.batch_size
+            evaluation_end_index = source.split_index
+    elif evaluation_range is not None:
         evaluation_start_index, evaluation_end_index = evaluation_range
         if data_scope is None or data_scope == EvaluationDataScope.RUN_VALIDATION:
             raise EvaluationSourceMismatchError("Explicit ranges require custom or out-of-sample scope")
@@ -560,21 +596,24 @@ def evaluate_run_validation_checkpoint(
                 run_id=source.run_id,
                 evaluation_id=evaluation_id,
                 checkpoint_id=source.id,
+                data_scope=data_scope,
                 metadata={
                     "git_commit": source.run_git_commit,
                     "git_branch": source.run_git_branch,
                     "data_sha256": source.data_sha256,
                     "checkpoint_sha256": source.sha256,
+                    "data_scope": data_scope.value,
                 },
             )
         if render_plots:
             render_evaluation_result_plots(
                 result,
                 directory=directory,
+                data_scope=data_scope,
             )
     except Exception as artifact_error:
         warnings.warn(
-            "Validation artifact generation failed and can be retried "
+            "Evaluation artifact generation failed and can be retried "
             f"offline: {type(artifact_error).__name__}: {artifact_error}",
             RuntimeWarning,
             stacklevel=2,

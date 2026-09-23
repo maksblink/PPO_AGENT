@@ -135,6 +135,8 @@ class LiveTrainingProgress:
     _rollouts_completed: int = field(default=0, init=False)
     _training_metrics: dict[str, Number] = field(default_factory=dict, init=False)
     _validation_metrics: ValidationMetricSnapshot | None = field(default=None, init=False)
+    _train_evaluation_metrics: ValidationMetricSnapshot | None = field(default=None, init=False)
+    _evaluating_train: bool = field(default=False, init=False)
     _validation_status: str = field(default="not run yet", init=False)
     _validation_completed_steps: int = field(default=0, init=False)
     _validation_expected_steps: int = field(default=0, init=False)
@@ -275,7 +277,7 @@ class LiveTrainingProgress:
                 f"{snapshot.periodic_checkpoint_writes:,}"
             ),
             (
-                "  periodic evaluations: "
+                "  periodic evaluation events: "
                 f"{snapshot.periodic_evaluations:,}"
             ),
             (
@@ -339,6 +341,22 @@ class LiveTrainingProgress:
         self._phase = "TRAINING"
         self._render()
 
+    def train_evaluation_started(self, **kwargs) -> None:
+        self.validation_started(**kwargs)
+        self._evaluating_train = True
+        self._phase = "EVALUATION_TRAIN"
+        self._render(force=True)
+
+    def train_evaluation_update(self, **kwargs) -> None:
+        self.validation_update(**kwargs)
+
+    def train_evaluation_completed(self, metrics: ValidationMetricSnapshot) -> None:
+        previous_val = self._validation_metrics
+        self.validation_completed(metrics)
+        self._train_evaluation_metrics = metrics
+        self._validation_metrics = previous_val
+        self._render(force=True)
+
     def validation_started(
         self,
         *,
@@ -347,6 +365,7 @@ class LiveTrainingProgress:
         trigger: str,
         expected_steps: int,
     ) -> None:
+        self._evaluating_train = False
         self._completed_steps = int(run_step)
         self._validation_completed_steps = 0
         self._validation_expected_steps = max(0, int(expected_steps))
@@ -355,7 +374,7 @@ class LiveTrainingProgress:
         self._validation_status = (
             f"running ({trigger}, checkpoint {checkpoint_id})"
         )
-        self._phase = "VALIDATION"
+        self._phase = "EVALUATION_TRAIN" if self._evaluating_train else "VALIDATION"
         self._render(force=True)
 
     def validation_update(
@@ -366,7 +385,7 @@ class LiveTrainingProgress:
     ) -> None:
         self._validation_completed_steps = max(0, int(completed_steps))
         self._validation_expected_steps = max(0, int(expected_steps))
-        self._phase = "VALIDATION"
+        self._phase = "EVALUATION_TRAIN" if self._evaluating_train else "VALIDATION"
         self._render()
 
     def validation_completed(
@@ -514,7 +533,7 @@ class LiveTrainingProgress:
         )
         return (
             f"Run wall {self._format_duration(wall)}  |  "
-            f"validation time {self._format_duration(validation)}"
+            f"evaluation time {self._format_duration(validation)}"
         )
 
     def _training_lines(self) -> list[str]:
@@ -540,7 +559,8 @@ class LiveTrainingProgress:
         ]
 
     def _validation_lines(self) -> list[str]:
-        metrics = self._validation_metrics
+        metrics = self._train_evaluation_metrics if self._evaluating_train else self._validation_metrics
+        label = "EVALUATION_TRAIN" if self._evaluating_train else "EVALUATION_VAL"
 
         if self._validation_status == "not run yet":
             return [
@@ -578,7 +598,7 @@ class LiveTrainingProgress:
             )
 
         lines = [
-            f"VALIDATION — {self._validation_status}",
+            f"{label} — {self._validation_status}",
             "  " + self._bar_line(done, expected),
             timing,
         ]
@@ -606,6 +626,23 @@ class LiveTrainingProgress:
         )
         return lines
 
+    def _train_evaluation_lines(self) -> list[str]:
+        m = self._train_evaluation_metrics
+        if m is None or self._evaluating_train:
+            return []
+        return [
+            f"EVALUATION_TRAIN — checkpoint {m.checkpoint_id}, evaluation {m.evaluation_id}",
+            "  balanced_score_train " + self._metric_text(m.balanced_score)
+            + "  agent_return_train " + self._metric_text(m.agent_return)
+            + "  max_drawdown_train " + self._metric_text(m.agent_max_drawdown)
+            + "  profit_factor_train " + self._metric_text(m.profit_factor),
+            "  win_rate_train " + self._metric_text(m.win_rate)
+            + "  exposure_train " + self._metric_text(m.market_exposure)
+            + "  round_trips_train " + self._metric_text(m.round_trips, digits=0)
+            + "  always_long_train " + self._metric_text(m.always_long_return),
+            "",
+        ]
+
     def _lines(self) -> list[str]:
         return [
             f"PPO RUN #{self._run_id}  {self._run_name}",
@@ -618,6 +655,7 @@ class LiveTrainingProgress:
             "",
             *self._training_lines(),
             "",
+            *self._train_evaluation_lines(),
             *self._validation_lines(),
         ]
 

@@ -621,8 +621,8 @@ def _validation_progress_metrics(
         )
 
 
-def _persist_validation_trajectory(config: RunConfig, trigger: str) -> bool:
-    mode = config.artifacts.validation_trajectory.mode
+def _persist_evaluation_trajectory(config: RunConfig, trigger: str) -> bool:
+    mode = config.artifacts.evaluation_trajectory.mode
     if mode == "all":
         return True
     if mode == "final_only":
@@ -685,6 +685,39 @@ def train_ppo_run(
         data_directory=data_directory,
         manifest_path=manifest_path,
     )
+
+    def evaluate_training_checkpoint(checkpoint, trigger, run_step):
+        if stage_role is not None:
+            return
+        _progress_call(progress_reporter, "train_evaluation_started",
+                       run_step=run_step, checkpoint_id=checkpoint.checkpoint_id,
+                       trigger=trigger, expected_steps=split.steps_per_data_epoch)
+        result = evaluate_run_validation_checkpoint(
+            session_factory, checkpoint_id=checkpoint.checkpoint_id,
+            trigger=trigger, data_scope=EvaluationDataScope.RUN_TRAINING,
+            policy_mode=config.evaluation.policy_mode,
+            threshold_action=config.evaluation.threshold_action,
+            probability_threshold=config.evaluation.probability_threshold,
+            seed=int(config.run.seed), project_root=root,
+            data_directory=data_directory, manifest_path=manifest_path,
+            artifacts_directory=artifacts_directory,
+            progress_callback=lambda done, total: _progress_call(
+                progress_reporter, "train_evaluation_update",
+                completed_steps=done, expected_steps=total),
+            progress_interval_steps=int(config.logging.validation_progress_every_steps),
+            persist_trajectory=_persist_evaluation_trajectory(config, trigger),
+            render_plots=bool(config.artifacts.plots.during_run),
+        )
+        persisted_evaluations.append(result)
+        if progress_reporter is not None:
+            try:
+                metrics = _validation_progress_metrics(
+                    session_factory, evaluation_id=result.evaluation_id,
+                    checkpoint_id=checkpoint.checkpoint_id, run_step=run_step, trigger=trigger)
+            except Exception:
+                metrics = None
+            if metrics is not None:
+                _progress_call(progress_reporter, "train_evaluation_completed", metrics)
 
     continuation = config.continuation
     resume_source: (
@@ -1182,6 +1215,8 @@ def train_ppo_run(
                     else "scheduled"
                 )
 
+                evaluate_training_checkpoint(checkpoint, evaluation_trigger, completed_steps)
+
                 _progress_call(
                     progress_reporter,
                     "validation_started",
@@ -1231,7 +1266,7 @@ def train_ppo_run(
                         artifacts_directory=(
                             artifacts_directory
                         ),
-                        persist_trajectory=_persist_validation_trajectory(
+                        persist_trajectory=_persist_evaluation_trajectory(
                             config, evaluation_trigger
                         ),
                         render_plots=bool(config.artifacts.plots.during_run),
@@ -1307,6 +1342,8 @@ def train_ppo_run(
                         final_checkpoint
                     )
 
+                    evaluate_training_checkpoint(final_checkpoint, "final", completed_steps)
+
                     _progress_call(
                         progress_reporter,
                         "validation_started",
@@ -1359,7 +1396,7 @@ def train_ppo_run(
                             artifacts_directory=(
                                 artifacts_directory
                             ),
-                            persist_trajectory=_persist_validation_trajectory(
+                            persist_trajectory=_persist_evaluation_trajectory(
                                 config, "final"
                             ),
                             render_plots=bool(config.artifacts.plots.during_run),

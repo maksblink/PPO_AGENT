@@ -1203,7 +1203,7 @@ def test_artifact_settings_are_independent_from_logging(tmp_path: Path) -> None:
             "enabled": True,
             "every_steps": 2_048,
         },
-        "validation_trajectory": {
+        "evaluation_trajectory": {
             "mode": "final_only",
         },
         "plots": {
@@ -1218,7 +1218,7 @@ def test_artifact_settings_are_independent_from_logging(tmp_path: Path) -> None:
     assert loaded.config.logging.training_progress_every_steps == 20_000
     assert loaded.config.artifacts.training_metrics.every_steps == 2_048
     assert loaded.config.artifacts.training_metrics.enabled is True
-    assert loaded.config.artifacts.validation_trajectory.mode == "final_only"
+    assert loaded.config.artifacts.evaluation_trajectory.mode == "final_only"
     assert loaded.config.artifacts.plots.during_run is True
 
 
@@ -1230,19 +1230,19 @@ def test_artifact_settings_have_safe_defaults(tmp_path: Path) -> None:
 
     assert loaded.config.artifacts.training_metrics.enabled is False
     assert loaded.config.artifacts.training_metrics.every_steps == 10_000
-    assert loaded.config.artifacts.validation_trajectory.mode == "disabled"
+    assert loaded.config.artifacts.evaluation_trajectory.mode == "disabled"
     assert loaded.config.artifacts.plots.during_run is False
 
 
-def test_rejects_unknown_validation_trajectory_mode(tmp_path: Path) -> None:
+def test_rejects_unknown_evaluation_trajectory_mode(tmp_path: Path) -> None:
     config = _valid_config()
     config["artifacts"] = {
         "training_metrics": {"enabled": True, "every_steps": 10_000},
-        "validation_trajectory": {"mode": "sometimes"},
+        "evaluation_trajectory": {"mode": "sometimes"},
         "plots": {"during_run": False},
     }
 
-    with pytest.raises(RunConfigError, match="validation_trajectory"):
+    with pytest.raises(RunConfigError, match="evaluation_trajectory"):
         load_run_config(
             _write_config(tmp_path / "bad-artifacts.yml", config),
             verify_data=False,

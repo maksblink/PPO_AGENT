@@ -413,17 +413,51 @@ metadata/results, and checkpoint files the model state required for resume or
 replay. Detailed trajectories and derived reports have separate roles; not every
 artifact can be recreated if its source checkpoint or dataset has been deleted.
 
+### Paired stage-one checkpoint evaluation
+
+Each scheduled or final evaluation event in stage one evaluates the same saved
+checkpoint twice: first on effective TRAIN, then on VAL. TRAIN excludes initial
+context-only rows and alignment trimming; its full scored range is evaluated
+once regardless of the number of training epochs. Both passes use the same
+policy mode, seed, environment, costs and metrics, with independent fresh
+positions. They never update the live model, optimizer or normalization state.
+Python, NumPy and Torch RNG states are restored after evaluation.
+
+Each pass has its own `evaluations` row linked to the same `checkpoint_id`.
+`data_scope` distinguishes `run_training` from `run_validation`; persisted
+indices and timestamps identify the exact evaluated candles. Early stopping,
+resume-best selection, queue rankings and dashboard run rankings use VAL only.
+Stage-two candidates retain VAL-only evaluation; refit is followed by TEST.
+
+`artifacts.evaluation_trajectory.mode` controls retention for both passes
+(`none`, `final_only`, `all`); `artifacts.plots.during_run` applies equally to
+both. The old `artifacts.validation_trajectory` key is not accepted. Plot
+rendering and offline replay use shared implementations for all scopes.
+
+TRAIN and VAL have different durations and market regimes: totals and maximum
+drawdowns should not be interpreted as directly comparable estimates. Full TRAIN
+replay adds evaluation time and trajectory storage proportional to its row count.
+PPO update diagnostics remain separate from frozen TRAIN evaluation metrics.
+
 ## Reports and terminal progress
 
 ### Artifact structure
 
 Run artifacts are under `artifacts/runs/<zero-padded-run-id>/`. Checkpoints are in
 `checkpoints/`; evaluations have their own ID directories under `evaluations/`.
-Evaluation artifacts may include `trajectory.parquet`, `trade_events.parquet`,
-`metrics.json`, equity/drawdown/exposure/cost plots, trade/holding-time plots and
+Evaluation artifacts include scope suffixes: `trajectory_train.parquet` /
+`trajectory_val.parquet`, `trade_events_train.parquet` / `trade_events_val.parquet`,
+`metrics_train.json` / `metrics_val.json`, equity/drawdown/exposure/cost plots, trade/holding-time plots and
 policy-probability plots. Trade-specific charts can be absent when no relevant
-trade events exist. Run reports contain training/validation curves, metric CSVs
-and `summary.json`.
+trade events exist. All evaluation plot filenames and titles carry `_train` or
+`_val`; reference and test artifacts use `_reference` and `_test`. Run reports
+contain `evaluation_metrics_train.csv`, `evaluation_metrics_val.csv`,
+`evaluation_curves_train.png`, `evaluation_curves_val.png`, PPO training
+curves and `summary.json`. Each evaluation CSV includes all persisted columns.
+
+Dashboard Run Detail includes a checkpoint-paired TRAIN/VAL table and a scope
+selector for individual evaluation tables and sorted metric curves. The CLI
+lists scope alongside evaluation identity. Run rankings remain based on VAL.
 
 Study artifacts are under `artifacts/walk_forward/<zero-padded-study-id>/`:
 
@@ -459,7 +493,7 @@ Exposure is weighted by available scored bars, not elapsed wall-clock time.
 ### Terminal views
 
 Stage one displays resolved steps and cadence, live training/PPO diagnostics,
-validation and best/final checkpoint results. Stage two displays compact tables
+TRAIN/VAL evaluations and validation-best/final checkpoint results. Stage two displays compact tables
 and progress bars, refreshed during rollouts/evaluation callbacks at most twice
 per second and immediately when operations complete.
 

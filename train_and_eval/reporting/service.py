@@ -13,6 +13,7 @@ from train_and_eval.evaluation.metrics import EvaluationMetrics
 from train_and_eval.evaluation.service import replay_run_validation_checkpoint
 from train_and_eval.reporting.artifacts import (
     evaluation_artifact_directory,
+    evaluation_source_paths,
     evaluation_trajectory_has_policy_probabilities,
     persist_evaluation_source_artifacts,
     render_evaluation_plots,
@@ -112,11 +113,7 @@ def generate_run_report(
         directory = evaluation_artifact_directory(
             root, artifacts_directory, run_id, int(evaluation.id)
         )
-        source_paths = (
-            directory / "trajectory.parquet",
-            directory / "trade_events.parquet",
-            directory / "metrics.json",
-        )
+        source_paths = evaluation_source_paths(directory, evaluation.data_scope)
         source_paths_complete = all(
             path.exists()
             for path in source_paths
@@ -126,7 +123,7 @@ def generate_run_report(
             source_paths_complete
             and not (
                 evaluation_trajectory_has_policy_probabilities(
-                    directory
+                    directory, evaluation.data_scope
                 )
             )
         )
@@ -168,6 +165,7 @@ def generate_run_report(
                 run_id=run_id,
                 evaluation_id=int(evaluation.id),
                 checkpoint_id=int(checkpoint.id),
+                data_scope=evaluation.data_scope,
                 metadata={
                     "git_commit": str(run.git_commit),
                     "git_branch": str(run.git_branch),
@@ -176,13 +174,9 @@ def generate_run_report(
                     "replayed_offline": True,
                 },
             )
-        outputs.extend(render_evaluation_plots(directory))
+        outputs.extend(render_evaluation_plots(directory, evaluation.data_scope))
         outputs.extend(
-            path for path in (
-                directory / "trajectory.parquet",
-                directory / "trade_events.parquet",
-                directory / "metrics.json",
-            ) if path.exists()
+            path for path in evaluation_source_paths(directory, evaluation.data_scope) if path.exists()
         )
 
     # Stable de-duplication while preserving useful display order.

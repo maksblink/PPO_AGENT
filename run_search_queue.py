@@ -787,6 +787,7 @@ LEFT JOIN LATERAL (
     WHERE
         c.run_id = r.id
         AND e.status = 'completed'
+        AND e.data_scope = 'run_validation'
         AND e.trigger = 'final'
     ORDER BY e.id DESC
     LIMIT 1
@@ -801,6 +802,7 @@ LEFT JOIN LATERAL (
     WHERE
         c.run_id = r.id
         AND e.status = 'completed'
+        AND e.data_scope = 'run_validation'
 ) AS best_eval ON TRUE
 
 LEFT JOIN LATERAL (

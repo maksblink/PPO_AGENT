@@ -87,7 +87,7 @@ def test_live_progress_keeps_training_metrics_during_validation(
     assert "400/1,000" in output
     assert "Training 00:10" in output
     assert "Run wall 00:20" in output
-    assert "validation time 00:10" in output
+    assert "evaluation time 00:10" in output
 
 
 def test_live_progress_renders_completed_validation_metrics(
@@ -145,7 +145,7 @@ def test_live_progress_renders_completed_validation_metrics(
     assert "profit_factor 1.30000" in output
     assert "round_trips 42" in output
     assert "Run wall 00:30" in output
-    assert "validation time 00:20" in output
+    assert "evaluation time 00:20" in output
     assert "\x1b[" in output
 
 
@@ -211,7 +211,7 @@ def test_live_progress_renders_training_preflight() -> None:
     assert "floor(20,000 / 2,048) = 9" in output
     assert "resolved: 18,432" in output
     assert "periodic checkpoint writes: 11" in output
-    assert "periodic evaluations: 3" in output
+    assert "periodic evaluation events: 3" in output
     assert "total checkpoint writes: 12" in output
     assert "training segments: 12" in output
     assert "all segments batch-aligned: YES" in output

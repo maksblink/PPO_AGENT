@@ -27,14 +27,14 @@ artifacts/runs/00000001/
 ├── reports/
 │   ├── training_metrics.csv
 │   ├── training_curves.png
-│   ├── validation_metrics.csv
-│   ├── validation_curves.png
+│   ├── evaluation_metrics_<scope>.csv
+│   ├── evaluation_curves_<scope>.png
 │   └── summary.json
 └── evaluations/
     └── 00000001/
-        ├── trajectory.parquet
-        ├── trade_events.parquet
-        ├── metrics.json
+        ├── trajectory_<scope>.parquet
+        ├── trade_events_<scope>.parquet
+        ├── metrics_<scope>.json
         ├── equity_curve.png
         ├── drawdown_curve.png
         ├── market_and_exposure.png
@@ -90,8 +90,8 @@ The database remains the authoritative persistent record for completed evaluatio
 When enabled by configuration, detailed validation trajectories are stored as Parquet files:
 
 ```text
-trajectory.parquet
-trade_events.parquet
+trajectory_<scope>.parquet
+trade_events_<scope>.parquet
 ```
 
 These files contain step-level information used to build detailed evaluation reports and plots.
@@ -159,7 +159,7 @@ Distribution of trade holding durations.
 
 Training diagnostics such as rollout reward, entropy, explained variance, KL divergence, clip fraction, losses, and learning rate.
 
-### `validation_curves.png`
+### `evaluation_curves_<scope>.png`
 
 Validation metrics across checkpoints, including best and final evaluation markers.
 
@@ -175,7 +175,7 @@ artifacts:
     enabled: true
     every_steps: 2048
 
-  validation_trajectory:
+  evaluation_trajectory:
     mode: all
 
   plots:
@@ -238,3 +238,7 @@ artifacts/README.md
 ```
 
 Deleting filesystem artifacts does not automatically delete the corresponding PostgreSQL run metadata.
+
+Evaluation scope suffixes are `train`, `val`, `reference` and `test`.
+Stage one saves paired evaluations of each assessed checkpoint; all evaluation
+plots carry the same suffix. PPO update diagnostics are not frozen TRAIN metrics.

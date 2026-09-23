@@ -109,7 +109,7 @@ def generate_report(factory, study_id: int, *, project_root) -> Path:
             if evaluation.checkpoint_id != checkpoint.id:
                 raise ValueError("Test checkpoint does not match the recorded refit")
             artifact_dir = evaluation_artifact_directory(root, "artifacts", checkpoint.run_id, evaluation.id)
-            trajectory_path = artifact_dir / "trajectory.parquet"
+            trajectory_path = artifact_dir / "trajectory_test.parquet"
             if not trajectory_path.exists():
                 # Release the read transaction before nested replay/report sessions.
                 session.commit()

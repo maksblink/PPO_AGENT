@@ -18,7 +18,7 @@ if TYPE_CHECKING:
         EvaluationRunResult,
     )
 
-from train_and_eval.database.models import Checkpoint, Evaluation, EvaluationStatus, Run, TrainingMetric
+from train_and_eval.database.models import Checkpoint, Evaluation, EvaluationStatus, EvaluationDataScope, Run, TrainingMetric
 
 
 class ReportArtifactError(RuntimeError):
@@ -40,6 +40,19 @@ def run_artifact_root(project_root: str | Path, artifacts_directory: str | Path,
 
 def evaluation_artifact_directory(project_root: str | Path, artifacts_directory: str | Path, run_id: int, evaluation_id: int) -> Path:
     return run_artifact_root(project_root, artifacts_directory, run_id) / "evaluations" / f"{int(evaluation_id):08d}"
+
+
+def evaluation_suffix(data_scope=EvaluationDataScope.RUN_VALIDATION) -> str:
+    return {
+        "run_training": "train", "run_validation": "val",
+        "extended_out_of_sample": "test", "custom_range": "reference",
+    }[getattr(data_scope, "value", data_scope)]
+
+
+def evaluation_source_paths(directory, data_scope=EvaluationDataScope.RUN_VALIDATION):
+    suffix = evaluation_suffix(data_scope)
+    return tuple(Path(directory) / f"{name}_{suffix}.{extension}" for name, extension in
+                 (("trajectory", "parquet"), ("trade_events", "parquet"), ("metrics", "json")))
 
 
 def _trajectory_frame(result: EvaluationRunResult) -> pd.DataFrame:
@@ -118,12 +131,10 @@ def _trade_events_frame(result: EvaluationRunResult) -> pd.DataFrame:
 
 def evaluation_trajectory_has_policy_probabilities(
     directory: str | Path,
+    data_scope=EvaluationDataScope.RUN_VALIDATION,
 ) -> bool:
     """Return whether a persisted trajectory contains full policy probabilities."""
-    trajectory_path = (
-        Path(directory)
-        / "trajectory.parquet"
-    )
+    trajectory_path = evaluation_source_paths(directory, data_scope)[0]
 
     if not trajectory_path.exists():
         return False
@@ -155,6 +166,7 @@ def persist_evaluation_source_artifacts(
     evaluation_id: int,
     checkpoint_id: int,
     metadata: dict[str, Any] | None = None,
+    data_scope=EvaluationDataScope.RUN_VALIDATION,
 ) -> Path:
     """Persist lossless inputs used by all detailed validation plots."""
     directory = evaluation_artifact_directory(
@@ -162,10 +174,12 @@ def persist_evaluation_source_artifacts(
     )
     directory.mkdir(parents=True, exist_ok=True)
 
-    _trajectory_frame(result).to_parquet(directory / "trajectory.parquet", index=False)
-    _trade_events_frame(result).to_parquet(directory / "trade_events.parquet", index=False)
+    trajectory_path, events_path, metrics_path = evaluation_source_paths(directory, data_scope)
+    _trajectory_frame(result).to_parquet(trajectory_path, index=False)
+    _trade_events_frame(result).to_parquet(events_path, index=False)
 
     payload: dict[str, Any] = {
+        "data_scope": getattr(data_scope, "value", data_scope),
         "run_id": int(run_id),
         "evaluation_id": int(evaluation_id),
         "checkpoint_id": int(checkpoint_id),
@@ -177,7 +191,7 @@ def persist_evaluation_source_artifacts(
     }
     if metadata:
         payload["reproducibility"] = metadata
-    (directory / "metrics.json").write_text(
+    metrics_path.write_text(
         json.dumps(payload, indent=2, default=str, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -198,6 +212,12 @@ def _pyplot():
 
 def _save_figure(fig: Any, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = path.stem.rsplit("_", 1)[-1]
+    if suffix in {"train", "val", "test", "reference"}:
+        for ax in fig.axes:
+            title = ax.get_title()
+            if title and not title.endswith("_" + suffix):
+                ax.set_title(title + "_" + suffix)
     fig.tight_layout()
     fig.savefig(path, dpi=140, bbox_inches="tight")
     _pyplot().close(fig)
@@ -266,6 +286,7 @@ def _mark_best_and_final(
     best_index: int,
     final_index: int,
     label_markers: bool,
+    best_label: str = "BEST VAL",
 ) -> None:
     best = frame.loc[best_index]
     final = frame.loc[final_index]
@@ -284,7 +305,7 @@ def _mark_best_and_final(
             marker="*",
             s=150,
             zorder=5,
-            label="BEST" if label_markers else None,
+            label=best_label if label_markers else None,
         )
     if pd.notna(final_y):
         ax.scatter(
@@ -301,6 +322,7 @@ def _mark_best_and_final(
 def _render_policy_probability_frames(
     frame: pd.DataFrame,
     directory: Path,
+    suffix: str = "val",
 ) -> tuple[Path, ...]:
     """
     Render diagnostics for action-1 confidence.
@@ -426,7 +448,7 @@ def _render_policy_probability_frames(
 
     path = (
         directory
-        / "policy_p_long_distribution.png"
+        / f"policy_p_long_distribution_{suffix}.png"
     )
 
     _save_figure(
@@ -507,7 +529,7 @@ def _render_policy_probability_frames(
 
     path = (
         directory
-        / "policy_p_long_confidence_curve.png"
+        / f"policy_p_long_confidence_curve_{suffix}.png"
     )
 
     _save_figure(
@@ -524,6 +546,7 @@ def _render_evaluation_frames(
     frame: pd.DataFrame,
     events: pd.DataFrame,
     directory: Path,
+    suffix: str = "val",
 ) -> tuple[Path, ...]:
     directory.mkdir(parents=True, exist_ok=True)
     plt = _pyplot()
@@ -538,11 +561,11 @@ def _render_evaluation_frames(
     ax.plot(x, frame["always_long_equity"], label=f"always_long ({long_final:+.1%})")
     ax.plot(x, frame["always_short_equity"], label=f"always_short ({short_final:+.1%})")
     ax.axhline(0.0, linewidth=0.8, linestyle="--")
-    ax.set_title("Validation equity curves")
+    ax.set_title(f"Equity curves_{suffix}")
     ax.set_ylabel("cumulative return")
     _format_axis_as_percent(ax)
     ax.legend()
-    path = directory / "equity_curve.png"
+    path = directory / f"equity_curve_{suffix}.png"
     _save_figure(fig, path)
     outputs.append(path)
 
@@ -552,18 +575,18 @@ def _render_evaluation_frames(
     ax.plot(x, agent_drawdown, label=f"agent (Max DD {agent_drawdown.min(initial=0.0):.1%})")
     ax.plot(x, long_drawdown, label=f"always_long (Max DD {long_drawdown.min(initial=0.0):.1%})")
     ax.axhline(0.0, linewidth=0.8)
-    ax.set_title("Validation drawdown")
+    ax.set_title(f"Drawdown_{suffix}")
     ax.set_ylabel("drawdown")
     _format_axis_as_percent(ax)
     ax.legend()
-    path = directory / "drawdown_curve.png"
+    path = directory / f"drawdown_curve_{suffix}.png"
     _save_figure(fig, path)
     outputs.append(path)
 
     # Dense LONG/FLAT/SHORT step plots become unreadable after a few hundred
     # trades. Preserve the raw position in trajectory.parquet and render a
     # market-regime view instead.
-    legacy_position_path = directory / "position_timeline.png"
+    legacy_position_path = directory / f"position_timeline_{suffix}.png"
     legacy_position_path.unlink(missing_ok=True)
 
     rolling_window = ROLLING_EXPOSURE_WINDOW_BARS
@@ -586,7 +609,7 @@ def _render_evaluation_frames(
     axes[1].set_ylabel("market exposure")
     _format_axis_as_percent(axes[1])
     axes[1].legend()
-    path = directory / "market_and_exposure.png"
+    path = directory / f"market_and_exposure_{suffix}.png"
     _save_figure(fig, path)
     outputs.append(path)
 
@@ -613,7 +636,7 @@ def _render_evaluation_frames(
     ax.set_ylabel("cumulative cost [% of stake]")
     _format_axis_as_percent(ax)
     ax.legend()
-    path = directory / "cumulative_costs.png"
+    path = directory / f"cumulative_costs_{suffix}.png"
     _save_figure(fig, path)
     outputs.append(path)
 
@@ -657,7 +680,7 @@ def _render_evaluation_frames(
                 va="top",
             )
             ax.legend()
-            path = directory / "trade_returns.png"
+            path = directory / f"trade_returns_{suffix}.png"
             _save_figure(fig, path)
             outputs.append(path)
 
@@ -691,7 +714,7 @@ def _render_evaluation_frames(
                 ha="right",
                 va="top",
             )
-            path = directory / "holding_times.png"
+            path = directory / f"holding_times_{suffix}.png"
             _save_figure(fig, path)
             outputs.append(path)
 
@@ -699,6 +722,7 @@ def _render_evaluation_frames(
         _render_policy_probability_frames(
             frame,
             directory,
+            suffix=suffix,
         )
     )
 
@@ -709,24 +733,25 @@ def render_evaluation_result_plots(
     result: EvaluationRunResult,
     *,
     directory: str | Path,
+    data_scope=EvaluationDataScope.RUN_VALIDATION,
 ) -> tuple[Path, ...]:
     """Render plots directly from an in-memory evaluation without retaining trajectory."""
     return _render_evaluation_frames(
         _trajectory_frame(result),
         _trade_events_frame(result),
         Path(directory),
+        suffix=evaluation_suffix(data_scope),
     )
 
 
-def render_evaluation_plots(directory: str | Path) -> tuple[Path, ...]:
+def render_evaluation_plots(directory: str | Path, data_scope=EvaluationDataScope.RUN_VALIDATION) -> tuple[Path, ...]:
     directory = Path(directory)
-    trajectory_path = directory / "trajectory.parquet"
+    trajectory_path, events_path, _ = evaluation_source_paths(directory, data_scope)
     if not trajectory_path.exists():
         raise ReportArtifactError(f"Missing trajectory: {trajectory_path}")
     frame = pd.read_parquet(trajectory_path)
-    events_path = directory / "trade_events.parquet"
     events = pd.read_parquet(events_path) if events_path.exists() else pd.DataFrame()
-    return _render_evaluation_frames(frame, events, directory)
+    return _render_evaluation_frames(frame, events, directory, suffix=evaluation_suffix(data_scope))
 
 
 def render_run_level_artifacts(session_factory, *, run_id: int, project_root: str | Path, artifacts_directory: str | Path) -> tuple[Path, ...]:
@@ -796,8 +821,12 @@ def render_run_level_artifacts(session_factory, *, run_id: int, project_root: st
                 axes.flat[0].legend()
             path = report_dir / "training_curves.png"; _save_figure(fig, path); outputs.append(path)
 
-        if evaluations:
-            vf = pd.DataFrame([{
+        for scope in EvaluationDataScope:
+            scoped_evaluations = [e for e in evaluations if e.data_scope == scope]
+            if not scoped_evaluations:
+                continue
+            suffix = evaluation_suffix(scope)
+            vf = pd.DataFrame([{**{column.name: getattr(e, column.name) for column in Evaluation.__table__.columns},
                 "evaluation_id": int(e.id),
                 "model_step": checkpoint_steps[int(e.checkpoint_id)],
                 "trigger": str(getattr(e.trigger, "value", e.trigger)),
@@ -807,8 +836,10 @@ def render_run_level_artifacts(session_factory, *, run_id: int, project_root: st
                 "agent_max_drawdown": e.agent_max_drawdown, "profit_factor": e.profit_factor,
                 "win_rate": e.win_rate, "market_exposure": e.market_exposure,
                 "round_trips": e.round_trips,
-            } for e in evaluations])
-            vf.to_csv(report_dir / "validation_metrics.csv", index=False)
+            } for e in scoped_evaluations])
+            csv_path = report_dir / f"evaluation_metrics_{suffix}.csv"
+            vf.to_csv(csv_path, index=False)
+            outputs.append(csv_path)
             fig, axes = plt.subplots(4, 2, figsize=(13, 15), sharex=True)
             best_index = int(vf["balanced_score"].astype(float).idxmax())
             final_rows = vf.index[vf["trigger"] == "final"].tolist()
@@ -849,12 +880,13 @@ def render_run_level_artifacts(session_factory, *, run_id: int, project_root: st
                     best_index=best_index,
                     final_index=final_index,
                     label_markers=axis_index == 0,
+                    best_label="MAX TRAIN SCORE (diagnostic)" if suffix == "train" else "BEST " + suffix.upper(),
                 )
-                ax.set_title(title)
+                ax.set_title(f"{title}_{suffix}")
                 ax.set_xlabel("model step")
                 if axis_index == 0:
                     ax.legend()
-            path = report_dir / "validation_curves.png"; _save_figure(fig, path); outputs.append(path)
+            path = report_dir / f"evaluation_curves_{suffix}.png"; _save_figure(fig, path); outputs.append(path)
 
         summary = {
             "run_id": int(run.id), "run_name": str(run.name), "status": str(run.status.value),

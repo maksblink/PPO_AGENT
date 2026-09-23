@@ -95,6 +95,7 @@ class EvaluationTrigger(str, enum.Enum):
 
 
 class EvaluationDataScope(str, enum.Enum):
+    RUN_TRAINING = "run_training"
     RUN_VALIDATION = "run_validation"
     EXTENDED_OUT_OF_SAMPLE = "extended_out_of_sample"
     CUSTOM_RANGE = "custom_range"

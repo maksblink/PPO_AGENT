@@ -144,7 +144,7 @@ def stage_config(protocol: CheckpointWalkForwardConfig, cycle: dict, *, role: Li
     epochs = protocol.refit_epochs if is_refit else (first_epochs if cycle["number"] == 1 else protocol.update_epochs)
     raw["training"] = {"duration_unit": "data_epochs", "duration_amount": epochs}
     raw["evaluation"]["training_mode"] = "none" if is_refit else "final_only"
-    raw["artifacts"]["validation_trajectory"]["mode"] = "all"
+    raw["artifacts"]["evaluation_trajectory"]["mode"] = "all"
     # Candidate selection and aggregate reporting use immutable final checkpoint IDs.
     return RunConfig.model_validate(raw)
 

@@ -95,6 +95,16 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     checkpoint_id = trained.checkpoint.checkpoint_id
     with factory() as session:
         assert len(list(session.scalars(select(Run)))) == 1  # Stage one never launches stage two.
+        from train_and_eval.database.models import EvaluationDataScope
+        paired = list(session.scalars(select(Evaluation).where(Evaluation.checkpoint_id == checkpoint_id)))
+        assert {e.data_scope for e in paired} == {EvaluationDataScope.RUN_TRAINING, EvaluationDataScope.RUN_VALIDATION}
+        train_eval = next(e for e in paired if e.data_scope == EvaluationDataScope.RUN_TRAINING)
+        val_eval = next(e for e in paired if e.data_scope == EvaluationDataScope.RUN_VALIDATION)
+        source_run = session.get(Run, trained.run.run_id)
+        assert train_eval.steps_completed == source_run.window_metadata["train"]["rows"]
+        assert train_eval.evaluation_end_index <= val_eval.evaluation_start_index
+        assert trained.best_evaluation.evaluation_id == val_eval.id
+
     protocol_path = tmp_path / "stage_two.yml"
     definition = {"schema_version": 3, "name": "manual_stage_two", "seed": 1,
                   "source_checkpoint_id": checkpoint_id, "bootstrap_epochs": 1,
@@ -209,7 +219,7 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     with factory() as session:
         test = session.get(Evaluation, first_test_id)
         cp = session.get(Checkpoint, test.checkpoint_id)
-        trajectory = evaluation_artifact_directory(root,"artifacts",cp.run_id,test.id)/"trajectory.parquet"
+        trajectory = evaluation_artifact_directory(root,"artifacts",cp.run_id,test.id)/"trajectory_test.parquet"
     trajectory.unlink()
     report = generate_report(factory, study_id, project_root=root)
     assert report.is_file() and trajectory.is_file()

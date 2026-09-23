@@ -385,6 +385,7 @@ def test_executes_complete_fresh_training_run(
         "progress",
         "final_checkpoint",
         "final_evaluation",
+        "final_evaluation",
         "completed",
     ]
 
@@ -1323,10 +1324,12 @@ def test_executes_periodic_checkpoint_and_evaluation_schedule(
     ]
     assert evaluation_calls == [
         (96, "scheduled"),
+        (96, "scheduled"),
+        (100, "final"),
         (100, "final"),
     ]
     assert len(result.checkpoints) == 4
-    assert len(result.evaluations) == 2
+    assert len(result.evaluations) == 4
     assert result.checkpoint.run_step == 10
     assert result.training.rollout_sizes == (
         4,
@@ -1594,7 +1597,13 @@ def test_early_stopping_creates_final_checkpoint_at_same_step(
     ])
     evaluation_calls: list[tuple[int, str, float]] = []
 
+    train_scores = []
     def evaluate(*args, **kwargs):
+        if kwargs.get("data_scope") == service.EvaluationDataScope.RUN_TRAINING:
+            # TRAIN improves every time but must never reset validation patience.
+            train_scores.append(100. + len(train_scores))
+            return SimpleNamespace(evaluation_id=900 + len(train_scores),
+                                   checkpoint_id=kwargs["checkpoint_id"], balanced_score=train_scores[-1])
         score = next(scores)
         evaluation_calls.append((
             kwargs["checkpoint_id"],
@@ -1673,6 +1682,8 @@ def test_early_stopping_creates_final_checkpoint_at_same_step(
     assert result.checkpoint.run_step == 12
     assert result.best_checkpoint.run_step == 4
     assert result.best_evaluation.balanced_score == 1.0
+    assert len(train_scores) == 4
+    assert len(result.evaluations) == 8
     assert result.early_stop_reason is not None
 
 
@@ -1749,7 +1760,7 @@ def test_live_progress_uses_configured_step_cadence(
             "enabled": True,
             "every_steps": 6_000,
         },
-        "validation_trajectory": {"mode": "disabled"},
+        "evaluation_trajectory": {"mode": "disabled"},
         "plots": {"during_run": False},
     }
     config = RunConfig.model_validate(raw)
@@ -1944,7 +1955,7 @@ def test_live_progress_uses_configured_step_cadence(
         20_480,
         25_000,
     ]
-    assert evaluation_intervals == [2_000]
+    assert evaluation_intervals == [2_000, 2_000]
 
 
 def test_aligns_training_window_to_batch_size_from_start() -> None:

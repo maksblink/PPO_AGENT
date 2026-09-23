@@ -488,6 +488,7 @@ def test_evaluation_enum_values_are_explicit() -> None:
         value.value
         for value in EvaluationDataScope
     } == {
+        "run_training",
         "run_validation",
         "extended_out_of_sample",
         "custom_range",

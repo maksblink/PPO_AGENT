@@ -1414,6 +1414,18 @@ def run_detail_tab(
             evaluations["run_id"] == run_id
         ].copy()
 
+        paired = run_evaluations.loc[run_evaluations["data_scope"].isin(["run_training", "run_validation"])].copy()
+        if not paired.empty:
+            paired["split"] = paired["data_scope"].map({"run_training": "train", "run_validation": "val"})
+            comparison_metrics = [name for name in numeric_columns(paired)
+                                  if name not in {"id", "checkpoint_id", "run_id", "seed"}]
+            comparison = paired.pivot_table(index="checkpoint_id", columns="split",
+                                           values=comparison_metrics, aggfunc="last")
+            comparison.columns = [f"{metric}_{split}" for metric, split in comparison.columns]
+            st.markdown("#### TRAIN / VAL by checkpoint")
+            st.dataframe(comparison.reset_index(), width="stretch", hide_index=True)
+        scope = st.selectbox("Evaluation scope", ["run_validation", "run_training", "custom_range", "extended_out_of_sample"])
+        run_evaluations = run_evaluations.loc[run_evaluations["data_scope"] == scope]
         st.dataframe(
             run_evaluations,
             width="stretch",
@@ -1440,7 +1452,7 @@ def run_detail_tab(
             if x_column:
                 chart_data = run_evaluations.dropna(
                     subset=[x_column, metric]
-                )
+                ).sort_values(x_column, kind="stable")
 
                 figure = px.line(
                     chart_data,

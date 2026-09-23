@@ -168,6 +168,8 @@ def _latest_final_evaluations(
         return evaluations.copy()
 
     frame = evaluations.copy()
+    if "data_scope" in frame.columns:
+        frame = frame.loc[frame["data_scope"] == "run_validation"].copy()
 
     if "status" in frame.columns:
         completed = (

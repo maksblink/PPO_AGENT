@@ -1,6 +1,8 @@
 queue_schema_version: 1
 name: first_train_s1
 configs:
-- configs/stage_one/first_train_seed1/fresh_075_s1.yml
-- configs/stage_one/first_train_seed1/fresh_085_s1.yml
-- configs/stage_one/first_train_seed1/fresh_095_s1.yml
+#- configs/stage_one/first_train_seed1/fresh_075_s1.yml
+#- configs/stage_one/first_train_seed1/fresh_085_s1.yml
+#- configs/stage_one/first_train_seed1/fresh_095_s1.yml
+- configs/stage_one/first_train_seed1/fresh_055_s1.yml
+- configs/stage_one/first_train_seed1/fresh_065_s1.yml

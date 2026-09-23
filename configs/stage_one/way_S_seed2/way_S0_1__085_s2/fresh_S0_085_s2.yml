@@ -1,11 +1,9 @@
 config_schema_version: 1
 run:
-  name: resume_S4_45_45_225_15
-  seed: 1
+  name: fresh_S0_085_s2
+  seed: 2
 continuation:
-  mode: resume
-  source_run: resume_S3_45_45_225
-  checkpoint: final
+  mode: fresh
 data:
   path: data/NQ_CONTINUOUS_5m_WEEKDAYS_2010-06-07_00-00_2026-09-08_23-55_20260909_163317.parquet
   train_range:
@@ -49,7 +47,7 @@ ppo:
   n_steps: 1024
   batch_size: 256
   n_epochs: 3
-  learning_rate: 0.00015
+  learning_rate: 0.00085
   gamma: 0.9
   gae_lambda: 0.85
   clip_range: 0.2

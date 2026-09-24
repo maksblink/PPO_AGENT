@@ -1,0 +1,5 @@
+queue_schema_version: 1
+name: width_comparison_epoch5_s1
+configs:
+- configs/stage_one/first_train_seed1_g099/resume_v4_seed1/resume_055_s1_g099.yml
+- configs/stage_one/width768_seed1_g099/resume_v4_055_s1_g099_w768.yml

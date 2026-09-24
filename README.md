@@ -426,7 +426,8 @@ Python, NumPy and Torch RNG states are restored after evaluation.
 Each pass has its own `evaluations` row linked to the same `checkpoint_id`.
 `data_scope` distinguishes `run_training` from `run_validation`; persisted
 indices and timestamps identify the exact evaluated candles. Early stopping,
-resume-best selection, queue rankings and dashboard run rankings use VAL only.
+resume-best selection use VAL only. Queue summaries provide independent TRAIN and
+VAL rankings; dashboard rankings use the selected evaluation range.
 Stage-two candidates retain VAL-only evaluation; refit is followed by TEST.
 
 `artifacts.evaluation_trajectory.mode` controls retention for both passes
@@ -455,9 +456,9 @@ contain `evaluation_metrics_train.csv`, `evaluation_metrics_val.csv`,
 `evaluation_curves_train.png`, `evaluation_curves_val.png`, PPO training
 curves and `summary.json`. Each evaluation CSV includes all persisted columns.
 
-Dashboard Run Detail includes a checkpoint-paired TRAIN/VAL table and a scope
-selector for individual evaluation tables and sorted metric curves. The CLI
-lists scope alongside evaluation identity. Run rankings remain based on VAL.
+Dashboard Run Detail displays evaluation tables and sorted metric curves for
+the range selected with the global VAL / TRAIN control. The CLI
+lists scope alongside evaluation identity. Run rankings use the selected scope.
 
 Study artifacts are under `artifacts/walk_forward/<zero-padded-study-id>/`:
 
@@ -527,6 +528,19 @@ the current invocation.
 The Streamlit dashboard reads the registry through shared filters. Views include
 Run Explorer, Scatter Explorer, Activity Map, Pareto Explorer, Group Comparison
 and Run Detail. It is a presentation layer, not a source of truth.
+
+A global VAL / TRAIN segmented control (VAL by default) selects the evaluation
+range for all views, filters and headline metrics. Only one range is displayed
+at a time. Run summaries use completed final evaluations; missing results stay
+missing rather than falling back to another range or a scheduled evaluation.
+Run Detail includes intermediate evaluations of the selected range. PPO update
+diagnostics describe the same training process in both modes.
+
+Queue reports print TRAIN summary, ranking and winner before the corresponding
+VAL blocks, including summary-only and skip-existing invocations. Each range has
+its own final metrics and best observed score. Rankings remain ordered by final
+balanced_score. Missing final evaluations are excluded from rankings. These
+reports do not change checkpoint selection, early stopping or training behavior.
 
 A Pareto-optimal run is not dominated in both selected objectives. The front is
 recomputed after filtering. For signed drawdown, maximizing means moving toward

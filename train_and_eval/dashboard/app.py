@@ -190,8 +190,8 @@ def hover_format(
 
 
 @st.cache_data(ttl=30)
-def load_data() -> DashboardData:
-    return load_dashboard_data()
+def load_data(data_scope: str) -> DashboardData:
+    return load_dashboard_data(data_scope)
 
 
 def find_column(
@@ -1414,18 +1414,6 @@ def run_detail_tab(
             evaluations["run_id"] == run_id
         ].copy()
 
-        paired = run_evaluations.loc[run_evaluations["data_scope"].isin(["run_training", "run_validation"])].copy()
-        if not paired.empty:
-            paired["split"] = paired["data_scope"].map({"run_training": "train", "run_validation": "val"})
-            comparison_metrics = [name for name in numeric_columns(paired)
-                                  if name not in {"id", "checkpoint_id", "run_id", "seed"}]
-            comparison = paired.pivot_table(index="checkpoint_id", columns="split",
-                                           values=comparison_metrics, aggfunc="last")
-            comparison.columns = [f"{metric}_{split}" for metric, split in comparison.columns]
-            st.markdown("#### TRAIN / VAL by checkpoint")
-            st.dataframe(comparison.reset_index(), width="stretch", hide_index=True)
-        scope = st.selectbox("Evaluation scope", ["run_validation", "run_training", "custom_range", "extended_out_of_sample"])
-        run_evaluations = run_evaluations.loc[run_evaluations["data_scope"] == scope]
         st.dataframe(
             run_evaluations,
             width="stretch",
@@ -1545,8 +1533,24 @@ def run_detail_tab(
 
 st.title("PPO Experiment Dashboard")
 
+mode = st.segmented_control(
+    "Evaluation data",
+    options=["VAL", "TRAIN"],
+    default="VAL",
+    selection_mode="single",
+    key="evaluation_data_mode",
+)
+if mode is None:
+    mode = "VAL"
+data_scope = {"VAL": "run_validation", "TRAIN": "run_training"}[mode]
+st.caption(
+    f"{mode} mode · All evaluation views use this range. "
+    "Run summaries use completed final evaluations; Run Detail includes intermediate evaluations. "
+    "PPO update diagnostics are shared between modes."
+)
+
 try:
-    data = load_data()
+    data = load_data(data_scope)
 except Exception as exc:
     st.error("Could not load experiment database.")
     st.exception(exc)

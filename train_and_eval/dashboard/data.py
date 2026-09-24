@@ -125,9 +125,6 @@ def _attach_checkpoint_run_id(
     evaluations: pd.DataFrame,
     checkpoints: pd.DataFrame,
 ) -> pd.DataFrame:
-    if evaluations.empty:
-        return evaluations.copy()
-
     required_evaluation = {"checkpoint_id"}
     required_checkpoint = {"id", "run_id"}
 
@@ -163,35 +160,19 @@ def _attach_checkpoint_run_id(
 
 def _latest_final_evaluations(
     evaluations: pd.DataFrame,
+    data_scope: str = "run_validation",
 ) -> pd.DataFrame:
+    if data_scope not in {"run_training", "run_validation"}:
+        raise ValueError(f"Unsupported dashboard scope: {data_scope}")
     if evaluations.empty:
         return evaluations.copy()
 
-    frame = evaluations.copy()
-    if "data_scope" in frame.columns:
-        frame = frame.loc[frame["data_scope"] == "run_validation"].copy()
-
-    if "status" in frame.columns:
-        completed = (
-            frame["status"]
-            .astype(str)
-            .str.lower()
-            == "completed"
-        )
-
-        if completed.any():
-            frame = frame.loc[completed]
-
-    if "trigger" in frame.columns:
-        final = (
-            frame["trigger"]
-            .astype(str)
-            .str.lower()
-            == "final"
-        )
-
-        if final.any():
-            frame = frame.loc[final]
+    # Never substitute a scheduled, failed or opposite-scope evaluation.
+    frame = evaluations.loc[
+        (evaluations["data_scope"] == data_scope)
+        & (evaluations["status"] == "completed")
+        & (evaluations["trigger"] == "final")
+    ].copy()
 
     if "run_id" not in frame.columns:
         return frame
@@ -251,6 +232,7 @@ def _build_explorer(
     checkpoints: pd.DataFrame,
     evaluations: pd.DataFrame,
     training_metrics: pd.DataFrame,
+    data_scope: str = "run_validation",
 ) -> pd.DataFrame:
     if runs.empty:
         return pd.DataFrame()
@@ -296,13 +278,10 @@ def _build_explorer(
     )
 
     final_evaluations = _latest_final_evaluations(
-        attached_evaluations
+        attached_evaluations, data_scope
     )
 
-    if (
-        not final_evaluations.empty
-        and "run_id" in final_evaluations.columns
-    ):
+    if "run_id" in final_evaluations.columns:
         eval_frame = _prefix_columns(
             final_evaluations,
             "eval.",
@@ -338,7 +317,9 @@ def _build_explorer(
     return _convert_decimal_columns(explorer)
 
 
-def load_dashboard_data() -> DashboardData:
+def load_dashboard_data(data_scope: str = "run_validation") -> DashboardData:
+    if data_scope not in {"run_training", "run_validation"}:
+        raise ValueError(f"Unsupported dashboard scope: {data_scope}")
     engine = create_database_engine()
 
     try:
@@ -357,6 +338,8 @@ def load_dashboard_data() -> DashboardData:
     finally:
         engine.dispose()
 
+    evaluations = evaluations.loc[evaluations["data_scope"] == data_scope].copy()
+
     evaluations_with_run = _attach_checkpoint_run_id(
         evaluations,
         checkpoints,
@@ -367,6 +350,7 @@ def load_dashboard_data() -> DashboardData:
         checkpoints,
         evaluations,
         training_metrics,
+        data_scope,
     )
 
     return DashboardData(

@@ -738,6 +738,7 @@ def _db_int(value: str) -> int | None:
 
 def load_results_from_database(
     configs: list[ConfigMeta],
+    data_scope: str = "run_validation",
 ) -> list[RunResult]:
     """
     Load search results from PostgreSQL.
@@ -746,7 +747,11 @@ def load_results_from_database(
     Terminal output is presentation only.
     """
 
-    sql = """
+    if data_scope not in {"run_training", "run_validation"}:
+        raise ValueError(f"Unsupported summary scope: {data_scope}")
+
+    # Only the two validated literals above can be interpolated into SQL.
+    sql = f"""
 SELECT
     r.id,
     r.name,
@@ -787,7 +792,7 @@ LEFT JOIN LATERAL (
     WHERE
         c.run_id = r.id
         AND e.status = 'completed'
-        AND e.data_scope = 'run_validation'
+        AND e.data_scope = '{data_scope}'
         AND e.trigger = 'final'
     ORDER BY e.id DESC
     LIMIT 1
@@ -802,7 +807,7 @@ LEFT JOIN LATERAL (
     WHERE
         c.run_id = r.id
         AND e.status = 'completed'
-        AND e.data_scope = 'run_validation'
+        AND e.data_scope = '{data_scope}'
 ) AS best_eval ON TRUE
 
 LEFT JOIN LATERAL (
@@ -944,7 +949,7 @@ ORDER BY r.id;
     return results
 
 
-def print_summary(results: list[RunResult]) -> None:
+def print_summary(results: list[RunResult], *, scope_label: str = "VAL") -> None:
     if not results:
         print()
         print("No runs were executed.")
@@ -953,7 +958,7 @@ def print_summary(results: list[RunResult]) -> None:
     print()
     print()
     print("=" * 154)
-    print("FINAL SEARCH SUMMARY")
+    print(f"FINAL SEARCH SUMMARY | {scope_label}")
     print("=" * 154)
 
     header = (
@@ -1025,7 +1030,7 @@ def print_summary(results: list[RunResult]) -> None:
         )
 
         print()
-        print("RANKING BY FINAL balanced_score")
+        print(f"RANKING BY FINAL balanced_score | {scope_label}")
         print("-" * 92)
 
         for rank, result in enumerate(ranked, start=1):
@@ -1048,7 +1053,7 @@ def print_summary(results: list[RunResult]) -> None:
         winner = ranked[0]
 
         print()
-        print("WINNER")
+        print(f"WINNER | {scope_label}")
         print("-" * 92)
         print(f"Run:             #{winner.run_id}")
         print(f"Name:            {winner.config.name}")
@@ -1091,6 +1096,20 @@ def print_summary(results: list[RunResult]) -> None:
         )
 
     print()
+
+
+def print_train_then_val_summaries(
+    configs: list[ConfigMeta],
+    validation_results: list[RunResult],
+) -> None:
+    try:
+        training_results = load_results_from_database(configs, data_scope="run_training")
+    except Exception as exc:
+        # A missing TRAIN summary must not hide the existing VAL summary.
+        print(f"WARNING: TRAIN summary unavailable: {exc}")
+    else:
+        print_summary(training_results, scope_label="TRAIN")
+    print_summary(validation_results)
 
 
 def parse_args(
@@ -1194,7 +1213,7 @@ def main() -> int:
 
     if args.summary_only:
         database_results = load_results_from_database(configs)
-        print_summary(database_results)
+        print_train_then_val_summaries(configs, database_results)
         return 0
 
     if args.dry_run:
@@ -1268,7 +1287,7 @@ def main() -> int:
             "No selected configs remain after skipping existing "
             "runs. No training was started."
         )
-        print_summary(preflight_results)
+        print_train_then_val_summaries(configs, preflight_results)
         return 0
 
     results: list[RunResult] = []
@@ -1311,10 +1330,9 @@ def main() -> int:
             )
             print(exc)
             print()
-            print("Falling back to in-process parsed results.")
-            print_summary(results)
+            print("Scoped rankings unavailable; terminal output is not a substitute for persisted evaluations.")
         else:
-            print_summary(database_results)
+            print_train_then_val_summaries(configs, database_results)
 
     failed = any(
         result.status != "COMPLETED"

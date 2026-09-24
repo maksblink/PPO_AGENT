@@ -352,8 +352,8 @@ def test_fixture_queue_dry_run_never_touches_database_or_training(monkeypatch, c
 def test_fixture_queue_execution_order_and_stop_on_failure(monkeypatch, failure_at):
     monkeypatch.setattr(queue.sys, "argv", ["run_search_queue.py", "--queue", "test_sequence"])
     monkeypatch.setattr(queue, "assert_git_clean", lambda: None)
-    monkeypatch.setattr(queue, "load_results_from_database", lambda configs: [])
-    monkeypatch.setattr(queue, "print_summary", lambda results: None)
+    monkeypatch.setattr(queue, "load_results_from_database", lambda configs, **kwargs: [])
+    monkeypatch.setattr(queue, "print_summary", lambda results, **kwargs: None)
     calls = []
     def run(**kwargs):
         calls.append(kwargs["config"].path.relative_to(queue.ROOT).as_posix())
@@ -363,3 +363,85 @@ def test_fixture_queue_execution_order_and_stop_on_failure(monkeypatch, failure_
     assert queue.main() == (1 if failure_at else 0)
     expected = queue.load_queue_config_paths("test_sequence")
     assert calls == (expected[:failure_at] if failure_at else expected)
+
+
+@pytest.mark.parametrize("scope", ["run_training", "run_validation"])
+def test_summary_database_query_is_scoped_for_final_and_best(monkeypatch, scope):
+    from types import SimpleNamespace
+    config = queue.read_config_meta(queue.load_queue_config_paths("test_sequence")[0])
+    def query(command, **kwargs):
+        sql = command[-1]
+        assert sql.count(f"e.data_scope = '{scope}'") == 2
+        assert "e.trigger = 'final'" in sql
+        fields = ["11", config.name, "completed", "12", ".2", ".3", "-.1",
+                  "1.1", ".5", ".6", "10", ".4", ".7", ".01", ".02", "-.1", ".5"]
+        return SimpleNamespace(returncode=0, stdout="\t".join(fields), stderr="")
+    monkeypatch.setattr(queue.subprocess, "run", query)
+    result = queue.load_results_from_database([config], data_scope=scope)[0]
+    assert result.agent_return == .3
+    assert result.best_score == .7
+
+
+def test_train_rankings_before_val_and_independent_winners(monkeypatch, capsys):
+    configs = [queue.read_config_meta(p) for p in queue.load_queue_config_paths("test_sequence")[:2]]
+    def results(scores):
+        return [queue.RunResult(queue_index=i, config=config, run_id=i,
+                status="COMPLETED", balanced_score=score, agent_return=score)
+                for i, (config, score) in enumerate(zip(configs, scores), start=1)]
+    monkeypatch.setattr(queue, "load_results_from_database", lambda configs, **kwargs: results([.8, -.5]))
+    queue.print_train_then_val_summaries(configs, results([-.3, .4]))
+    output = capsys.readouterr().out
+    train, val = output.split("FINAL SEARCH SUMMARY | VAL")
+    assert "RANKING BY FINAL balanced_score | TRAIN" in train
+    assert "WINNER | TRAIN" in train
+    assert "Run:             #1" in train
+    assert "Run:             #2" in val
+    assert "RANKING BY FINAL balanced_score | VAL" in val
+
+
+def test_missing_train_does_not_rank_val_as_train(monkeypatch, capsys):
+    config = queue.read_config_meta(queue.load_queue_config_paths("test_sequence")[0])
+    missing = queue.RunResult(queue_index=1, config=config, run_id=1, status="COMPLETED")
+    monkeypatch.setattr(queue, "load_results_from_database", lambda configs, **kwargs: [missing])
+    queue.print_train_then_val_summaries([config], [missing])
+    output = capsys.readouterr().out
+    assert "FINAL SEARCH SUMMARY | TRAIN" in output
+    assert "FINAL SEARCH SUMMARY | VAL" in output
+    assert "WINNER" not in output
+
+
+def test_train_query_failure_preserves_val_summary(monkeypatch, capsys):
+    def fail(*args, **kwargs):
+        raise RuntimeError("database unavailable")
+    monkeypatch.setattr(queue, "load_results_from_database", fail)
+    config = queue.read_config_meta(queue.load_queue_config_paths("test_sequence")[0])
+    queue.print_train_then_val_summaries([config], [queue.RunResult(queue_index=1, config=config)])
+    output = capsys.readouterr().out
+    assert "TRAIN summary unavailable" in output
+    assert "FINAL SEARCH SUMMARY | VAL" in output
+
+
+@pytest.mark.parametrize("summary_only", [True, False])
+def test_summary_only_and_skip_existing_print_both_scopes(monkeypatch, capsys, summary_only):
+    args = ["run_search_queue.py", "--queue", "test_sequence",
+            "--summary-only" if summary_only else "--skip-existing"]
+    monkeypatch.setattr(queue.sys, "argv", args)
+    monkeypatch.setattr(queue, "assert_git_clean", lambda: None)
+    scopes = []
+    def load(configs, data_scope="run_validation"):
+        scopes.append(data_scope)
+        return [queue.RunResult(queue_index=i, config=config, run_id=i,
+                status="COMPLETED", balanced_score=.1)
+                for i, config in enumerate(configs, start=1)]
+    monkeypatch.setattr(queue, "load_results_from_database", load)
+    monkeypatch.setattr(queue, "run_config", lambda **kwargs: pytest.fail("must not train"))
+    assert queue.main() == 0
+    output = capsys.readouterr().out
+    assert scopes == ["run_validation", "run_training"]
+    assert output.index("WINNER | TRAIN") < output.index("FINAL SEARCH SUMMARY | VAL")
+
+
+def test_summary_scope_is_validated_before_database_access(monkeypatch):
+    monkeypatch.setattr(queue.subprocess, "run", lambda *a, **k: pytest.fail("must not query"))
+    with pytest.raises(ValueError, match="Unsupported summary scope"):
+        queue.load_results_from_database([], data_scope="unknown")

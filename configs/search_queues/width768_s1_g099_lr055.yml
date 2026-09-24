@@ -1,7 +1,0 @@
-queue_schema_version: 1
-name: width768_s1_g099_lr055
-configs:
-- configs/stage_one/width768_seed1_g099/fresh_055_s1_g099_w768.yml
-- configs/stage_one/width768_seed1_g099/resume_055_s1_g099_w768.yml
-- configs/stage_one/width768_seed1_g099/resume_v2_055_s1_g099_w768.yml
-- configs/stage_one/width768_seed1_g099/resume_v3_055_s1_g099_w768.yml

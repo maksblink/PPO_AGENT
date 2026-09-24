@@ -1,9 +1,0 @@
-queue_schema_version: 1
-name: way_S_s2
-configs:
-- configs/stage_one/way_S_seed2/way_S0_1__085_s2/fresh_S0_085_s2.yml
-- configs/stage_one/way_S_seed2/way_S0_1__085_s2/resume_S1_085_s2.yml
-- configs/stage_one/way_S_seed2/way_S2_3__045_s2/resume_S2_045_s2.yml
-- configs/stage_one/way_S_seed2/way_S2_3__045_s2/resume_S3_045_s2.yml
-- configs/stage_one/way_S_seed2/way_S4__0225_s2/resume_S4_0225_s2.yml
-- configs/stage_one/way_S_seed2/way_S5__0125_s2/resume_S5_0125_s2.yml

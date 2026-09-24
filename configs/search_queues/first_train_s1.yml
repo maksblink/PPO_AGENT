@@ -31,3 +31,9 @@ configs:
 - configs/stage_one/first_train_seed1_g099/resume_v1_seed1/resume_075_s1_g099.yml
 - configs/stage_one/first_train_seed1_g099/resume_v1_seed1/resume_085_s1_g099.yml
 - configs/stage_one/first_train_seed1_g099/resume_v1_seed1/resume_095_s1_g099.yml
+- configs/stage_one/first_train_seed1/fresh_045_s1.yml
+- configs/stage_one/first_train_seed1/resume_v1_seed1/resume_045_s1.yml
+- configs/stage_one/first_train_seed1_g095/fresh_045_s1_g095.yml
+- configs/stage_one/first_train_seed1_g095/resume_v1_seed1/resume_045_s1_g095.yml
+- configs/stage_one/first_train_seed1_g099/fresh_045_s1_g099.yml
+- configs/stage_one/first_train_seed1_g099/resume_v1_seed1/resume_045_s1_g099.yml

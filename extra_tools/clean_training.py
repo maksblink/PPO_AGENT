@@ -295,7 +295,7 @@ def finish_pending(connection, root, identity):
     print('Pending cleanup recovered: ' + ('artifacts restored (database rollback).' if existing else 'artifact deletion completed.'))
 
 
-def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm=input):
+def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm=input, validate_plan=None):
     root = Path(root).resolve()
     # Identity contains no credentials; it also distinguishes test schemas.
     with engine.connect() as connection:
@@ -310,6 +310,8 @@ def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm
                     return False
                 finish_pending(connection, root, identity)
             plan = make_plan(connection, root, mode, run_ids, study_ids)
+            if validate_plan is not None:
+                validate_plan(connection, plan)
             print(json.dumps(plan, indent=2))
             print(f'Database: {identity[0]}; schema: {identity[1]}; project: {root}')
             if dry_run or not (plan['run_ids'] or plan['study_ids'] or plan['orphan_paths'] or plan['sequence_resets']):

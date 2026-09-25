@@ -75,8 +75,23 @@ even if that directory is absent or empty. Discovery accepts `.yml` and `.yaml`,
 rejects duplicate names and reports available names for an unknown selection.
 
 Queue execution is sequential and separate from stage-two grid search. Training
-stops at the first failed child; an existing run is not retrained or resumed
-automatically by the queue runner.
+stops at the first failed child. Before each selected entry, the queue reads its
+current database status. Completed runs (including successful early stopping)
+are skipped automatically. Other existing runs display their identity, status,
+progress, timestamps, error, checkpoint/evaluation IDs and artifact directory.
+Exact uppercase decisions are YES (delete this run and execute its config again),
+SKIP (preserve it and continue), or STOP (preserve it and stop the queue).
+Other input repeats the question; EOF or interruption acts as STOP.
+
+Deletion reuses transactional cleanup and its durable artifact journal. It covers
+only the confirmed run and its checkpoints, evaluations, training metrics and
+artifact directory. The configured fresh/resume source is retained, and a new
+run ID is allocated without resetting sequences. Retained descendants, active
+work, changed records, or an unresolved cleanup journal block the restart.
+A running status cannot establish whether a worker is alive: running records
+must be stopped/resolved before deletion. No dependent runs are deleted implicitly.
+A skipped parent is not repaired; subsequent resume still requires a usable source.
+The obsolete skip-existing switch is removed: completed-run skipping is automatic.
 
 ## Runtime and reproducibility
 
@@ -89,8 +104,8 @@ credentials belong in the ignored `.env` or process environment.
 
 Training and historical replay require a clean Git worktree. Code commit, branch,
 raw YAML, normalized configuration and their hashes are persisted with each run.
-`run.name` is globally unique. An existing name is a conflict, even if its earlier
-run failed or stopped early.
+`run.name` is globally unique. Direct training rejects an existing name. The queue
+skips completed names and offers explicit cleanup/retry for incomplete runs.
 
 Checkpoints are immutable. Metadata contains path, SHA-256, size, local run step
 and complete model-history step. Replay verifies the saved checkpoint and dataset
@@ -233,8 +248,8 @@ other fixed identity settings. `run_step` is local to the creating run;
 Optional queue manifests use `queue_schema_version: 1`, a name matching their
 filename and an ordered list of config paths. Positions are one-based and stable;
 duplicate paths are rejected. Selected configs execute sequentially in manifest
-order. Existing run names are detected before training, and a failed child stops
-the queue. Queue summaries are rebuilt from persisted metrics. Queues compare
+order. Each entry is checked against the database immediately before execution,
+and a failed child stops the queue. Queue summaries are rebuilt from persisted metrics. Queues compare
 independent runs; they do not implement walk-forward acceptance.
 
 ## Two-stage workflow
@@ -537,7 +552,7 @@ Run Detail includes intermediate evaluations of the selected range. PPO update
 diagnostics describe the same training process in both modes.
 
 Queue reports print TRAIN summary, ranking and winner before the corresponding
-VAL blocks, including summary-only and skip-existing invocations. Each range has
+VAL blocks, including summary-only and automatic-skip invocations. Each range has
 its own final metrics and best observed score. Rankings remain ordered by final
 balanced_score. Missing final evaluations are excluded from rankings. These
 reports do not change checkpoint selection, early stopping or training behavior.

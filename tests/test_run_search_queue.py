@@ -202,7 +202,7 @@ def test_find_existing_selected_runs_uses_database_status() -> None:
     ) == [(1, first, completed)]
 
 
-def test_main_preflight_blocks_existing_run_before_training(
+def test_main_automatically_skips_completed_run(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -254,7 +254,7 @@ def test_main_preflight_blocks_existing_run_before_training(
     monkeypatch.setattr(
         queue,
         "load_results_from_database",
-        lambda configs: [existing],
+        lambda configs, **kwargs: [existing],
     )
 
     def fail_if_started(**kwargs):
@@ -262,10 +262,10 @@ def test_main_preflight_blocks_existing_run_before_training(
 
     monkeypatch.setattr(queue, "run_config", fail_if_started)
 
-    assert queue.main() == 2
+    assert queue.main() == 0
     output = capsys.readouterr().out
-    assert "QUEUE PREFLIGHT FAILED" in output
-    assert "run=#84" in output
+    assert "SKIP completed" in output
+    assert "run #84" in output
 
 
 @pytest.mark.parametrize("directory_exists", [False, True])
@@ -422,9 +422,10 @@ def test_train_query_failure_preserves_val_summary(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("summary_only", [True, False])
-def test_summary_only_and_skip_existing_print_both_scopes(monkeypatch, capsys, summary_only):
-    args = ["run_search_queue.py", "--queue", "test_sequence",
-            "--summary-only" if summary_only else "--skip-existing"]
+def test_summary_only_and_automatic_skip_print_both_scopes(monkeypatch, capsys, summary_only):
+    args = ["run_search_queue.py", "--queue", "test_sequence"]
+    if summary_only:
+        args.append("--summary-only")
     monkeypatch.setattr(queue.sys, "argv", args)
     monkeypatch.setattr(queue, "assert_git_clean", lambda: None)
     scopes = []
@@ -437,7 +438,7 @@ def test_summary_only_and_skip_existing_print_both_scopes(monkeypatch, capsys, s
     monkeypatch.setattr(queue, "run_config", lambda **kwargs: pytest.fail("must not train"))
     assert queue.main() == 0
     output = capsys.readouterr().out
-    assert scopes == ["run_validation", "run_training"]
+    assert scopes == ["run_validation"] * (1 if summary_only else 13) + ["run_training"]
     assert output.index("WINNER | TRAIN") < output.index("FINAL SEARCH SUMMARY | VAL")
 
 

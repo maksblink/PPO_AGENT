@@ -1157,15 +1157,6 @@ def parse_args(
     )
 
     parser.add_argument(
-        "--skip-existing",
-        action="store_true",
-        help=(
-            "Skip selected configs whose run names are already "
-            "registered in PostgreSQL."
-        ),
-    )
-
-    parser.add_argument(
         "--summary-only",
         action="store_true",
         help=(
@@ -1186,6 +1177,83 @@ def parse_args(
             f"Available queues: {', '.join(manifests)}"
         )
     return args
+
+
+
+def prompt_restart_choice():
+    while True:
+        try:
+            answer = input("Type YES to delete this run and rerun its config, SKIP to keep it, or STOP: ")
+        except (EOFError, KeyboardInterrupt):
+            print("Input interrupted; treating as STOP.")
+            return "STOP"
+        if answer in {"YES", "SKIP", "STOP"}:
+            return answer
+        print("Invalid answer. Enter exactly YES, SKIP or STOP (uppercase, no extra spaces).")
+
+
+def inspect_incomplete_run(engine, run_id, name):
+    from sqlalchemy import select
+    from train_and_eval.database.models import Run, Checkpoint, Evaluation, TrainingMetric
+    with engine.connect() as connection:
+        run = connection.execute(select(Run.__table__).where(Run.id == run_id)).mappings().one()
+        if run['name'] != name:
+            raise ValueError("Run identity changed; nothing deleted")
+        checkpoints = connection.execute(select(Checkpoint.id).where(Checkpoint.run_id == run_id)).scalars().all()
+        evaluations = connection.execute(select(Evaluation.id).where(Evaluation.checkpoint_id.in_(checkpoints))).scalars().all()
+        from sqlalchemy import func
+        metrics = connection.scalar(select(func.count()).select_from(TrainingMetric).where(TrainingMetric.run_id == run_id))
+        snapshot = dict(run)
+        print(f"\nEXISTING INCOMPLETE RUN #{run_id}: {name}")
+        for field in ('status', 'continuation_mode', 'source_checkpoint_id', 'created_at',
+                      'started_at', 'finished_at', 'modified_at', 'training_steps_completed',
+                      'training_steps_requested', 'error_type', 'error_message'):
+            v = run[field]
+            print(f"  {field}: {getattr(v, 'value', v)}")
+        print(f"  checkpoints: {checkpoints}\n  evaluations: {evaluations}\n  training_metrics: {metrics}")
+        print(f"  artifact directory: {ROOT / 'artifacts' / 'runs' / f'{run_id:08d}'}")
+        print("YES removes only this run, its checkpoints, evaluations, training metrics and artifact directory.")
+        print("The same config runs again from its configured fresh/resume source, with a new run ID.")
+        print("Active work or retained descendants block deletion; no ID sequences are reset.")
+        return snapshot
+
+
+def delete_incomplete_run(engine, config, snapshot):
+    from sqlalchemy import select
+    from extra_tools.clean_training import cleanup
+    from train_and_eval.database.models import Run
+    run_id = snapshot['id']
+    def validate(connection, plan):
+        run = connection.execute(select(Run.__table__).where(Run.id == run_id)).mappings().one()
+        if dict(run) != snapshot or run['name'] != config.name:
+            raise ValueError("Run changed since the confirmation preview; nothing deleted. Run the queue again.")
+        status = getattr(run['status'], 'value', run['status'])
+        if status not in {'pending', 'failed', 'cancelled'}:
+            raise ValueError(f"Cannot delete run in status {status}; stop/resolve active work first")
+        if plan['run_ids'] != [run_id] or plan['study_ids'] or plan['cycle_ids'] or plan['sequence_resets']:
+            raise ValueError("Cleanup scope exceeds the confirmed run; nothing deleted")
+    def confirmed(prompt):
+        # Authorization applies only to this run, never to another pending cleanup.
+        if prompt.startswith('Type SURE to apply'):
+            return 'SURE'
+        raise ValueError("Pending cleanup requires recovery with extra_tools/clean_training.py before queue execution")
+    if not cleanup(engine, ROOT, 'clean-first-stage', run_ids=[run_id],
+                   confirm=confirmed, validate_plan=validate):
+        raise ValueError("Cleanup was not completed; the run will not restart")
+
+
+def handle_incomplete_run(config, run_id):
+    from train_and_eval.database.session import create_database_engine
+    engine = create_database_engine()
+    try:
+        snapshot = inspect_incomplete_run(engine, run_id, config.name)
+        print(f"  restart config: {config.path}")
+        choice = prompt_restart_choice()
+        if choice == 'YES':
+            delete_incomplete_run(engine, config, snapshot)
+        return choice
+    finally:
+        engine.dispose()
 
 
 def main() -> int:
@@ -1231,64 +1299,7 @@ def main() -> int:
 
     assert_git_clean()
 
-    preflight_results = load_results_from_database(configs)
-    existing = find_existing_selected_runs(
-        selected,
-        preflight_results,
-    )
-
-    if existing and not args.skip_existing:
-        print_queue(
-            args.queue,
-            configs,
-            selected_positions,
-        )
-        print_existing_selected_runs(existing)
-        print()
-        print(
-            "QUEUE PREFLIGHT FAILED: no training was started."
-        )
-        print(
-            "Choose configs that are not registered, or pass "
-            "--skip-existing to run only missing selections."
-        )
-        return 2
-
-    if existing:
-        print_existing_selected_runs(existing)
-        print()
-        print(
-            f"Skipping {len(existing)} existing selected "
-            f"config(s)."
-        )
-
-        existing_names = {
-            config.name
-            for _, config, _ in existing
-        }
-        selected = [
-            (position, config)
-            for position, config in selected
-            if config.name not in existing_names
-        ]
-        selected_positions = {
-            position
-            for position, _ in selected
-        }
-
-    print_queue(
-        args.queue,
-        configs,
-        selected_positions,
-    )
-
-    if not selected:
-        print(
-            "No selected configs remain after skipping existing "
-            "runs. No training was started."
-        )
-        print_train_then_val_summaries(configs, preflight_results)
-        return 0
+    print_queue(args.queue, configs, selected_positions)
 
     results: list[RunResult] = []
 
@@ -1297,6 +1308,19 @@ def main() -> int:
             queue_position,
             config,
         ) in enumerate(selected, start=1):
+            current = next((r for r in load_results_from_database([config])
+                            if r.config.name == config.name and r.status != "NOT_FOUND"), None)
+            if current is not None:
+                if current.status == "COMPLETED":
+                    print(f"SKIP completed: position {queue_position}, run #{current.run_id}, {config.name}")
+                    continue
+                decision = handle_incomplete_run(config, current.run_id)
+                if decision == "STOP":
+                    print("Queue stopped by user; existing run was preserved.")
+                    break
+                if decision == "SKIP":
+                    print(f"SKIP unchanged: run #{current.run_id}, {config.name}")
+                    continue
             result = run_config(
                 queue_name=args.queue,
                 queue_position=queue_position,
@@ -1316,10 +1340,12 @@ def main() -> int:
                 )
                 break
 
-    except KeyboardInterrupt:
-        print()
-        print("Queue interrupted.")
-
+    except (KeyboardInterrupt, EOFError):
+        print("Queue interrupted; no further run will start.")
+        return 130
+    except Exception as error:
+        print(f"QUEUE STOPPED: {error}")
+        return 1
     finally:
         try:
             database_results = load_results_from_database(configs)

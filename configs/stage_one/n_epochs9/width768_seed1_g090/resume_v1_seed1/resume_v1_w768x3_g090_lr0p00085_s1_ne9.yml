@@ -1,0 +1,84 @@
+config_schema_version: 1
+run:
+  name: resume_085_s1_w768_ne9
+  seed: 1
+continuation:
+  mode: resume
+  source_run: fresh_085_s1_w768_ne9
+  checkpoint: final
+data:
+  path: data/NQ_CONTINUOUS_5m_WEEKDAYS_2010-06-07_00-00_2026-09-08_23-55_20260909_163317.parquet
+  train_range:
+    start: '2010-06-07T00:00:00+00:00'
+    end: '2019-10-21T00:00:00+00:00'
+  validation_range:
+    start: '2019-10-21T00:00:00+00:00'
+    end: '2020-11-09T00:00:00+00:00'
+  alignment: trim_start
+training:
+  duration_unit: data_epochs
+  duration_amount: 1
+environment:
+  window: 40
+  context: baseline_multiscale_v1
+  position_side: long_only
+  market_timezone: America/New_York
+  rth_open: 09:30
+  rth_close: '16:00'
+  stake_pln: 1000.0
+  fee_bps: 0.2
+  swap_long_bps: 2.12
+  swap_short_bps: 0.11
+  swap_time: '17:00'
+  swap_timezone: America/New_York
+  force_close_on_done: true
+  reward_scale: 1.0
+  exposure_penalty: 0.0
+  turnover_penalty: 0.0
+  drawdown_penalty: 0.0
+  profit_reward_mult: 1.0
+  loss_reward_mult: 1.0
+ppo:
+  policy: mlp
+  device: cuda
+  hidden_sizes:
+  - 768
+  - 768
+  - 768
+  activation: tanh
+  n_steps: 1024
+  batch_size: 256
+  n_epochs: 9
+  learning_rate: 0.00085
+  gamma: 0.9
+  gae_lambda: 0.85
+  clip_range: 0.2
+  clip_range_vf: null
+  normalize_advantage: true
+  ent_coef: 0.0002
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: null
+  value_head_init_scale: 0.003
+  initial_long_probability: 0.55
+evaluation:
+  eval_every_steps: 638976
+  checkpoint_every_steps: 638976
+  policy_mode: deterministic_argmax
+  threshold_action: null
+  probability_threshold: null
+  best_metric: balanced_score
+  early_stop_patience_evals: 5
+  device: cpu
+  training_mode: scheduled
+logging:
+  training_progress_every_steps: 1024
+  validation_progress_every_steps: 1024
+artifacts:
+  training_metrics:
+    enabled: true
+    every_steps: 1024
+  evaluation_trajectory:
+    mode: all
+  plots:
+    during_run: true

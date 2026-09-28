@@ -551,11 +551,25 @@ missing rather than falling back to another range or a scheduled evaluation.
 Run Detail includes intermediate evaluations of the selected range. PPO update
 diagnostics describe the same training process in both modes.
 
-Queue reports print TRAIN summary, ranking and winner before the corresponding
-VAL blocks, including summary-only and automatic-skip invocations. Each range has
-its own final metrics and best observed score. Rankings remain ordered by final
-balanced_score. Missing final evaluations are excluded from rankings. These
-reports do not change checkpoint selection, early stopping or training behavior.
+Queue reports print a full TRAIN table and a compact TRAIN ranking, followed by
+matching VAL blocks. Separate winner blocks are not printed. Full tables include
+seed, hidden-layer widths, PPO epochs, cumulative data epochs along the selected
+checkpoint lineage, configuration fields, final evaluation metrics, best observed
+score, always-long return, latest PPO diagnostics, run duration and status. Run
+names appear only in rankings. Rankings contain run ID, full name, return and
+maximum drawdown, ordered by final balanced_score without displaying that score
+again. Only completed runs with a final score enter the ranking.
+
+The `data_ep` column sums the current run's completed data epochs and actual
+source-checkpoint steps divided by their respective epoch lengths. It includes
+ancestors outside the queue and does not assume that a source checkpoint is the
+parent's final checkpoint. Different data definitions or epoch lengths, missing
+ancestors and cyclic lineage are displayed as unknown (`-`). Thus it represents
+equivalent data passes, not simply continuation depth. `ppo_ep` is PPO n_epochs.
+TRAIN and VAL retain independent final metrics and best scores; training
+diagnostics and run metadata describe the same run in both tables. Summary-only
+and automatic-skip invocations use the same presentation. Reporting does not
+change checkpoint selection, early stopping or training behavior.
 
 A Pareto-optimal run is not dominated in both selected objectives. The front is
 recomputed after filtering. For signed drawdown, maximizing means moving toward

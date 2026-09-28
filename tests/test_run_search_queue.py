@@ -374,7 +374,7 @@ def test_summary_database_query_is_scoped_for_final_and_best(monkeypatch, scope)
         assert sql.count(f"e.data_scope = '{scope}'") == 2
         assert "e.trigger = 'final'" in sql
         fields = ["11", config.name, "completed", "12", ".2", ".3", "-.1",
-                  "1.1", ".5", ".6", "10", ".4", ".7", ".01", ".02", "-.1", ".5"]
+                  "1.1", ".5", ".6", "10", ".4", ".7", ".01", ".02", "-.1", ".5", '{"seed": 1, "hidden_sizes": [384,384,384], "epochs": 1, "steps_per_epoch": 100, "data": {}, "source_run_id": null, "source_steps": null}']
         return SimpleNamespace(returncode=0, stdout="\t".join(fields), stderr="")
     monkeypatch.setattr(queue.subprocess, "run", query)
     result = queue.load_results_from_database([config], data_scope=scope)[0]
@@ -393,9 +393,19 @@ def test_train_rankings_before_val_and_independent_winners(monkeypatch, capsys):
     output = capsys.readouterr().out
     train, val = output.split("FINAL SEARCH SUMMARY | VAL")
     assert "RANKING BY FINAL balanced_score | TRAIN" in train
-    assert "WINNER | TRAIN" in train
-    assert "Run:             #1" in train
-    assert "Run:             #2" in val
+    assert "WINNER" not in output
+    train_ranking = train.split("RANKING BY FINAL balanced_score | TRAIN", 1)[1]
+    train_ids = [
+        line.split()[1] for line in train_ranking.splitlines()
+        if len(line.split()) >= 2 and line.split()[0].isdigit()
+    ]
+    assert train_ids == ["#1", "#2"]
+    val_ranking = val.split("RANKING BY FINAL balanced_score | VAL", 1)[1]
+    val_ids = [
+        line.split()[1] for line in val_ranking.splitlines()
+        if len(line.split()) >= 2 and line.split()[0].isdigit()
+    ]
+    assert val_ids == ["#2", "#1"]
     assert "RANKING BY FINAL balanced_score | VAL" in val
 
 
@@ -439,7 +449,7 @@ def test_summary_only_and_automatic_skip_print_both_scopes(monkeypatch, capsys, 
     assert queue.main() == 0
     output = capsys.readouterr().out
     assert scopes == ["run_validation"] * (1 if summary_only else 13) + ["run_training"]
-    assert output.index("WINNER | TRAIN") < output.index("FINAL SEARCH SUMMARY | VAL")
+    assert output.index("RANKING BY FINAL balanced_score | TRAIN") < output.index("FINAL SEARCH SUMMARY | VAL")
 
 
 def test_summary_scope_is_validated_before_database_access(monkeypatch):

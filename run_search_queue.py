@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -68,6 +69,7 @@ class ConfigMeta:
     gae_lambda: float
     ent_coef: float
     exposure_penalty: float
+    hidden_sizes: tuple[int, ...] = ()
 
 
 @dataclass
@@ -99,6 +101,9 @@ class RunResult:
     explained_variance: float | None = None
 
     wall_seconds: float | None = None
+    seed: int | None = None
+    hidden_sizes: tuple[int, ...] = ()
+    chain_data_epochs: float | None = None
 
 
 def discover_queue_manifests() -> dict[str, Path]:
@@ -458,6 +463,7 @@ def read_config_meta(relative_path: str) -> ConfigMeta:
         gae_lambda=gae_lambda,
         ent_coef=ent_coef,
         exposure_penalty=exposure_penalty,
+        hidden_sizes=tuple(yaml.safe_load(text)["ppo"]["hidden_sizes"]),
     )
 
 
@@ -772,9 +778,19 @@ SELECT
     latest_tm.approx_kl,
     latest_tm.clip_fraction,
     latest_tm.entropy_loss,
-    latest_tm.explained_variance
+    latest_tm.explained_variance,
+    json_build_object(
+        'seed', r.seed,
+        'hidden_sizes', r.normalized_config_json->'ppo'->'hidden_sizes',
+        'data', r.normalized_config_json->'data',
+        'steps_per_epoch', r.steps_per_data_epoch,
+        'epochs', r.data_epochs_completed,
+        'source_run_id', source_cp.run_id,
+        'source_steps', source_cp.run_step
+    )::text
 
 FROM runs AS r
+LEFT JOIN checkpoints AS source_cp ON source_cp.id = r.source_checkpoint_id
 
 LEFT JOIN LATERAL (
     SELECT
@@ -868,6 +884,7 @@ ORDER BY r.id;
     }
 
     result_by_name: dict[str, RunResult] = {}
+    snapshots: dict[int, dict] = {}
 
     for raw_line in completed.stdout.splitlines():
         if not raw_line.strip():
@@ -875,10 +892,10 @@ ORDER BY r.id;
 
         fields = raw_line.split("\t")
 
-        if len(fields) != 17:
+        if len(fields) != 18:
             raise RuntimeError(
                 "Unexpected PostgreSQL result shape: "
-                f"expected 17 fields, got {len(fields)}\n"
+                f"expected 18 fields, got {len(fields)}\n"
                 f"{raw_line}"
             )
 
@@ -900,7 +917,10 @@ ORDER BY r.id;
             clip_fraction,
             entropy_loss,
             explained_variance,
+            metadata,
         ) = fields
+        snapshot = json.loads(metadata)
+        snapshots[int(run_id)] = snapshot
 
         config_entry = config_by_name.get(run_name)
 
@@ -930,6 +950,8 @@ ORDER BY r.id;
             entropy_loss=_db_float(entropy_loss),
             explained_variance=_db_float(explained_variance),
             wall_seconds=_db_float(wall_seconds),
+            seed=int(snapshot["seed"]),
+            hidden_sizes=tuple(snapshot["hidden_sizes"] or []),
         )
 
     results: list[RunResult] = []
@@ -944,157 +966,105 @@ ORDER BY r.id;
                 status="NOT_FOUND",
             )
 
+        if result.run_id is not None:
+            result.chain_data_epochs = resolve_chain_data_epochs(result.run_id, snapshots)
         results.append(result)
 
     return results
 
 
+def resolve_chain_data_epochs(run_id: int, snapshots: dict[int, dict]) -> float | None:
+    """Actual equivalent data passes through the selected checkpoint ancestry.
+
+    Different data definitions or epoch lengths are not comparable. Missing
+    ancestry and cycles remain unknown rather than guessing from run names.
+    """
+    origin = snapshots[run_id]
+    current = origin
+    total = float(origin["epochs"])
+    seen = {run_id}
+    while current["source_run_id"] is not None:
+        parent_id = int(current["source_run_id"])
+        parent = snapshots.get(parent_id)
+        if parent is None or parent_id in seen:
+            return None
+        if (parent["data"] != origin["data"] or
+                parent["steps_per_epoch"] != origin["steps_per_epoch"]):
+            return None
+        if not parent["steps_per_epoch"] or current["source_steps"] is None:
+            return None
+        total += float(current["source_steps"]) / parent["steps_per_epoch"]
+        seen.add(parent_id)
+        current = parent
+    return total
+
+
 def print_summary(results: list[RunResult], *, scope_label: str = "VAL") -> None:
     if not results:
-        print()
-        print("No runs were executed.")
+        print("\nNo runs were executed.")
         return
 
-    print()
-    print()
-    print("=" * 154)
-    print(f"FINAL SEARCH SUMMARY | {scope_label}")
-    print("=" * 154)
+    headers = ["#", "run", "seed", "architecture", "data_ep", "ppo_ep",
+               "LR", "gamma", "GAE", "ent", "exp_pen", "score", "return",
+               "maxDD", "PF", "win", "exposure", "trips", "best", "long",
+               "KL", "clip", "entropy", "expl_var", "time", "status"]
+    rows = []
+    for r in results:
+        rows.append([
+            str(r.queue_index), str(r.run_id or "-"),
+            str(r.seed if r.seed is not None else r.config.seed),
+            "x".join(map(str, r.hidden_sizes or r.config.hidden_sizes)) or "-",
+            format_float(r.chain_data_epochs, 3), str(r.config.n_epochs),
+            f"{r.config.learning_rate:.6f}", f"{r.config.gamma:.3f}",
+            f"{r.config.gae_lambda:.3f}", f"{r.config.ent_coef:.2e}",
+            f"{r.config.exposure_penalty:.2e}",
+            format_float(r.balanced_score, 5), format_percent(r.agent_return),
+            format_percent(r.max_drawdown), format_float(r.profit_factor, 3),
+            format_percent(r.win_rate), format_percent(r.exposure),
+            str(r.round_trips) if r.round_trips is not None else "-",
+            format_float(r.best_score, 5), format_percent(r.always_long),
+            format_scientific(r.approx_kl, 3), format_float(r.clip_fraction, 4),
+            format_float(r.entropy_loss, 5), format_float(r.explained_variance, 5),
+            format_seconds(r.wall_seconds), r.status,
+        ])
+    widths = [max(len(h), *(len(row[i]) for row in rows)) for i, h in enumerate(headers)]
+    def line(values):
+        return "  ".join(value.rjust(width) for value, width in zip(values, widths))
+    print(f"\n\nFINAL SEARCH SUMMARY | {scope_label}")
+    print("data_ep: cumulative data passes through selected checkpoints; - means unknown/incomparable.")
+    print("ppo_ep: PPO n_epochs; architecture: hidden layer widths.")
+    print(line(headers))
+    print("-" * len(line(headers)))
+    for row in rows:
+        print(line(row))
 
-    header = (
-        f"{'#':>3} "
-        f"{'run':>4} "
-        f"{'ep':>3} "
-        f"{'LR':>9} "
-        f"{'gamma':>6} "
-        f"{'GAE':>6} "
-        f"{'ent':>9} "
-        f"{'exp_pen':>9} "
-        f"{'score':>10} "
-        f"{'return':>9} "
-        f"{'maxDD':>9} "
-        f"{'PF':>8} "
-        f"{'win':>8} "
-        f"{'exposure':>9} "
-        f"{'trips':>7} "
-        f"{'best':>10} "
-        f"{'KL':>10} "
-        f"{'clip':>8} "
-        f"{'time':>6} "
-        f"{'status':>12}"
+    ranked = sorted(
+        (r for r in results if r.status == "COMPLETED" and r.balanced_score is not None),
+        key=lambda r: r.balanced_score, reverse=True,
     )
+    if ranked:
+        print(f"\nRANKING BY FINAL balanced_score | {scope_label}")
+        ranking_headers = ["rank", "run", "name", "return", "maxDD"]
+        ranking_rows = [
+            [str(rank), f"#{r.run_id}", r.run_name or r.config.name,
+             format_percent(r.agent_return), format_percent(r.max_drawdown)]
+            for rank, r in enumerate(ranked, start=1)
+        ]
+        ranking_widths = [
+            max(len(header), *(len(row[i]) for row in ranking_rows))
+            for i, header in enumerate(ranking_headers)
+        ]
 
-    print(header)
-    print("-" * 154)
-
-    for result in results:
-        print(
-            f"{result.queue_index:>3} "
-            f"{str(result.run_id or '-'):>4} "
-            f"{result.config.n_epochs:>3} "
-            f"{result.config.learning_rate:>9.6f} "
-            f"{result.config.gamma:>6.3f} "
-            f"{result.config.gae_lambda:>6.3f} "
-            f"{result.config.ent_coef:>9.2e} "
-            f"{result.config.exposure_penalty:>9.2e} "
-            f"{format_float(result.balanced_score, 5):>10} "
-            f"{format_percent(result.agent_return):>9} "
-            f"{format_percent(result.max_drawdown):>9} "
-            f"{format_float(result.profit_factor, 3):>8} "
-            f"{format_percent(result.win_rate):>8} "
-            f"{format_percent(result.exposure):>9} "
-            f"{str(result.round_trips if result.round_trips is not None else '-'):>7} "
-            f"{format_float(result.best_score, 5):>10} "
-            f"{format_scientific(result.approx_kl, 3):>10} "
-            f"{format_float(result.clip_fraction, 4):>8} "
-            f"{format_seconds(result.wall_seconds):>6} "
-            f"{result.status:>12}"
-        )
-
-    print("=" * 154)
-
-    completed = [
-        result
-        for result in results
-        if (
-            result.status == "COMPLETED"
-            and result.balanced_score is not None
-        )
-    ]
-
-    if completed:
-        ranked = sorted(
-            completed,
-            key=lambda result: result.balanced_score,
-            reverse=True,
-        )
-
-        print()
-        print(f"RANKING BY FINAL balanced_score | {scope_label}")
-        print("-" * 92)
-
-        for rank, result in enumerate(ranked, start=1):
-            print(
-                f"{rank:>2}. "
-                f"score={result.balanced_score:+.6f} | "
-                f"return={format_percent(result.agent_return)} | "
-                f"maxDD={format_percent(result.max_drawdown)} | "
-                f"PF={format_float(result.profit_factor, 3)} | "
-                f"epochs={result.config.n_epochs} | "
-                f"lr={result.config.learning_rate:.8f} | "
-                f"gamma={result.config.gamma:.3f} | "
-                f"gae={result.config.gae_lambda:.3f} | "
-                f"ent={result.config.ent_coef:.2e} | "
-                f"exp_pen={result.config.exposure_penalty:.2e} | "
-                f"run=#{result.run_id} | "
-                f"{result.config.name}"
+        def ranking_line(values):
+            return "  ".join(
+                value.ljust(width) if i == 2 else value.rjust(width)
+                for i, (value, width) in enumerate(zip(values, ranking_widths))
             )
 
-        winner = ranked[0]
-
-        print()
-        print(f"WINNER | {scope_label}")
-        print("-" * 92)
-        print(f"Run:             #{winner.run_id}")
-        print(f"Name:            {winner.config.name}")
-        print(f"n_epochs:        {winner.config.n_epochs}")
-        print(f"learning_rate:   {winner.config.learning_rate}")
-        print(f"gamma:           {winner.config.gamma}")
-        print(f"gae_lambda:      {winner.config.gae_lambda}")
-        print(f"ent_coef:        {winner.config.ent_coef}")
-        print(
-            f"exposure_penalty:{winner.config.exposure_penalty:>12.6g}"
-        )
-        print(f"seed:            {winner.config.seed}")
-        print(
-            f"balanced_score:  "
-            f"{winner.balanced_score:+.8f}"
-        )
-        print(
-            f"agent_return:    "
-            f"{format_percent(winner.agent_return)}"
-        )
-        print(
-            f"max_drawdown:    "
-            f"{format_percent(winner.max_drawdown)}"
-        )
-        print(
-            f"profit_factor:   "
-            f"{format_float(winner.profit_factor, 5)}"
-        )
-        print(
-            f"exposure:        "
-            f"{format_percent(winner.exposure)}"
-        )
-        print(
-            f"round_trips:     "
-            f"{winner.round_trips}"
-        )
-        print(
-            f"best_score:      "
-            f"{format_float(winner.best_score, 8)}"
-        )
-
+        print(ranking_line(ranking_headers))
+        print("-" * len(ranking_line(ranking_headers)))
+        for row in ranking_rows:
+            print(ranking_line(row))
     print()
 
 

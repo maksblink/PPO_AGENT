@@ -635,3 +635,24 @@ configuration, connectivity or permissions fail tests rather than skipping them.
 
 Source, configuration and tests are versioned. Runtime data, secrets, generated
 artifacts and the local command reference are excluded from the public Git tree.
+
+
+## Migracja nazw zarejestrowanych runów
+
+Narzędzie `extra_tools/rename_runs.py` obsługuje audytowaną zmianę nazw runów
+pierwszego etapu, nazw plików konfiguracji, odwołań kontynuacji i ścieżek w kolejkach.
+Aktualizuje zapisany YAML, znormalizowaną konfigurację, oba hashe konfiguracji oraz
+nazwę w podsumowaniu raportu. ID, relacje checkpointów, wagi modeli, wyniki,
+trajektorie, historyczny commit i znaczniki czasu runów pozostają niezmienione.
+
+Migracja wymaga zakończonych runów, braku aktywnych ewaluacji i braku rekordów
+walk-forward. Przed zmianą ponownie porównuje stan z audytem. Nie należy w tym
+czasie uruchamiać treningu, ewaluacji, generowania raportów ani czyszczenia.
+
+Lokalny katalog `extra_tools/maintenance/run_rename/` zawiera mapę nazw,
+kopie wcześniejszych plików i metadanych bazy oraz trwały dziennik operacji.
+Katalog jest ignorowany przez Git. Dziennik służy do odzyskania spójności po
+przerwaniu procesu; nie jest zależnością normalnego treningu. Po przerwaniu
+migracji należy zakończyć odzyskiwanie przed dalszą pracą z eksperymentami.
+Historyczne eksporty i dokumenty z wnioskami zachowują oryginalne nazwy;
+mapa migracji pozwala połączyć je z nowymi nazwami i niezmienionymi ID.

@@ -8,7 +8,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from train_and_eval.database.session import create_database_engine
-from train_and_eval.dashboard.paths import run_path_metadata
+from train_and_eval.dashboard.lineage import run_path_metadata
 
 
 @dataclass(frozen=True)

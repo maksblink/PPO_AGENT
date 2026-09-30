@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from train_and_eval.dashboard.paths import add_path_connections
+from train_and_eval.dashboard.queues import queue_choices, queue_runs, queue_figure
 
 from train_and_eval.dashboard.data import (
     DashboardData,
@@ -272,16 +272,6 @@ def apply_sidebar_filters(
     )
     result = result.loc[result["run.architecture"].isin(selected_architectures)]
 
-    roots = sorted(int(value) for value in result["path.root_run_id"].dropna().unique())
-    root_names = frame.set_index("run_id")["run.name"].to_dict()
-    selected_paths = st.sidebar.multiselect(
-        "Training paths (empty = all)", roots,
-        format_func=lambda value: f"#{value} — {root_names.get(value, 'Unknown')}",
-        key="path_filter",
-    )
-    if selected_paths:
-        result = result.loc[result["path.root_run_id"].isin(selected_paths)]
-
     filterable = usable_columns(result)
 
     selected_columns = st.sidebar.multiselect(
@@ -393,8 +383,6 @@ def default_table_columns(
         "run.name",
         "run.status",
         "run.architecture",
-        "path.root_run_id",
-        "path.position",
         ".seed",
         ".n_epochs",
         ".learning_rate",
@@ -462,18 +450,6 @@ def explorer_tab(
         width="stretch",
         hide_index=True,
     )
-
-
-def path_connections(figure, frame: pd.DataFrame, *, x: str, y: str, key: str) -> None:
-    if st.checkbox("Connect runs in training paths", key=f"{key}_connect_paths"):
-        add_path_connections(figure, frame, x=x, y=y)
-        st.caption(
-            "Dotted arrows follow source checkpoints from parent to child. "
-            "Run position counts runs, not data epochs. Only visible direct links "
-            "whose source checkpoint matches the displayed parent evaluation are drawn. "
-            "Hidden or missing runs are not bridged; siblings are not connected. "
-            "Use the Training paths filter to isolate a path."
-        )
 
 
 def scatter_tab(
@@ -642,9 +618,6 @@ def scatter_tab(
         for column in (
             "run_id",
             "run.architecture",
-            "path.root_run_id",
-            "path.parent_run_id",
-            "path.position",
             run_name,
             seed,
             exposure_penalty,
@@ -704,7 +677,6 @@ def scatter_tab(
         ),
     )
 
-    path_connections(figure, plot_frame, x=x, y=y, key="scatter_tab")
 
     st.plotly_chart(
         figure,
@@ -793,9 +765,6 @@ def activity_tab(
         for column in (
             "run_id",
             "run.architecture",
-            "path.root_run_id",
-            "path.parent_run_id",
-            "path.position",
             run_name,
             seed,
             exposure_penalty,
@@ -836,7 +805,6 @@ def activity_tab(
             colorbar_tickformat=".0%",
         )
 
-    path_connections(figure, plot_frame, x=exposure, y=trips, key="activity_tab")
 
     st.plotly_chart(
         figure,
@@ -1102,9 +1070,6 @@ def pareto_tab(
         for column in (
             "run_id",
             "run.architecture",
-            "path.root_run_id",
-            "path.parent_run_id",
-            "path.position",
             run_name,
             seed,
             score,
@@ -1175,7 +1140,6 @@ def pareto_tab(
         )
     )
 
-    path_connections(figure, plot_frame, x=x, y=y, key="pareto_tab")
 
     st.plotly_chart(
         figure,
@@ -1439,6 +1403,15 @@ def run_detail_tab(
         explorer["run_id"] == run_id
     ]
 
+    root_id = selected_row.iloc[0]["path.root_run_id"]
+    st.button(
+        "Show Queue", key="show_queue", disabled=pd.isna(root_id),
+        on_click=open_queue,
+        args=(int(root_id) if pd.notna(root_id) else None, run_id),
+    )
+    if pd.isna(root_id):
+        st.warning("Cannot resolve this training path: " + str(selected_row.iloc[0]["path.status"]))
+
     detail_frame = (
         selected_row
         .iloc[0]
@@ -1591,6 +1564,110 @@ def run_detail_tab(
                 )
 
 
+def open_queue(root_id: int | None, run_id: int) -> None:
+    st.session_state["queue_root"] = root_id
+    st.session_state["queue_focus_run"] = run_id
+    st.session_state["queue_search"] = ""
+    st.session_state["dashboard_view"] = "Queues"
+
+
+def queues_tab(data: DashboardData) -> None:
+    st.subheader("Queues — training paths")
+    st.caption(
+        "A queue here means a fresh run and its checkpoint continuations, not a search-queue YAML. "
+        "This view uses the full database, independently of sidebar filters. "
+        "The global TRAIN / VAL selection still applies."
+    )
+    frame = data.explorer
+    search = st.text_input("Search by any run ID or name", key="queue_search")
+    roots = queue_choices(frame, search)
+    unresolved = int(frame["path.root_run_id"].isna().sum())
+    if unresolved:
+        st.warning(f"{unresolved} runs have incomplete or cyclic ancestry and cannot be assigned to a queue.")
+        with st.expander("Unresolved runs"):
+            st.dataframe(frame.loc[frame["path.root_run_id"].isna(),
+                                   ["run_id", "run.name", "path.status"]], hide_index=True)
+    if not roots:
+        st.info("No training paths match the search.")
+        return
+    if st.session_state.get("queue_root") not in roots:
+        st.session_state["queue_root"] = roots[0]
+    names = frame.set_index("run_id")["run.name"].to_dict()
+    root_id = st.selectbox("Queue (fresh run)", roots, key="queue_root",
+                           format_func=lambda value: f"#{value} — {names[value]}")
+    members = queue_runs(frame, root_id)
+    ids = set(members["run_id"].astype(int))
+    focus = st.session_state.get("queue_focus_run")
+    if focus in ids:
+        st.caption(f"Opened from run #{focus}; its chart point is highlighted.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Runs in queue", len(members))
+    c2.metric("Completed in queue", int(members["run.status"].eq("completed").sum()))
+    c3.metric("Final evaluations in selected range", int(members.get(
+        "eval.id", pd.Series(dtype=float)).notna().sum()))
+    if members["path.parent_run_id"].dropna().duplicated().any():
+        st.info("This path branches. Siblings share a position; lines follow direct parents only.")
+
+    metrics = numeric_columns(members)
+    if metrics:
+        if st.session_state.get("queue_metric") not in metrics:
+            st.session_state["queue_metric"] = find_column(metrics, "eval.agent_return") or metrics[0]
+        metric = st.selectbox("Queue metric", metrics, key="queue_metric", format_func=display_name)
+        if pd.to_numeric(members[metric], errors="coerce").notna().any():
+            figure = queue_figure(members, metric, label=display_name(metric),
+                                  percent=is_percent_column(metric), focus_run_id=focus)
+            st.plotly_chart(figure, width="stretch", key="queue_chart")
+        else:
+            st.info("This metric has no values in the selected range.")
+        st.caption(
+            "Position counts runs, not data epochs. Each evaluation point is the run's final "
+            "evaluation in the selected range. Missing values create gaps. For evaluation metrics, "
+            "a line is drawn only when the parent's displayed checkpoint was the child's source. "
+            "The table retains all runs, including failed or unfinished runs."
+        )
+
+    available = usable_columns(members)
+    defaults = list(dict.fromkeys([
+        "path.position", "path.parent_run_id", "run.source_checkpoint_id",
+        *default_table_columns(members),
+    ]))
+    defaults = [column for column in defaults if column in available]
+    selected = st.multiselect("Queue table columns", available, default=defaults,
+                             format_func=display_name, key="queue_columns")
+    if selected:
+        # Keep raw column identifiers available when two display labels coincide.
+        labels = [display_name(column) for column in selected]
+        rename = {column: (label if labels.count(label) == 1 else f"{label} [{column}]")
+                  for column, label in zip(selected, labels)}
+        st.dataframe(members[selected].rename(columns=rename), width="stretch", hide_index=True)
+
+    with st.expander("Checkpoints in this queue"):
+        checkpoints = data.checkpoints
+        if "run_id" in checkpoints:
+            st.dataframe(checkpoints.loc[checkpoints["run_id"].isin(ids)],
+                         width="stretch", hide_index=True)
+    with st.expander("All evaluations in the selected range"):
+        evaluations = data.evaluations
+        if "run_id" in evaluations:
+            st.dataframe(evaluations.loc[evaluations["run_id"].isin(ids)],
+                         width="stretch", hide_index=True)
+    with st.expander("PPO training diagnostics"):
+        metrics_frame = data.training_metrics
+        if "run_id" in metrics_frame:
+            st.dataframe(metrics_frame.loc[metrics_frame["run_id"].isin(ids)],
+                         width="stretch", hide_index=True)
+    with st.expander("Stored run configuration"):
+        config_run = st.selectbox("Configuration run", members["run_id"].astype(int).tolist(),
+                                 format_func=lambda value: f"#{value} — {names[value]}",
+                                 key="queue_config_run")
+        record = data.runs.loc[data.runs["id"] == config_run].iloc[0]
+        config = record.get("normalized_config_json")
+        if isinstance(config, dict):
+            st.json(config)
+        else:
+            st.info("No normalized configuration is available.")
+
+
 st.title("PPO Experiment Dashboard")
 
 mode = st.segmented_control(
@@ -1624,105 +1701,99 @@ if frame.empty:
 
 filtered = apply_sidebar_filters(frame)
 
-score_column = find_column(
-    frame.columns,
-    "eval.balanced_score",
+view = st.segmented_control(
+    "View",
+    options=["Run Explorer", "Scatter Explorer", "Activity Map", "Pareto Explorer",
+             "Group Comparison", "Run Detail", "Queues"],
+    default="Run Explorer", selection_mode="single", key="dashboard_view",
 )
+if view is None:
+    view = "Run Explorer"
 
-return_column = find_column(
-    frame.columns,
-    "eval.agent_return",
-)
-
-drawdown_column = find_column(
-    frame.columns,
-    "eval.agent_max_drawdown",
-)
-
-status_column = find_column(
-    frame.columns,
-    "run.status",
-)
-
-completed_count = len(filtered)
-
-if status_column is not None:
-    completed_count = int(
-        (
-            filtered[status_column]
-            .astype(str)
-            .str.lower()
-            == "completed"
-        ).sum()
+if view != "Queues":
+    score_column = find_column(
+        frame.columns,
+        "eval.balanced_score",
     )
 
-c1, c2, c3, c4, c5 = st.columns(5)
+    return_column = find_column(
+        frame.columns,
+        "eval.agent_return",
+    )
 
-c1.metric(
-    "Visible runs",
-    len(filtered),
-)
+    drawdown_column = find_column(
+        frame.columns,
+        "eval.agent_max_drawdown",
+    )
 
-c2.metric(
-    "Completed",
-    completed_count,
-)
+    status_column = find_column(
+        frame.columns,
+        "run.status",
+    )
 
-c3.metric(
-    "Best score",
-    metric_value(
-        filtered,
-        score_column,
-    ),
-)
+    completed_count = len(filtered)
 
-c4.metric(
-    "Best return",
-    metric_value(
-        filtered,
-        return_column,
-        percent=True,
-    ),
-)
+    if status_column is not None:
+        completed_count = int(
+            (
+                filtered[status_column]
+                .astype(str)
+                .str.lower()
+                == "completed"
+            ).sum()
+        )
 
-c5.metric(
-    "Lowest max DD",
-    metric_value(
-        filtered,
-        drawdown_column,
-        percent=True,
-    ),
-)
+    c1, c2, c3, c4, c5 = st.columns(5)
 
-st.caption(
-    "Filters in the sidebar apply to all dashboard tabs."
-)
+    c1.metric(
+        "Visible runs",
+        len(filtered),
+    )
 
-tabs = st.tabs(
-    [
-        "Run Explorer",
-        "Scatter Explorer",
-        "Activity Map",
-        "Pareto Explorer",
-        "Group Comparison",
-        "Run Detail",
-    ]
-)
+    c2.metric(
+        "Completed",
+        completed_count,
+    )
 
-with tabs[0]:
+    c3.metric(
+        "Best score",
+        metric_value(
+            filtered,
+            score_column,
+        ),
+    )
+
+    c4.metric(
+        "Best return",
+        metric_value(
+            filtered,
+            return_column,
+            percent=True,
+        ),
+    )
+
+    c5.metric(
+        "Lowest max DD",
+        metric_value(
+            filtered,
+            drawdown_column,
+            percent=True,
+        ),
+    )
+
+st.caption("Sidebar filters apply to all views except Queues, which searches the full database.")
+
+if view == "Run Explorer":
     explorer_tab(filtered)
-
-with tabs[1]:
+elif view == "Scatter Explorer":
     scatter_tab(filtered)
-
-with tabs[2]:
+elif view == "Activity Map":
     activity_tab(filtered)
-
-with tabs[3]:
+elif view == "Pareto Explorer":
     pareto_tab(filtered)
-
-with tabs[4]:
+elif view == "Group Comparison":
     group_comparison_tab(filtered)
-
-with tabs[5]:
+elif view == "Run Detail":
     run_detail_tab(data, filtered)
+elif view == "Queues":
+    queues_tab(data)

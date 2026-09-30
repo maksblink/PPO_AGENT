@@ -541,8 +541,8 @@ the current invocation.
 ## Dashboard and diagnostics
 
 The Streamlit dashboard reads the registry through shared filters. Views include
-Run Explorer, Scatter Explorer, Activity Map, Pareto Explorer, Group Comparison
-and Run Detail. It is a presentation layer, not a source of truth.
+Run Explorer, Scatter Explorer, Activity Map, Pareto Explorer, Group Comparison,
+Run Detail and Queues. It is a presentation layer, not a source of truth.
 
 A global VAL / TRAIN segmented control (VAL by default) selects the evaluation
 range for all views, filters and headline metrics. Only one range is displayed
@@ -556,19 +556,29 @@ as a shared multi-select filter, color category and grouping column. Equal-width
 layers are labelled width × depth; mixed widths retain their exact order.
 Missing architecture is shown as Unknown, never inferred from a run name.
 
-Training path metadata follows runs.source_checkpoint_id to checkpoints.run_id
-across the full registry before filtering. The path root is the fresh run ID;
-position counts runs, not cumulative data epochs. A shared path filter isolates
-one or more roots. Scatter, activity and Pareto views can overlay dotted arrows
-from parent to child; point tooltips show root, parent and position. These links
-are distinct from the Pareto front and do not affect dominance calculations.
-Only visible direct edges are drawn, and only if the displayed parent evaluation
-belongs to the checkpoint actually used by the child. A continuation from an
-intermediate checkpoint is therefore not connected to the parent's final point.
-Hidden/missing ancestors are not bridged, branches never connect siblings, and
-cyclic/incomplete ancestry is labelled without inventing a path position.
-The same behavior applies independently in TRAIN and VAL. No schema migration
-or persisted experiment changes are required.
+The Queues view presents a training path: a fresh run and its checkpoint
+continuations, not a search-queue YAML manifest. Run Detail's Show Queue action
+selects that path and navigates directly to Queues. Search matches any member's
+run ID or name across the full registry; sidebar filters do not restrict Queues.
+The selected TRAIN / VAL range still controls evaluation values.
+
+Path membership follows runs.source_checkpoint_id to checkpoints.run_id. The
+summary table is ordered by ancestry position and exposes run parameters,
+statuses and metrics. Any numeric explorer column can be plotted against run
+position; position is not a count of data epochs. Checkpoints, all evaluations
+of the selected range, PPO diagnostics and stored normalized configs are also
+available in this view. Failed, unfinished or unevaluated runs remain in the
+table; missing metric values stay missing. Branches share ancestry positions
+and only direct parent-child edges are drawn. For evaluation metrics, an edge
+requires the parent's displayed checkpoint to match the child's source;
+intermediate sources are not substituted with the parent's final evaluation.
+Incomplete/cyclic paths are reported explicitly and not assigned invented roots.
+
+Architecture filtering, coloring and grouping remain available in the other
+views. Training-path filters and overlays on Scatter, Activity and Pareto are
+removed. Dashboard navigation uses a single view selector so Show Queue can
+switch views without depending on browser tab state. No schema migration or
+persisted experiment changes are required.
 
 Queue reports print a full TRAIN table and a compact TRAIN ranking, followed by
 matching VAL blocks. Separate winner blocks are not printed. Full tables include

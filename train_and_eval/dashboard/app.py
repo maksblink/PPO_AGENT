@@ -6,6 +6,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from train_and_eval.dashboard.paths import add_path_connections
+
 from train_and_eval.dashboard.data import (
     DashboardData,
     load_dashboard_data,
@@ -27,6 +29,11 @@ DISPLAY_LABEL_SUFFIXES = [
     ("run.name", "Run name"),
     ("run.status", "Status"),
     ("run.seed", "Seed"),
+    ("run.architecture", "Architecture"),
+    ("path.root_run_id", "Path root run ID"),
+    ("path.parent_run_id", "Parent run ID"),
+    ("path.position", "Run position in path"),
+    ("path.status", "Lineage status"),
 
     (".n_epochs", "PPO epochs"),
     (".learning_rate", "Learning rate"),
@@ -82,6 +89,9 @@ DISPLAY_LABEL_SUFFIXES = [
 
 
 def display_name(column: str) -> str:
+    exact = dict(DISPLAY_LABEL_SUFFIXES).get(column)
+    if exact is not None:
+        return exact
     for suffix, label in DISPLAY_LABEL_SUFFIXES:
         if (
             column == suffix
@@ -256,6 +266,22 @@ def apply_sidebar_filters(
 
     st.sidebar.header("Filters")
 
+    architectures = sorted(result["run.architecture"].unique())
+    selected_architectures = st.sidebar.multiselect(
+        "Architecture", architectures, default=architectures, key="architecture_filter",
+    )
+    result = result.loc[result["run.architecture"].isin(selected_architectures)]
+
+    roots = sorted(int(value) for value in result["path.root_run_id"].dropna().unique())
+    root_names = frame.set_index("run_id")["run.name"].to_dict()
+    selected_paths = st.sidebar.multiselect(
+        "Training paths (empty = all)", roots,
+        format_func=lambda value: f"#{value} — {root_names.get(value, 'Unknown')}",
+        key="path_filter",
+    )
+    if selected_paths:
+        result = result.loc[result["path.root_run_id"].isin(selected_paths)]
+
     filterable = usable_columns(result)
 
     selected_columns = st.sidebar.multiselect(
@@ -366,6 +392,9 @@ def default_table_columns(
         "run_id",
         "run.name",
         "run.status",
+        "run.architecture",
+        "path.root_run_id",
+        "path.position",
         ".seed",
         ".n_epochs",
         ".learning_rate",
@@ -433,6 +462,18 @@ def explorer_tab(
         width="stretch",
         hide_index=True,
     )
+
+
+def path_connections(figure, frame: pd.DataFrame, *, x: str, y: str, key: str) -> None:
+    if st.checkbox("Connect runs in training paths", key=f"{key}_connect_paths"):
+        add_path_connections(figure, frame, x=x, y=y)
+        st.caption(
+            "Dotted arrows follow source checkpoints from parent to child. "
+            "Run position counts runs, not data epochs. Only visible direct links "
+            "whose source checkpoint matches the displayed parent evaluation are drawn. "
+            "Hidden or missing runs are not bridged; siblings are not connected. "
+            "Use the Training paths filter to isolate a path."
+        )
 
 
 def scatter_tab(
@@ -600,6 +641,10 @@ def scatter_tab(
         column
         for column in (
             "run_id",
+            "run.architecture",
+            "path.root_run_id",
+            "path.parent_run_id",
+            "path.position",
             run_name,
             seed,
             exposure_penalty,
@@ -658,6 +703,8 @@ def scatter_tab(
             else display_name(color)
         ),
     )
+
+    path_connections(figure, plot_frame, x=x, y=y, key="scatter_tab")
 
     st.plotly_chart(
         figure,
@@ -745,6 +792,10 @@ def activity_tab(
         column
         for column in (
             "run_id",
+            "run.architecture",
+            "path.root_run_id",
+            "path.parent_run_id",
+            "path.position",
             run_name,
             seed,
             exposure_penalty,
@@ -784,6 +835,8 @@ def activity_tab(
             colorbar_title="Agent return",
             colorbar_tickformat=".0%",
         )
+
+    path_connections(figure, plot_frame, x=exposure, y=trips, key="activity_tab")
 
     st.plotly_chart(
         figure,
@@ -1048,6 +1101,10 @@ def pareto_tab(
         column
         for column in (
             "run_id",
+            "run.architecture",
+            "path.root_run_id",
+            "path.parent_run_id",
+            "path.position",
             run_name,
             seed,
             score,
@@ -1117,6 +1174,8 @@ def pareto_tab(
             else display_name(color)
         )
     )
+
+    path_connections(figure, plot_frame, x=x, y=y, key="pareto_tab")
 
     st.plotly_chart(
         figure,
@@ -1231,6 +1290,7 @@ def group_comparison_tab(
     default_groups = [
         column
         for column in (
+            find_column(frame.columns, "run.architecture"),
             find_column(frame.columns, ".n_epochs"),
             find_column(
                 frame.columns,

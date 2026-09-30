@@ -551,6 +551,25 @@ missing rather than falling back to another range or a scheduled evaluation.
 Run Detail includes intermediate evaluations of the selected range. PPO update
 diagnostics describe the same training process in both modes.
 
+Architecture is derived from each run's normalized PPO hidden sizes and exposed
+as a shared multi-select filter, color category and grouping column. Equal-width
+layers are labelled width × depth; mixed widths retain their exact order.
+Missing architecture is shown as Unknown, never inferred from a run name.
+
+Training path metadata follows runs.source_checkpoint_id to checkpoints.run_id
+across the full registry before filtering. The path root is the fresh run ID;
+position counts runs, not cumulative data epochs. A shared path filter isolates
+one or more roots. Scatter, activity and Pareto views can overlay dotted arrows
+from parent to child; point tooltips show root, parent and position. These links
+are distinct from the Pareto front and do not affect dominance calculations.
+Only visible direct edges are drawn, and only if the displayed parent evaluation
+belongs to the checkpoint actually used by the child. A continuation from an
+intermediate checkpoint is therefore not connected to the parent's final point.
+Hidden/missing ancestors are not bridged, branches never connect siblings, and
+cyclic/incomplete ancestry is labelled without inventing a path position.
+The same behavior applies independently in TRAIN and VAL. No schema migration
+or persisted experiment changes are required.
+
 Queue reports print a full TRAIN table and a compact TRAIN ranking, followed by
 matching VAL blocks. Separate winner blocks are not printed. Full tables include
 seed, hidden-layer widths, PPO epochs, cumulative data epochs along the selected

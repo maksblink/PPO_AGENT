@@ -8,6 +8,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from train_and_eval.database.session import create_database_engine
+from train_and_eval.dashboard.paths import run_path_metadata
 
 
 @dataclass(frozen=True)
@@ -314,6 +315,7 @@ def _build_explorer(
             how="left",
         )
 
+    explorer = explorer.merge(run_path_metadata(runs, checkpoints), on="run_id", how="left")
     return _convert_decimal_columns(explorer)
 
 

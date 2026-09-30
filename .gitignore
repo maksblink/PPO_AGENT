@@ -42,3 +42,4 @@ train_and_eval/market_data/manifest.json.tmp
 
 # Local run rename audit and backups
 /extra_tools/maintenance/run_rename/
+/CONCLUSIONS_NE3_FULL_GRID.md

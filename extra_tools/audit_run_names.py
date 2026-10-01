@@ -18,6 +18,19 @@ def digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+LR_DECIMAL_PLACES = 9
+
+
+def learning_rate_token(value) -> str:
+    rate = Decimal(str(value))
+    if not rate.is_finite() or not 0 < rate < 1:
+        raise ValueError(f"LR must be finite and between 0 and 1: {value}")
+    rendered = format(rate, f'.{LR_DECIMAL_PLACES}f')
+    if Decimal(rendered) != rate:
+        raise ValueError(f"LR requires more than {LR_DECIMAL_PLACES} decimal places: {value}")
+    return rendered.replace('.', 'p')
+
+
 def proposed_names(configs: dict) -> dict:
     result, visiting = {}, set()
 
@@ -54,7 +67,7 @@ def proposed_names(configs: dict) -> dict:
         gamma = Decimal(str(c['ppo']['gamma'])) * 100
         if gamma != gamma.to_integral_value():
             raise ValueError(f"Gamma cannot be represented by gNNN: {old}")
-        learning_rate = format(Decimal(str(c['ppo']['learning_rate'])), 'f').replace('.', 'p')
+        learning_rate = learning_rate_token(c['ppo']['learning_rate'])
         prefix = 'f' if mode == 'fresh' else 'r'
         name = (f"{prefix}_v{phase}_w{widths[0]}x{len(widths)}_g{int(gamma):03d}"
                 f"_lr{learning_rate}_s{c['run']['seed']}_ne{c['ppo']['n_epochs']}")
@@ -73,6 +86,7 @@ def proposed_names(configs: dict) -> dict:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', type=Path, default=Path.cwd())
+    parser.add_argument('--output', type=Path, help='New audit directory (must not exist)')
     args = parser.parse_args()
     root = args.project.expanduser().resolve()
     if not (root / 'train_and_eval/run_config.py').is_file():
@@ -130,18 +144,21 @@ def main():
         entry={'run_id':r['id'] if r else None,'old_name':old,'new_name':plan['new_name'],
                'old_config_path':files[old],'new_config_path':new_path,
                'old_source_run':source,'new_source_run':names[source]['new_name'] if source else None,
-               'phase':plan['phase'],'disk_config_sha256':loaded[old].sha256}
+               'phase':plan['phase'],'learning_rate':format(Decimal(str(configs[old]['ppo']['learning_rate'])), 'f'),
+               'disk_config_sha256':loaded[old].sha256}
         if new_path != files[old] and (root/new_path).exists():
             errors.append(f'Target config already exists: {new_path}')
         collision=by_name.get(plan['new_name'])
         if collision and collision is not r:
             errors.append(f'Target run name already exists: {plan["new_name"]}')
         if r is None:
-            errors.append(f'Config has no database run: {old}')
+            entry['status'] = 'not_started'
         else:
             status=getattr(r['status'],'value',r['status'])
             entry.update(status=status,source_checkpoint_id=r['source_checkpoint_id'],
                          config_sha256=r['config_sha256'],normalized_config_sha256=r['normalized_config_sha256'])
+            if Decimal(str(r['normalized_config_json']['ppo']['learning_rate'])) != Decimal(entry['learning_rate']):
+                errors.append(f'LR differs between database and config: #{r["id"]}')
             if status != 'completed':errors.append(f'Run #{r["id"]} is {status}')
             if r['normalized_config_json'] != configs[old]:errors.append(f'Disk/database config mismatch: #{r["id"]}')
             if digest(r['raw_config_yaml'].encode()) != r['config_sha256']:errors.append(f'Raw config hash mismatch: #{r["id"]}')
@@ -182,7 +199,7 @@ def main():
             hits=sorted(set(pattern.findall(content)))
             if hits:metadata_files.append({'path':rel,'sha256':digest(raw),'run_name_matches':hits})
     git=subprocess.run(['git','-C',str(root),'rev-parse','HEAD'],capture_output=True,text=True)
-    report={'audit_version':1,'created_at':datetime.now(timezone.utc).isoformat(),'project':str(root),
+    report={'audit_version':2,'lr_decimal_places':LR_DECIMAL_PLACES,'created_at':datetime.now(timezone.utc).isoformat(),'project':str(root),
             'git_commit':git.stdout.strip() if git.returncode==0 else None,'database':database,
             'counts':{'configs':len(configs),'runs':len(records),'checkpoints':len(checkpoints),
                       'evaluations':len(evaluations),'studies':len(studies),'cycles':len(cycles)},
@@ -193,11 +210,12 @@ def main():
                      'Checkpoint existence and byte sizes checked; contents were not rehashed.',
                      'Text references are inventory candidates, not an automatic replacement plan.',
                      'Training must remain stopped for migration; this audit does not lock future writers.']}
-    target=root/'extra_tools/maintenance/run_rename'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+    target = (args.output.expanduser().resolve() if args.output else
+              root/'extra_tools/maintenance/run_rename'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
     target.mkdir(parents=True,exist_ok=False)
     (target/'audit.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     with (target/'mapping.csv').open('w',newline='',encoding='utf-8') as f:
-        writer=csv.DictWriter(f,fieldnames=['run_id','old_name','new_name','old_config_path','new_config_path','old_source_run','new_source_run'])
+        writer=csv.DictWriter(f,fieldnames=['run_id','old_name','new_name','old_config_path','new_config_path','old_source_run','new_source_run','status','learning_rate'])
         writer.writeheader();writer.writerows({k:r.get(k) for k in writer.fieldnames} for r in mapping)
     print(json.dumps(report['counts'],indent=2));print(f'Issues requiring review: {len(errors)}')
     for error in errors:print('REVIEW:',error)

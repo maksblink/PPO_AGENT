@@ -23,6 +23,7 @@ ignored by Git and is not distributed in the public repository.
 - [Dashboard and diagnostics](#dashboard-and-diagnostics)
 - [Experiment cleanup](#experiment-cleanup)
 - [Testing and development](#testing-and-development)
+- [Run-name migration](#run-name-migration)
 
 ## Architecture and repository layout
 
@@ -70,8 +71,7 @@ flowchart TD
 | `artifacts/walk_forward/` | Study protocols, plans, attempts and aggregate reports |
 
 Queue manifests live under `configs/search_queues/`. The runner requires an
-explicit queue name and has no historical default dependency. Help is available
-even if that directory is absent or empty. Discovery accepts `.yml` and `.yaml`,
+explicit queue name and has no historical default dependency. Discovery accepts `.yml` and `.yaml`,
 rejects duplicate names and reports available names for an unknown selection.
 
 Queue execution is sequential and separate from stage-two grid search. Training
@@ -79,9 +79,9 @@ stops at the first failed child. Before each selected entry, the queue reads its
 current database status. Completed runs (including successful early stopping)
 are skipped automatically. Other existing runs display their identity, status,
 progress, timestamps, error, checkpoint/evaluation IDs and artifact directory.
-Exact uppercase decisions are YES (delete this run and execute its config again),
-SKIP (preserve it and continue), or STOP (preserve it and stop the queue).
-Other input repeats the question; EOF or interruption acts as STOP.
+Incomplete-run handling supports confirmed deletion and retry, preservation with
+skipping, or stopping the queue. Invalid input repeats the prompt; end of input
+or interruption stops the queue without deleting the run.
 
 Deletion reuses transactional cleanup and its durable artifact journal. It covers
 only the confirmed run and its checkpoints, evaluations, training metrics and
@@ -89,7 +89,7 @@ artifact directory. The configured fresh/resume source is retained, and a new
 run ID is allocated without resetting sequences. Retained descendants, active
 work, changed records, or an unresolved cleanup journal block the restart.
 A running status cannot establish whether a worker is alive: running records
-must be stopped/resolved before deletion. No dependent runs are deleted implicitly.
+block deletion until their state is resolved. No dependent runs are deleted implicitly.
 A skipped parent is not repaired; subsequent resume still requires a usable source.
 The obsolete skip-existing switch is removed: completed-run skipping is automatic.
 
@@ -665,23 +665,31 @@ configuration, connectivity or permissions fail tests rather than skipping them.
 Source, configuration and tests are versioned. Runtime data, secrets, generated
 artifacts and the local command reference are excluded from the public Git tree.
 
+## Run-name migration
 
-## Migracja nazw zarejestrowanych runów
+The audit and rename tools maintain consistent stage-one run names, configuration
+filenames, continuation references and queue paths. Migration updates stored raw
+YAML, normalized configuration, both configuration hashes and report-summary
+identity. Run and evaluation IDs, checkpoint relationships and files, model weights,
+metrics, trajectories, original Git provenance and timestamps are preserved.
 
-Narzędzie `extra_tools/rename_runs.py` obsługuje audytowaną zmianę nazw runów
-pierwszego etapu, nazw plików konfiguracji, odwołań kontynuacji i ścieżek w kolejkach.
-Aktualizuje zapisany YAML, znormalizowaną konfigurację, oba hashe konfiguracji oraz
-nazwę w podsumowaniu raportu. ID, relacje checkpointów, wagi modeli, wyniki,
-trajektorie, historyczny commit i znaczniki czasu runów pozostają niezmienione.
+Generated names encode training mode, continuation depth, architecture, gamma,
+learning rate, seed and PPO optimization epochs. The LR token has exactly nine
+decimal places, represented by `lr0p` followed by nine digits. Values that cannot
+be represented exactly are rejected rather than rounded. Database and on-disk
+configurations must agree, including learning rate and parent identity.
 
-Migracja wymaga zakończonych runów, braku aktywnych ewaluacji i braku rekordów
-walk-forward. Przed zmianą ponownie porównuje stan z audytem. Nie należy w tym
-czasie uruchamiać treningu, ewaluacji, generowania raportów ani czyszczenia.
+Unstarted configurations participate in the same migration without creating run
+records. YAML rewrites change name scalars only, preserving numeric spelling and
+comments. The current audit format is version 2. Completed stage-one runs, no
+active evaluations and no walk-forward records are required; concurrent writers
+are outside the supported migration workflow. State changes since the audit,
+name collisions and unresolved metadata references prevent application.
 
-Lokalny katalog `extra_tools/maintenance/run_rename/` zawiera mapę nazw,
-kopie wcześniejszych plików i metadanych bazy oraz trwały dziennik operacji.
-Katalog jest ignorowany przez Git. Dziennik służy do odzyskania spójności po
-przerwaniu procesu; nie jest zależnością normalnego treningu. Po przerwaniu
-migracji należy zakończyć odzyskiwanie przed dalszą pracą z eksperymentami.
-Historyczne eksporty i dokumenty z wnioskami zachowują oryginalne nazwy;
-mapa migracji pozwala połączyć je z nowymi nazwami i niezmienionymi ID.
+The ignored `extra_tools/maintenance/run_rename/` directory stores ID/name/path
+mappings, previous file and database metadata, and a durable recovery journal.
+Database commit state determines whether recovery restores previous files or
+completes the new state. File-only migrations recover by completing the new state.
+The journal supports interrupted-operation recovery and is not a training-time
+dependency. Earlier mappings, historical exports and conclusion documents remain
+historical records; mappings connect their names to current names and stable IDs.

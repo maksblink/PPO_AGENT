@@ -80,7 +80,24 @@ def rename_config(raw, mapping):
     if new['continuation']['mode'] == 'resume':
         new['continuation']['source_run'] = mapping[old['continuation']['source_run']]
     normalized = normalize_config(RunConfig.model_validate(new))
-    return yaml.safe_dump(new, sort_keys=False, allow_unicode=True), json.loads(normalized), sha(normalized)
+    # Edit only the two name scalars, preserving decimal LR spelling and comments.
+    if new == old:
+        return raw, json.loads(normalized), sha(normalized)
+    tree = yaml.compose(raw)
+    replacements = []
+    for section_node, value_node in tree.value:
+        fields = {'run': {'name'}, 'continuation': {'source_run'}}.get(section_node.value, set())
+        if fields:
+            for key_node, scalar in value_node.value:
+                if key_node.value in fields:
+                    replacements.append((scalar.start_mark.index, scalar.end_mark.index,
+                                         new[section_node.value][key_node.value]))
+    updated = raw
+    for start, end, value in sorted(replacements, reverse=True):
+        updated = updated[:start] + value + updated[end:]
+    if normalize_config(RunConfig.model_validate(yaml.safe_load(updated))) != normalized:
+        raise ValueError('Name-only YAML rewrite changed configuration semantics')
+    return updated, json.loads(normalized), sha(normalized)
 
 
 def project_identity(connection, engine, root):
@@ -108,18 +125,20 @@ def build_plan(connection, root, audit):
     from train_and_eval.database.models import Checkpoint, Evaluation, WalkForwardStudy, WalkForwardCycle
     from train_and_eval.run_config import RunConfig, normalize_config
     import yaml
-    if audit.get('audit_version') != 1 or audit.get('errors'):
-        raise ValueError('A successful version-1 audit is required')
+    from extra_tools.audit_run_names import proposed_names, LR_DECIMAL_PLACES
+    if audit.get('audit_version') != 2 or audit.get('lr_decimal_places') != LR_DECIMAL_PLACES or audit.get('errors'):
+        raise ValueError('A successful version-2 fixed-LR audit is required')
     entries = audit['mapping']
     old_names = [e['old_name'] for e in entries]
     new_names = [e['new_name'] for e in entries]
     if len(set(old_names)) != len(entries) or len(set(new_names)) != len(entries):
         raise ValueError('Duplicate name mapping')
-    if set(old_names) & set(new_names):
-        raise ValueError('Old/new names overlap; refusing a repeated or ambiguous migration')
+    for entry in entries:
+        if entry['new_name'] in old_names and entry['new_name'] != entry['old_name']:
+            raise ValueError('Cross-name collision in migration')
     mapping = dict(zip(old_names, new_names))
     rows = run_rows(connection)
-    if set(rows) != {e['run_id'] for e in entries}:
+    if set(rows) != {e['run_id'] for e in entries if e['run_id'] is not None}:
         raise ValueError('Database run IDs changed since audit')
     for model in (WalkForwardStudy, WalkForwardCycle):
         if connection.scalar(select(func.count()).select_from(model)):
@@ -136,7 +155,29 @@ def build_plan(connection, root, audit):
         path = safe(root, rel)
         files[rel] = {'path': rel, 'before': read_optional(path), 'after': after}
     path_mapping = {}
+    disk_configs = {}
+    expected_paths = {e['old_config_path'] for e in entries}
+    actual_paths = {p.relative_to(root).as_posix() for p in (root/'configs/stage_one').rglob('*')
+                    if p.suffix in ('.yml', '.yaml')}
+    if actual_paths != expected_paths:
+        raise ValueError('Stage-one config inventory changed since audit')
     for e in entries:
+        old_path = e['old_config_path']
+        raw_disk = safe(root, old_path).read_text(encoding='utf-8')
+        if sha(raw_disk) != e['disk_config_sha256']:
+            raise ValueError(f'Config changed since audit: {old_path}')
+        cfg = json.loads(normalize_config(RunConfig.model_validate(yaml.safe_load(raw_disk))))
+        if cfg['run']['name'] != e['old_name']:
+            raise ValueError('Config name differs from audit')
+        disk_configs[e['old_name']] = cfg
+    expected_names = proposed_names(disk_configs)
+    for e in entries:
+        cfg = disk_configs[e['old_name']]
+        source = cfg['continuation'].get('source_run')
+        if e['new_name'] != expected_names[e['old_name']]['new_name'] or e['old_source_run'] != source:
+            raise ValueError('Audit mapping does not match the fixed-LR template')
+        if e['run_id'] is None:
+            continue
         r = rows[e['run_id']]
         if getattr(r['status'], 'value', r['status']) != 'completed' or r['cycle_id'] is not None:
             raise ValueError(f'Run is not a completed stage-one run: {r["id"]}')
@@ -164,21 +205,24 @@ def build_plan(connection, root, audit):
         after = dict(name=e['new_name'], raw_config_yaml=raw, normalized_config_json=norm,
                      config_sha256=sha(raw), normalized_config_sha256=norm_hash)
         db.append({'id': r['id'], 'before': before, 'after': after})
+    for e in entries:
         old_path, new_path = e['old_config_path'], e['new_config_path']
         if not old_path.startswith('configs/stage_one/') or Path(old_path).parent != Path(new_path).parent or Path(new_path).stem != e['new_name']:
             raise ValueError('Invalid config destination')
         text = safe(root, old_path).read_text(encoding='utf-8')
-        if sha(text) != e['disk_config_sha256']:
-            raise ValueError(f'Config changed since audit: {old_path}')
-        if json.loads(normalize_config(RunConfig.model_validate(yaml.safe_load(text)))) != r['normalized_config_json']:
-            raise ValueError('Disk/database config mismatch')
-        if safe(root, new_path).exists():
+        if e['run_id'] is not None and disk_configs[e['old_name']] != rows[e['run_id']]['normalized_config_json']:
+            raise ValueError('Disk/database config mismatch (including LR)')
+        if old_path != new_path and safe(root, new_path).exists():
             raise ValueError(f'Target exists: {new_path}')
         renamed, _, _ = rename_config(text, mapping)
-        change(old_path, None); change(new_path, renamed)
+        if old_path != new_path:
+            change(old_path, None)
+        change(new_path, renamed)
         path_mapping[old_path] = new_path
     # Known structured metadata only: no global string substitution in reports.
-    for path in sorted((root/'configs/search_queues').glob('*.yml')):
+    for path in sorted((root/'configs/search_queues').rglob('*')):
+        if path.suffix not in ('.yml', '.yaml'):
+            continue
         rel = path.relative_to(root).as_posix(); raw = safe(root, rel).read_text(encoding='utf-8')
         q = yaml.safe_load(raw)
         if not isinstance(q, dict) or not isinstance(q.get('configs'), list):
@@ -186,14 +230,20 @@ def build_plan(connection, root, audit):
         new = [path_mapping.get(p, p) for p in q['configs']]
         if new != q['configs']:
             q['configs'] = new; change(rel, yaml.safe_dump(q, sort_keys=False, allow_unicode=True))
+        else:
+            change(rel, raw)
     for e in entries:
+        if e['run_id'] is None:
+            continue
         rel = f'artifacts/runs/{e["run_id"]:08d}/reports/summary.json'
         path = safe(root, rel)
         if path.exists():
             obj = json.loads(path.read_text(encoding='utf-8'))
             if obj.get('run_id') != e['run_id'] or obj.get('run_name') != e['old_name']:
                 raise ValueError(f'Unexpected report identity: {rel}')
-            obj['run_name'] = e['new_name']; change(rel, dump(obj))
+            raw = path.read_text(encoding='utf-8')
+            obj['run_name'] = e['new_name']
+            change(rel, raw if e['old_name'] == e['new_name'] else dump(obj))
     for ref in audit['metadata_references']:
         rel = ref['path']
         if ref.get('scan') or rel not in files:
@@ -204,7 +254,7 @@ def build_plan(connection, root, audit):
         path = safe(root, cp['relative_path'])
         if not path.is_file() or path.stat().st_size != cp['size_bytes']:
             raise ValueError(f'Checkpoint missing or wrong size: {cp["id"]}')
-    return {'runs': db, 'files': list(files.values()), 'mapping': entries,
+    return {'file_only': not any(r['before'] != r['after'] for r in db), 'runs': db, 'files': list(files.values()), 'mapping': entries,
             'checkpoint_sha256': {str(k):v['sha256'] for k,v in cps.items()}}
 
 
@@ -233,7 +283,8 @@ def db_side(connection, plan):
     for side in ('before', 'after'):
         if set(rows) == {r['id'] for r in plan['runs']} and all(
             {k:rows[r['id']][k] for k in FIELDS} == r[side] for r in plan['runs']):
-            return side
+            # With no DB mutation, a durable journal is sufficient to roll files forward.
+            return 'after' if plan.get('file_only') else side
     raise ValueError('Database differs from both journal states; no recovery performed')
 
 
@@ -287,7 +338,10 @@ def migrate(engine, root, audit, apply=False, confirm=input):
         plan = build_plan(c, root, audit)
         plan.update(identity=project_identity(c, engine, root), created_at=datetime.now(timezone.utc).isoformat(),
                     audit_git_commit=audit.get('git_commit'), format_version=1)
-        print(f'Runs: {len(plan["runs"])}; file operations: {len(plan["files"])}; checkpoint files unchanged.')
+        pending = sum(e['run_id'] is None for e in plan['mapping'])
+        print(f'Runs: {len(plan["runs"])}; pending configs: {pending}; file operations: {len(plan["files"])}; checkpoint files unchanged.')
+        if not any(f['before'] != f['after'] for f in plan['files']) and not any(r['before'] != r['after'] for r in plan['runs']):
+            print('Already normalized; nothing to change.'); return
         if not apply:
             print('Preview only; no configs, artifacts or database records changed.'); return
         if confirm('Type YES to rename the audited runs and configs: ') != 'YES':
@@ -301,15 +355,17 @@ def migrate(engine, root, audit, apply=False, confirm=input):
         write_atomic(directory/'before/database.json', dump(plan['runs']))
         csv_path = directory/'mapping.csv'
         with csv_path.open('x', newline='', encoding='utf-8') as stream:
-            keys = ['run_id','old_name','new_name','old_config_path','new_config_path']
+            keys = ['run_id','old_name','new_name','old_config_path','new_config_path',
+                    'old_source_run','new_source_run','status','learning_rate']
             writer=csv.DictWriter(stream,fieldnames=keys);writer.writeheader()
-            writer.writerows({k:e[k] for k in keys} for e in plan['mapping'])
+            writer.writerows({k:e.get(k) for k in keys} for e in plan['mapping'])
             stream.flush();os.fsync(stream.fileno())
         raw = dump(plan); journal = directory/'manifest.json'
         write_atomic(journal, raw)
         write_atomic(pending_path(root), dump({'manifest':journal.relative_to(root).as_posix(),'sha256':sha(raw)}))
         # Database commits first; persistent journal makes the filesystem step recoverable.
-        apply_database(c, plan)
+        if not plan['file_only']:
+            apply_database(c, plan)
     recover(engine, root)
 
 

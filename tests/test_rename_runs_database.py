@@ -11,6 +11,7 @@ from tests.test_clean_training import cleanup_database
 from train_and_eval.database.models import Run, Checkpoint, TrainingMetric
 from train_and_eval.run_config import RunConfig, normalize_config
 from extra_tools import rename_runs as tool
+from extra_tools.audit_run_names import proposed_names
 
 
 @pytest.fixture
@@ -47,7 +48,12 @@ def case(cleanup_database, tmp_path):
         s.commit()
     q='configs/search_queues/test.yml';p=tmp_path/q;p.parent.mkdir(parents=True)
     raw=yaml.safe_dump({'queue_schema_version':1,'name':'test','configs':[e['old_config_path'] for e in entries]});p.write_text(raw);refs.append({'path':q,'sha256':tool.sha(raw)})
-    audit={'audit_version':1,'errors':[],'mapping':entries,'counts':{'checkpoints':2,'evaluations':0},'metadata_references':refs}
+    configs = {e['old_name']: json.loads(normalize_config(RunConfig.model_validate(yaml.safe_load((tmp_path/e['old_config_path']).read_text())))) for e in entries}
+    names = proposed_names(configs)
+    for e in entries:
+        e['new_name'] = names[e['old_name']]['new_name']
+        e['new_config_path'] = str(Path(e['old_config_path']).with_name(e['new_name']+'.yml'))
+    audit={'audit_version':2,'lr_decimal_places':9,'errors':[],'mapping':entries,'counts':{'checkpoints':2,'evaluations':0},'metadata_references':refs}
     return engine,tmp_path,audit
 
 
@@ -111,4 +117,47 @@ def test_refuse_config_changed_since_audit(case):
     p=root/audit['mapping'][0]['old_config_path'];p.write_text(p.read_text()+'\n# external edit\n')
     with pytest.raises(ValueError,match='changed since audit'):
         tool.migrate(engine,root,audit,apply=True,confirm=lambda _: 'YES')
+    assert not tool.pending_path(root).exists()
+
+
+def test_pending_configs_follow_renamed_parent(case):
+    engine, root, audit = case
+    parent = audit['mapping'][-1]
+    raw = (root/parent['old_config_path']).read_text()
+    cfg = yaml.safe_load(raw)
+    cfg['run']['name'] = 'pending_resume'
+    cfg['continuation']['source_run'] = parent['old_name']
+    raw = yaml.safe_dump(cfg, sort_keys=False)
+    old_path = 'configs/stage_one/pending_resume.yml'
+    (root/old_path).write_text(raw)
+    configs = {e['old_name']: yaml.safe_load((root/e['old_config_path']).read_text()) for e in audit['mapping']}
+    configs['pending_resume'] = cfg
+    name = proposed_names(configs)['pending_resume']['new_name']
+    audit['mapping'].append(dict(run_id=None, old_name='pending_resume', new_name=name,
+        old_config_path=old_path, new_config_path=f'configs/stage_one/{name}.yml',
+        old_source_run=parent['old_name'], disk_config_sha256=tool.sha(raw)))
+    tool.migrate(engine, root, audit, apply=True, confirm=lambda _: 'YES')
+    changed = yaml.safe_load((root/audit['mapping'][-1]['new_config_path']).read_text())
+    assert changed['continuation']['source_run'] == parent['new_name']
+    with engine.connect() as connection:
+        assert len(tool.run_rows(connection)) == 2
+
+
+def test_database_lr_mismatch_blocks_all_changes(case):
+    engine, root, audit = case
+    entry = audit['mapping'][0]
+    with engine.begin() as connection:
+        row = tool.run_rows(connection)[entry['run_id']]
+        cfg = yaml.safe_load(row['raw_config_yaml'])
+        cfg['ppo']['learning_rate'] *= 2
+        raw = yaml.safe_dump(cfg)
+        norm = normalize_config(RunConfig.model_validate(cfg))
+        connection.execute(update(Run).where(Run.id == row['id']).values(
+            raw_config_yaml=raw, normalized_config_json=json.loads(norm),
+            config_sha256=tool.sha(raw), normalized_config_sha256=tool.sha(norm)))
+    entry['config_sha256'] = tool.sha(raw)
+    entry['normalized_config_sha256'] = tool.sha(norm)
+    with pytest.raises(ValueError, match='Disk/database config mismatch'):
+        tool.migrate(engine, root, audit, apply=True, confirm=lambda _: 'YES')
+    assert (root/entry['old_config_path']).exists()
     assert not tool.pending_path(root).exists()

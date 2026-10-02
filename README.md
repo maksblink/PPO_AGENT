@@ -610,6 +610,39 @@ Two-action trajectories may contain `policy_probability_action_0` (FLAT),
 tools compare final-checkpoint probability distributions and their evolution
 across periodic/final checkpoints, including histograms and confidence curves.
 
+### Grid coverage
+
+Grid Coverage compares selected on-disk queue plans with a read-only registry
+snapshot. It displays architecture-specific LR-by-gamma matrices, filtered by
+PPO optimization epochs and seed, plus stage details and missing-work tables.
+The view is independent of TRAIN/VAL performance selection and sidebar filters;
+it queries evaluation presence and status without loading trading metrics.
+
+Expected coverage is a Cartesian product of declared axes and continuation
+stages. Defaults come from selected manifests; LR, gamma and target stage count
+are editable expectations. Missing values outside these declared axes are not
+inferred. Overlapping manifests share one planned run. Malformed or unavailable
+configs are reported explicitly and make the plan incomplete.
+
+Axes are derived from validated configuration fields rather than run names.
+Separate configuration families retain non-axis settings such as data ranges,
+reward, costs, training budget, batch/rollout sizes and evaluation protocol.
+Names, continuation selectors, logging and artifact presentation settings are
+excluded from family identity. Exact disk/database configuration agreement is
+still checked for each existing run.
+
+A ready stage requires a completed requested training budget, valid planned
+ancestry, matching persisted configuration, one final checkpoint record and
+completed final TRAIN and VAL evaluations on that checkpoint. Incomplete budgets,
+missing evaluations, duplicate stages, broken ancestry and changed settings are
+reported separately from unstarted configurations. Continuation depth is not
+assumed to equal completed data epochs. Checkpoint files are not scanned by
+this view; recorded checkpoint availability does not certify file integrity.
+
+Cell selection exposes planned and executed stages. CSV exports contain gaps
+and stage metadata, never performance results. The view does not modify configs,
+start training or write to the registry.
+
 ## Experiment cleanup
 
 Selective cleanup respects run/checkpoint dependencies and shared reference

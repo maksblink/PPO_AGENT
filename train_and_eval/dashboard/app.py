@@ -1681,10 +1681,25 @@ if mode is None:
     mode = "VAL"
 data_scope = {"VAL": "run_validation", "TRAIN": "run_training"}[mode]
 st.caption(
-    f"{mode} mode · All evaluation views use this range. "
+    f"{mode} mode · Evaluation views use this range; Grid Coverage is scope-independent. "
     "Run summaries use completed final evaluations; Run Detail includes intermediate evaluations. "
     "PPO update diagnostics are shared between modes."
 )
+
+view = st.segmented_control(
+    "View",
+    options=["Run Explorer", "Scatter Explorer", "Activity Map", "Pareto Explorer",
+             "Group Comparison", "Run Detail", "Queues", "Grid Coverage"],
+    default="Run Explorer", selection_mode="single", key="dashboard_view",
+)
+if view is None:
+    view = "Run Explorer"
+
+if view == "Grid Coverage":
+    from pathlib import Path
+    from train_and_eval.dashboard.coverage import render_grid_coverage
+    render_grid_coverage(Path(__file__).resolve().parents[2])
+    st.stop()
 
 try:
     data = load_data(data_scope)
@@ -1700,15 +1715,6 @@ if frame.empty:
     st.stop()
 
 filtered = apply_sidebar_filters(frame)
-
-view = st.segmented_control(
-    "View",
-    options=["Run Explorer", "Scatter Explorer", "Activity Map", "Pareto Explorer",
-             "Group Comparison", "Run Detail", "Queues"],
-    default="Run Explorer", selection_mode="single", key="dashboard_view",
-)
-if view is None:
-    view = "Run Explorer"
 
 if view != "Queues":
     score_column = find_column(

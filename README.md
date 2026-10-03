@@ -541,7 +541,7 @@ the current invocation.
 ## Dashboard and diagnostics
 
 The Streamlit dashboard reads the registry through shared filters. Views include
-Run Explorer, Scatter Explorer, Activity Map, Pareto Explorer, Group Comparison,
+Run Explorer, Scatter Explorer, Activity Map, Pareto Explorer, Grid Analysis,
 Run Detail and Queues. It is a presentation layer, not a source of truth.
 
 A global VAL / TRAIN segmented control (VAL by default) selects the evaluation
@@ -739,7 +739,17 @@ are resolved before filtering, including branches and unfinished children.
 
 Statistics include finite observation counts, missing/nonfinite counts, minimum,
 maximum, mean, median and sample standard deviation. Each run has equal weight;
-multiple stages from one training path are not independent repetitions. Values
-retain database units (return, drawdown and exposure are fractions). Distribution
+multiple stages from one training path are not independent repetitions. Display tables express returns, drawdowns, exposure and success rates as percentages;
+standard deviations for these metrics are percentage points. Stored data remain
+fractions. Scores, ratios, counts and hyperparameters retain their original units. Distribution
 plots, path progression and downloadable tables use the selected population.
 No database schema or training behavior is changed.
+
+
+Grid Analysis replaces Group Comparison and also supports numeric diagnostics from
+the latest PPO update. Those diagnostics are independent of evaluation scope.
+Box plots show Q1–Q3 and the median; whiskers cover observations within 1.5 IQR
+of the box. Points beyond whiskers remain included in minimum/maximum statistics.
+Group labels are categorical. CSV exports use the same labeled units as tables.
+Grid Coverage has no TRAIN/VAL selector because it describes experiment coverage
+rather than evaluation results.

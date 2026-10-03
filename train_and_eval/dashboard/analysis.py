@@ -4,6 +4,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from train_and_eval.dashboard.analysis_display import (
+    statistics_display, runs_display, metric_text, distribution_figure,
+)
+
 
 def prepare_analysis(explorer: pd.DataFrame) -> pd.DataFrame:
     frame = explorer.copy()
@@ -34,7 +38,7 @@ def filter_rows(frame: pd.DataFrame, selections: dict, ranges: dict,
 
 def evaluation_metrics(frame: pd.DataFrame) -> list[str]:
     exclude = {'id', 'checkpoint_id', 'run_id'}
-    return [c for c in frame if c.startswith('eval.') and c[5:] not in exclude
+    return [c for c in frame if c.startswith(('eval.', 'train.')) and c.split('.', 1)[1] not in exclude
             and pd.api.types.is_numeric_dtype(frame[c])
             and not pd.api.types.is_bool_dtype(frame[c])]
 
@@ -69,15 +73,16 @@ def summarize(frame: pd.DataFrame, groups: list[str], metrics: list[str]) -> pd.
 
 def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
     import streamlit as st
-    import plotly.express as px
 
     st.subheader(f'Grid Analysis · {scope}')
     st.caption('Final evaluations only; one record per run. Filters below are independent of the sidebar. '
                'Mean and average are the same statistic; median is shown separately. '
-               'Return, drawdown and exposure use raw fractions: 0.10 = 10%.')
+               'Return, drawdown, exposure and success rates are displayed as percentages. '
+               'PPO diagnostics use the latest update and are shared between TRAIN and VAL.')
     frame = prepare_analysis(explorer)
     dimensions = dimension_columns(frame)
-    label = lambda c: c.removeprefix('cfg.normalized_config_json.').removeprefix('eval.')
+    # Keep configuration and database fields distinct in widget option labels.
+    label = lambda c: ('config.' + c.removeprefix('cfg.normalized_config_json.')) if c.startswith('cfg.normalized_config_json.') else c
     with st.expander('Filters', expanded=True):
         defaults = [c for c in dimensions if c == 'run.architecture' or
                     c.endswith(('ppo.learning_rate', 'ppo.gamma', 'ppo.n_epochs', 'run.seed'))]
@@ -142,8 +147,11 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
     st.caption('N = finite values for this metric; paths = distinct fresh ancestors. '
                'Averages weight runs equally. Mixing stages gives longer paths more weight; '
                'runs within one path are not independent repetitions. Missing values are not zero.')
-    overall = summarize(selected, [], chosen)
-    grouped = summarize(selected, grouping, chosen)
+    overall = statistics_display(summarize(selected, [], chosen))
+    grouped = statistics_display(summarize(selected, grouping, chosen))
+    st.caption('Percentage rows use % for values and percentage points (pp) for standard deviation. '
+               'Balanced score, profit factor, counts and hyperparameters retain their original units. '
+               'Downloaded tables use the same display units as these tables.')
     st.markdown('#### Overall statistics')
     st.dataframe(overall, hide_index=True, width='stretch')
     st.markdown('#### Grouped statistics')
@@ -152,21 +160,21 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
                        f'grid_statistics_{scope.lower()}.csv', 'text/csv', key='ga_download_stats')
     if chosen:
         metric = st.selectbox('Distribution metric', chosen, format_func=label, key='ga_chart_metric')
-        chart = selected.copy()
-        chart[metric] = pd.to_numeric(chart[metric], errors='coerce').replace([np.inf,-np.inf],np.nan)
-        chart['Group'] = chart[grouping].astype(str).agg(' · '.join, axis=1) if grouping else 'All selected'
-        st.plotly_chart(px.box(chart, x='Group', y=metric, points='all', hover_data=['run_id'],
-                              labels={metric:label(metric)}), width='stretch')
+        st.plotly_chart(distribution_figure(selected, metric, grouping, label(metric)), width='stretch')
+        st.caption('Box = middle 50% (Q1–Q3); line = median. Whiskers extend to the most extreme '
+                   'observations within 1.5 × IQR of the box. All run values are plotted; '
+                   'points outside whiskers still count in the table minimum and maximum.')
         st.markdown('#### Path progression')
         st.caption('Each cell lists run ID and value. Multiple runs at one stage are branches, not averaged observations.')
         progression = selected[['path.root_run_id','analysis.stage','run_id',metric]].copy()
-        progression['value'] = progression.apply(lambda r: f"#{int(r['run_id'])}: {r[metric]:.6g}", axis=1)
+        progression['value'] = progression.apply(lambda r: f"#{int(r['run_id'])}: {metric_text(metric, r[metric])}", axis=1)
         resolved = progression.dropna(subset=['path.root_run_id','analysis.stage'])
         st.dataframe(resolved.pivot_table(index='path.root_run_id', columns='analysis.stage', values='value',
                      aggfunc=lambda values: ' | '.join(values)), width='stretch')
     st.markdown('#### Matching runs')
     columns = list(dict.fromkeys([c for c in ['run_id','run.name','run.architecture','analysis.stage',
                 'path.root_run_id',*fields,*grouping,*chosen] if c in selected]))
-    st.dataframe(selected[columns], hide_index=True, width='stretch')
-    st.download_button('Download matching runs CSV', selected[columns].to_csv(index=False),
+    displayed = runs_display(selected[columns])
+    st.dataframe(displayed, hide_index=True, width='stretch')
+    st.download_button('Download matching runs CSV', displayed.to_csv(index=False),
                        f'grid_runs_{scope.lower()}.csv', 'text/csv', key='ga_download_runs')

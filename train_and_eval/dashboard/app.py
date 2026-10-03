@@ -1243,114 +1243,6 @@ def pareto_tab(
     )
 
 
-def group_comparison_tab(
-    frame: pd.DataFrame,
-) -> None:
-    st.subheader("Group / Seed Comparison")
-
-    available = usable_columns(frame)
-    numeric = numeric_columns(frame)
-
-    default_groups = [
-        column
-        for column in (
-            find_column(frame.columns, "run.architecture"),
-            find_column(frame.columns, ".n_epochs"),
-            find_column(
-                frame.columns,
-                ".learning_rate",
-            ),
-            find_column(frame.columns, ".gamma"),
-            find_column(frame.columns, ".gae_lambda"),
-            find_column(frame.columns, ".ent_coef"),
-            find_column(
-                frame.columns,
-                ".exposure_penalty",
-            ),
-        )
-        if column is not None
-    ]
-
-    groups = st.multiselect(
-        "Group identical runs by",
-        options=available,
-        default=default_groups,
-        format_func=display_name,
-    )
-
-    default_metric = find_column(
-        frame.columns,
-        "eval.balanced_score",
-    )
-
-    metric_index = (
-        numeric.index(default_metric)
-        if default_metric in numeric
-        else 0
-    )
-
-    metric = st.selectbox(
-        "Metric",
-        numeric,
-        index=metric_index,
-        format_func=display_name,
-    )
-
-    if not groups:
-        st.info("Select at least one grouping column.")
-        return
-
-    source = frame[
-        groups + [metric]
-    ].dropna(
-        subset=[metric]
-    )
-
-    if source.empty:
-        st.info("No data for this grouping.")
-        return
-
-    grouped = (
-        source
-        .groupby(
-            groups,
-            dropna=False,
-        )[metric]
-        .agg(
-            count="count",
-            mean="mean",
-            std="std",
-            minimum="min",
-            maximum="max",
-        )
-        .reset_index()
-        .sort_values(
-            "mean",
-            ascending=False,
-        )
-    )
-
-    grouped_display = grouped.rename(
-        columns={
-            **{
-                column: display_name(column)
-                for column in groups
-            },
-            "count": "Runs",
-            "mean": "Mean",
-            "std": "Std",
-            "minimum": "Min",
-            "maximum": "Max",
-        }
-    )
-
-    st.dataframe(
-        grouped_display,
-        width="stretch",
-        hide_index=True,
-    )
-
-
 def run_detail_tab(
     data: DashboardData,
     explorer: pd.DataFrame,
@@ -1670,6 +1562,24 @@ def queues_tab(data: DashboardData) -> None:
 
 st.title("PPO Experiment Dashboard")
 
+if st.session_state.get("dashboard_view") == "Group Comparison":
+    st.session_state["dashboard_view"] = "Grid Analysis"
+
+view = st.segmented_control(
+    "View",
+    options=["Run Explorer", "Scatter Explorer", "Activity Map", "Pareto Explorer",
+             "Run Detail", "Queues", "Grid Analysis", "Grid Coverage"],
+    default="Run Explorer", selection_mode="single", key="dashboard_view",
+)
+if view is None:
+    view = "Run Explorer"
+
+if view == "Grid Coverage":
+    from pathlib import Path
+    from train_and_eval.dashboard.coverage import render_grid_coverage
+    render_grid_coverage(Path(__file__).resolve().parents[2])
+    st.stop()
+
 mode = st.segmented_control(
     "Evaluation data",
     options=["VAL", "TRAIN"],
@@ -1685,21 +1595,6 @@ st.caption(
     "Run summaries use completed final evaluations; Run Detail includes intermediate evaluations. "
     "PPO update diagnostics are shared between modes."
 )
-
-view = st.segmented_control(
-    "View",
-    options=["Run Explorer", "Scatter Explorer", "Activity Map", "Pareto Explorer",
-             "Group Comparison", "Run Detail", "Queues", "Grid Analysis", "Grid Coverage"],
-    default="Run Explorer", selection_mode="single", key="dashboard_view",
-)
-if view is None:
-    view = "Run Explorer"
-
-if view == "Grid Coverage":
-    from pathlib import Path
-    from train_and_eval.dashboard.coverage import render_grid_coverage
-    render_grid_coverage(Path(__file__).resolve().parents[2])
-    st.stop()
 
 try:
     data = load_data(data_scope)
@@ -1802,8 +1697,6 @@ elif view == "Activity Map":
     activity_tab(filtered)
 elif view == "Pareto Explorer":
     pareto_tab(filtered)
-elif view == "Group Comparison":
-    group_comparison_tab(filtered)
 elif view == "Run Detail":
     run_detail_tab(data, filtered)
 elif view == "Queues":

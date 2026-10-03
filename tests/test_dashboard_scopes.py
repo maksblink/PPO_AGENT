@@ -70,14 +70,14 @@ def test_global_switch_updates_metrics_and_run_detail(mock_database):
     at = AppTest.from_file(str(app), default_timeout=30).run()
     assert not at.exception
     assert next(m for m in at.metric if m.label == "Best return").value == "+20.00%"
-    at.segmented_control[0].set_value("TRAIN").run()
+    at.segmented_control(key="evaluation_data_mode").set_value("TRAIN").run()
     assert not at.exception
     assert next(m for m in at.metric if m.label == "Best return").value == "-10.00%"
     assert not any(s.label == "Evaluation scope" for s in at.selectbox)
     for frame in at.dataframe:
         if "data_scope" in frame.value:
             assert set(frame.value.data_scope) == {"run_training"}
-    at.segmented_control[0].set_value("VAL").run()
+    at.segmented_control(key="evaluation_data_mode").set_value("VAL").run()
     assert not at.exception
     assert next(m for m in at.metric if m.label == "Best return").value == "+20.00%"
 
@@ -100,7 +100,7 @@ def test_dashboard_with_no_train_evaluations(mock_database):
     mock_database["evaluations"] = frame.loc[frame.data_scope == "run_validation"]
     app = Path(__file__).resolve().parents[1] / "train_and_eval/dashboard/app.py"
     at = AppTest.from_file(str(app), default_timeout=30).run()
-    at.segmented_control[0].set_value("TRAIN").run()
+    at.segmented_control(key="evaluation_data_mode").set_value("TRAIN").run()
     assert not at.exception
     assert next(m for m in at.metric if m.label == "Best return").value == "—"
     st.cache_data.clear()

@@ -726,3 +726,20 @@ completes the new state. File-only migrations recover by completing the new stat
 The journal supports interrupted-operation recovery and is not a training-time
 dependency. Earlier mappings, historical exports and conclusion documents remain
 historical records; mappings connect their names to current names and stable IDs.
+
+
+### Grid analysis
+
+The dashboard provides descriptive statistics for final TRAIN or VAL evaluations,
+with independent parameter filters and combined grouping dimensions. Numeric
+parameters support inclusive ranges or explicit value selections. Checkpoint
+ancestry supplies fresh/continuation stages and latest existing leaves; these
+are not search-queue positions or guaranteed planned final epochs. Endpoints
+are resolved before filtering, including branches and unfinished children.
+
+Statistics include finite observation counts, missing/nonfinite counts, minimum,
+maximum, mean, median and sample standard deviation. Each run has equal weight;
+multiple stages from one training path are not independent repetitions. Values
+retain database units (return, drawdown and exposure are fractions). Distribution
+plots, path progression and downloadable tables use the selected population.
+No database schema or training behavior is changed.

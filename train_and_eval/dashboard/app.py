@@ -1689,7 +1689,7 @@ st.caption(
 view = st.segmented_control(
     "View",
     options=["Run Explorer", "Scatter Explorer", "Activity Map", "Pareto Explorer",
-             "Group Comparison", "Run Detail", "Queues", "Grid Coverage"],
+             "Group Comparison", "Run Detail", "Queues", "Grid Analysis", "Grid Coverage"],
     default="Run Explorer", selection_mode="single", key="dashboard_view",
 )
 if view is None:
@@ -1712,6 +1712,11 @@ frame = data.explorer
 
 if frame.empty:
     st.warning("The runs table is empty.")
+    st.stop()
+
+if view == "Grid Analysis":
+    from train_and_eval.dashboard.analysis import render_grid_analysis
+    render_grid_analysis(frame, mode)
     st.stop()
 
 filtered = apply_sidebar_filters(frame)

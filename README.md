@@ -764,3 +764,49 @@ report improvements, deteriorations, ties, missing metric edges and filtered
 parents. Branched roots (detected before filtering) and unresolved ancestry are
 explicitly excluded from linear-path distributions. No-comparison paths remain
 visible in the detail table.
+
+
+## Cold-storage backup model
+
+The cold-storage utility captures the entire project tree, including Git history,
+ignored files, local configuration, datasets, virtual environments, experiment
+artifacts and checkpoints. The utility's own `.cold_storage` control directory is
+excluded to prevent recursive backups. Its project identity is retained in the
+backup metadata and reinstated during restoration. External data symlinks,
+external Git object stores, submodules and special device/socket files are
+rejected. System-interpreter links inside virtual environments are recorded as
+links; operating-system packages are outside the project backup boundary.
+
+A manifest records relative paths, SHA-256 content hashes, sizes, owners,
+permissions, modification times and extended attributes. Changes are represented
+as additions, modifications and deletions; a rename is a deletion plus an
+addition. Local-scan changes and changes relative to the preceding disk backup
+are recorded separately. Access times, inode numbers and filesystem allocation
+are not portable archive attributes.
+
+PostgreSQL is captured as a full custom-format logical database dump, with a
+separate globals/roles dump. This includes experiment records, migrations,
+sequence values, schema objects and permissions, rather than copying a live
+Docker volume. Application workers and running database records prevent capture.
+User tables are locked against writes during capture, and the database dump uses
+an exported snapshot. File hashes are checked before and after copying; source
+changes prevent publication. Other writers and schema maintenance must remain
+stopped during backup.
+
+Destination storage must be a separate mounted filesystem with Linux metadata,
+symlink and hardlink support. Each successful synchronization publishes a new
+verified generation through an atomic CURRENT pointer. Unchanged files use
+hardlinks to the preceding generation; modified files are new copies. Deleted
+paths are absent from the new generation. Old and interrupted generations are
+retained until explicit pruning, which first verifies the current generation.
+Backup generations must never be edited or used as live training directories,
+since unchanged files can be shared between generations.
+
+Restoration verifies file contents and restores into a new directory. Database
+restoration creates the original database only when that name is absent, and
+preserves the dump's ownership and grants. Role definitions are retained for
+administrator-led recovery of any additional roles. Virtual environments and
+external system dependencies may need rebuilding on another machine. A clean
+Git checkout is required for operations; restoration checks the archived Git
+checkout. The tool does not format disks or alter training behavior. Operational
+commands and recovery prerequisites are documented in the local instructions.

@@ -1,3 +1,6 @@
+# Local cold-storage manifests and database snapshots
+/.cold_storage/
+
 # Python
 __pycache__/
 *.py[cod]

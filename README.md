@@ -753,3 +753,14 @@ of the box. Points beyond whiskers remain included in minimum/maximum statistics
 Group labels are categorical. CSV exports use the same labeled units as tables.
 Grid Coverage has no TRAIN/VAL selector because it describes experiment coverage
 rather than evaluation results.
+
+
+Grid Analysis includes path-improvement distributions for a selected metric and
+direction. A comparison requires a direct checkpoint parent and child, both
+selected with finite values. Ties are separate and filtered gaps are never
+bridged. Distributions include zero-improvement bins and are split by the number
+of comparable edges, with shares calculated within each denominator. Details
+report improvements, deteriorations, ties, missing metric edges and filtered
+parents. Branched roots (detected before filtering) and unresolved ancestry are
+explicitly excluded from linear-path distributions. No-comparison paths remain
+visible in the detail table.

@@ -171,6 +171,9 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
         resolved = progression.dropna(subset=['path.root_run_id','analysis.stage'])
         st.dataframe(resolved.pivot_table(index='path.root_run_id', columns='analysis.stage', values='value',
                      aggfunc=lambda values: ' | '.join(values)), width='stretch')
+    if chosen:
+        from train_and_eval.dashboard.path_improvement import render_path_improvements
+        render_path_improvements(selected, frame, chosen, scope)
     st.markdown('#### Matching runs')
     columns = list(dict.fromkeys([c for c in ['run_id','run.name','run.architecture','analysis.stage',
                 'path.root_run_id',*fields,*grouping,*chosen] if c in selected]))

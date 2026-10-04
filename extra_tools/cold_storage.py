@@ -19,6 +19,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
+import threading
 import tempfile
 import uuid
 
@@ -29,6 +31,132 @@ ACTIVE_TABLES = ('runs', 'evaluations', 'walk_forward_studies', 'walk_forward_cy
 
 class BackupError(RuntimeError):
     pass
+
+
+# Progress is observational: it never changes backup selection or publication.
+PROGRESS = None
+
+
+class Progress:
+    def __init__(self, stream=None, clock=None):
+        self.stream = stream or sys.stdout
+        self.clock = clock or time.monotonic
+        self.started = self.clock()
+        self.active = None
+        self.rows = []
+        self.lock = threading.RLock()
+        self.last_width = 0
+        self.summary_path = None
+        self.copied_bytes = self.copied_objects = self.reused_objects = 0
+
+    def render(self, final=False):
+        with self.lock:
+            row = self.active
+            if row is None:
+                return
+            elapsed = max(0.0, self.clock() - row['started'])
+            total, done = row['total'], row['bytes']
+            if total is None:
+                bar = 'working'
+            else:
+                fraction = min(1.0, done / total) if total else float(final)
+                fill = int(20 * fraction)
+                bar = '[' + '#' * fill + '-' * (20-fill) + f'] {fraction:6.1%}'
+            rate = done / elapsed if elapsed else 0
+            eta = f' | ETA {(total-done)/rate:.0f}s' if total and rate and done < total else ''
+            line = f"{row['name']} | {bar} | {done / 1024**3:.2f} GiB I/O | {elapsed:.0f}s{eta}"
+            if self.stream.isatty():
+                width = max(30, shutil.get_terminal_size(fallback=(120, 24)).columns - 1)
+                line = line[:width]
+                self.stream.write('\r' + line.ljust(min(self.last_width, width)))
+                self.last_width = len(line)
+                if final:
+                    self.stream.write('\n')
+                    self.last_width = 0
+            elif final:
+                self.stream.write(line + f" | {row['status']}\n")
+            self.stream.flush()
+
+    def pulse(self, stop):
+        while not stop.wait(0.25):
+            self.render()
+
+    @contextmanager
+    def phase(self, name, total=None):
+        row = dict(name=name, total=total, bytes=0, started=self.clock(), status='RUNNING')
+        with self.lock:
+            if self.active is not None:
+                raise BackupError('Nested progress phase.')
+            self.active = row
+        if not self.stream.isatty():
+            print(f'{name}: started', file=self.stream, flush=True)
+        self.render()
+        stop = threading.Event()
+        worker = threading.Thread(target=self.pulse, args=(stop,), daemon=True)
+        worker.start()
+        try:
+            yield
+            row['status'] = 'OK'
+        except BaseException:
+            row['status'] = 'FAILED/INTERRUPTED'
+            raise
+        finally:
+            stop.set()
+            worker.join()
+            row['seconds'] = max(0.0, self.clock() - row['started'])
+            self.render(final=True)
+            with self.lock:
+                self.rows.append({k: v for k, v in row.items() if k != 'started'})
+                self.active = None
+
+    def advance(self, size):
+        with self.lock:
+            if self.active is not None:
+                self.active['bytes'] += size
+
+    def finish(self, status):
+        elapsed = max(0.0, self.clock() - self.started)
+        report = dict(status=status, total_seconds=elapsed, stages=self.rows,
+                      copied_objects=self.copied_objects, reused_objects=self.reused_objects,
+                      copied_bytes=self.copied_bytes)
+        print('\nBACKUP OPERATION SUMMARY | ' + status, file=self.stream)
+        width = max([len(r['name']) for r in self.rows] + [5])
+        print(f"{'Stage':<{width}}  {'Seconds':>9}  {'GiB I/O':>10}  Status", file=self.stream)
+        for row in self.rows:
+            print(f"{row['name']:<{width}}  {row['seconds']:9.1f}  {row['bytes']/1024**3:10.2f}  {row['status']}", file=self.stream)
+        other = max(0.0, elapsed - sum(r['seconds'] for r in self.rows))
+        print(f'Total: {elapsed:.1f}s | setup/confirmation/finalization: {other:.1f}s', file=self.stream)
+        print(f'New objects: {self.copied_objects} | reused objects: {self.reused_objects} | copied: {self.copied_bytes/1024**3:.2f} GiB', file=self.stream)
+        print('I/O includes copying and checksum reads; it is not archive size.', file=self.stream)
+        if self.summary_path:
+            try:
+                atomic_json(self.summary_path, report)
+                print(f'Summary JSON: {self.summary_path}', file=self.stream)
+            except OSError:
+                print('Could not save summary JSON; see terminal summary above.', file=self.stream)
+
+
+@contextmanager
+def phase(name, total=None):
+    if PROGRESS is None:
+        yield
+    else:
+        with PROGRESS.phase(name, total):
+            yield
+
+
+def advance(size):
+    if PROGRESS is not None:
+        PROGRESS.advance(size)
+
+
+def copy_chunks(src, dst):
+    while True:
+        chunk = src.read(4 * 1024 * 1024)
+        if not chunk:
+            break
+        dst.write(chunk)
+        advance(len(chunk))
 
 
 def command(args, **kwargs):
@@ -144,7 +272,11 @@ def digest(path):
         opened = os.fstat(stream.fileno())
         if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
             raise BackupError(f'File changed while opening: {path}')
-        h = hashlib.file_digest(stream, 'sha256').hexdigest()
+        hasher = hashlib.sha256()
+        while chunk := stream.read(4 * 1024 * 1024):
+            hasher.update(chunk)
+            advance(len(chunk))
+        h = hasher.hexdigest()
         after = os.fstat(stream.fileno())
     final = path.lstat()
     signature = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
@@ -153,7 +285,12 @@ def digest(path):
     return h
 
 
-def scan(root, exclude_state=False):
+def scan(root, exclude_state=False, title="Scan files"):
+    with phase(title):
+        return _scan(root, exclude_state)
+
+
+def _scan(root, exclude_state=False):
     entries = {}
     def visit(directory):
         for path in sorted(directory.iterdir()):
@@ -170,13 +307,18 @@ def scan(root, exclude_state=False):
             elif stat.S_ISDIR(s.st_mode):
                 entry.update(kind='dir')
             elif stat.S_ISREG(s.st_mode):
-                entry.update(kind='file', size=s.st_size, sha256=digest(path))
+                entry.update(kind='file', size=s.st_size)
             else:
                 raise BackupError(f'Unsupported socket/device/FIFO: {path}')
             entries[rel] = entry
             if entry['kind'] == 'dir':
                 visit(path)
     visit(root)
+    if PROGRESS is not None and PROGRESS.active is not None:
+        PROGRESS.active['total'] = sum(e.get('size', 0) for e in entries.values())
+    for name, entry in entries.items():
+        if entry['kind'] == 'file':
+            entry['sha256'] = digest(root / name)
     return entries
 
 
@@ -200,8 +342,6 @@ def changes(old, new):
 
 
 def report(delta):
-    for row in delta:
-        print(f"{row['status']}  {row['path']}")
     print('Operations:', ', '.join(f'{s}={sum(r["status"] == s for r in delta)}' for s in ('N', 'M', 'D')))
 
 
@@ -284,6 +424,11 @@ def frozen_database(root):
 
 
 def dump_database(directory, env, snapshot):
+    with phase("PostgreSQL dump"):
+        return _dump_database(directory, env, snapshot)
+
+
+def _dump_database(directory, env, snapshot):
     dump = directory / 'database.dump'
     roles = directory / 'roles.sql'
     command(['pg_dump', '--no-password', '--format=custom', '--create', '--snapshot=' + snapshot,
@@ -420,6 +565,8 @@ def put_object(store, source, entry):
     if target.exists() or target.is_symlink():
         if target.is_symlink() or target.stat().st_size != entry['size'] or digest(target) != entry['sha256']:
             raise BackupError('Existing object is damaged; refusing to overwrite it.')
+        if PROGRESS is not None:
+            PROGRESS.reused_objects += 1
         return
     fd, name = tempfile.mkstemp(prefix='.object-', dir=target.parent)
     temporary = Path(name)
@@ -429,13 +576,16 @@ def put_object(store, source, entry):
             with os.fdopen(src_fd, 'rb') as src:
                 if not stat.S_ISREG(os.fstat(src.fileno()).st_mode):
                     raise BackupError('Object source is not a regular file.')
-                shutil.copyfileobj(src, dst, 4 * 1024 * 1024)
+                copy_chunks(src, dst)
             dst.flush()
             os.fsync(dst.fileno())
         if temporary.stat().st_size != entry['size'] or digest(temporary) != entry['sha256']:
             raise BackupError('Object changed during copying or failed checksum.')
         os.replace(temporary, target)
         fsync_dir(target.parent)
+        if PROGRESS is not None:
+            PROGRESS.copied_objects += 1
+            PROGRESS.copied_bytes += entry["size"]
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -464,6 +614,11 @@ def references(doc):
 
 
 def verify_generation(gen, manifest):
+    with phase("Verify backup objects", sum(references(manifest).values())):
+        _verify_generation(gen, manifest)
+
+
+def _verify_generation(gen, manifest):
     for sha, size in references(manifest).items():
         path = object_path(gen.parent, sha)
         if path.is_symlink() or not path.is_file() or path.stat().st_size != size or digest(path) != sha:
@@ -485,7 +640,7 @@ def restore_tree(store, target, entries):
             source = object_path(store, entry['sha256'])
             fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(fd, 'rb') as src, path.open('xb') as dst:
-                shutil.copyfileobj(src, dst, 4 * 1024 * 1024)
+                copy_chunks(src, dst)
             set_metadata(path, entry)
     for name in sorted(entries, reverse=True):
         if entries[name]['kind'] == 'dir':
@@ -543,7 +698,7 @@ def snapshot(root, local, project_id, store=None):
     previous = read_json(local / 'manifest.json')['files'] if (local / 'manifest.json').exists() else {}
     with frozen_database(root) as (env, snapshot_id, database):
         print('Scanning all project files, including ignored files...', flush=True)
-        files = scan(root, exclude_state=True)
+        files = scan(root, exclude_state=True, title="Hash source inventory")
         external_links(root, files)
         delta = changes(old['files'] if old else {}, files)
         unique = {e['sha256']: e['size'] for e in files.values() if e['kind'] == 'file'}
@@ -552,6 +707,13 @@ def snapshot(root, local, project_id, store=None):
         metadata_reserve = max(256 * 1024**2, len(files) * 16384)
         if shutil.disk_usage(local).free < dump_reserve + metadata_reserve:
             raise BackupError('Not enough free local space for the database snapshot and manifest.')
+        plan_path = local / 'plan.json'
+        atomic_json(plan_path, {'format': FORMAT, 'project_id': project_id,
+                    'status': 'PLANNED_NOT_BACKED_UP', 'created_at': datetime.now(timezone.utc).isoformat(),
+                    'destination': str(store) if store else None,
+                    'files': files, 'changes': delta if store else changes(previous, files),
+                    'new_content_bytes': needed, 'database_snapshot': 'pending'})
+        print(f'Complete inventory and change plan: {plan_path}')
         if store:
             required = needed + dump_reserve + metadata_reserve
             if shutil.disk_usage(store).free < required:
@@ -571,25 +733,29 @@ def snapshot(root, local, project_id, store=None):
             if store:
                 pending = Path(tempfile.mkdtemp(prefix='.incomplete-', dir=store))
                 print('Writing new content objects...', flush=True)
-                seen = set()
+                sources = {}
                 for name, entry in files.items():
-                    if entry['kind'] == 'file' and entry['sha256'] not in seen:
-                        put_object(store, root / name, entry)
-                        seen.add(entry['sha256'])
+                    if entry['kind'] == 'file':
+                        sources.setdefault(entry['sha256'], (root / name, entry))
                 for name, entry in db_files.items():
-                    put_object(store, local_pending / name, entry)
+                    sources.setdefault(entry['sha256'], (local_pending / name, entry))
+                io_total = sum(e['size'] * (1 if object_path(store, sha).exists() else 2)
+                               for sha, (_, e) in sources.items())
+                with phase("Store content + checksums", io_total):
+                    for path, entry in sources.values():
+                        put_object(store, path, entry)
                 verify_generation(pending, doc)
             print('Rechecking source stability...', flush=True)
             clean_git(root)
             no_workers(root)
-            if scan(root, exclude_state=True) != files:
+            if scan(root, exclude_state=True, title="Recheck source") != files:
                 raise BackupError('Source changed during backup. Stop writers and retry; previous backup is intact.')
             if store:
                 atomic_bytes(store / 'RESTORE.py', Path(__file__).read_bytes())
                 gen = publish(store, pending, doc)
                 atomic_json(local / 'manifest.json', doc)
                 atomic_json(local / 'last_destination.json', {'path': str(store), 'generation': gen.name})
-                print(f'Backup committed and verified: {gen}\nPrevious manifests retained; prune removes unreferenced content.')
+                print(f'Backup committed and verified: {gen}\nLocal manifest: {local / "manifest.json"}\nDisk manifest: {gen / "manifest.json"}\nPrevious manifests retained; prune removes unreferenced content.')
             else:
                 atomic_json(local_pending / 'manifest.json', doc)
                 capture = local / ('capture-' + uuid.uuid4().hex)
@@ -752,7 +918,7 @@ def probe(local, mount):
         print('PASS: content, case-sensitive names, deduplication, symlinks, metadata, locking and atomic pointer writes. Temporary test files removed on exit. No experiment database accessed.')
 
 
-def main(argv=None):
+def _main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=['disks', 'probe', 'scan', 'compare', 'sync', 'verify', 'prune', 'restore-files', 'restore-database'])
     parser.add_argument('--project', type=Path, default=Path(__file__).resolve().parents[1])
@@ -771,6 +937,8 @@ def main(argv=None):
             return 0
         root = args.project.resolve()
         with local_state(root) as (local, project_id):
+            if PROGRESS is not None:
+                PROGRESS.summary_path = local / "last_operation_summary.json"
             if args.mode == 'disks':
                 discover()
             elif args.mode == 'restore-database':
@@ -790,7 +958,11 @@ def main(argv=None):
                         local_doc = read_json(local / 'manifest.json')
                         _, remote = current(dest)
                         print('Manifest comparison only. Run scan to refresh local inventory first.')
-                        report(changes(remote['files'] if remote else {}, local_doc['files']))
+                        delta = changes(remote['files'] if remote else {}, local_doc['files'])
+                        result_path = local / 'comparison.json'
+                        atomic_json(result_path, {'created_at': datetime.now(timezone.utc).isoformat(), 'destination': str(store), 'changes': delta})
+                        report(delta)
+                        print(f'Complete comparison: {result_path}')
                         print('Database dump:', 'unchanged' if remote and remote['database_files'] == local_doc['database_files'] else 'new/changed snapshot')
                     else:
                         gen, doc = current(dest)
@@ -810,6 +982,21 @@ def main(argv=None):
         message = str(exc) if isinstance(exc, (BackupError, FileNotFoundError, PermissionError)) else type(exc).__name__
         print('Backup stopped: ' + message, file=sys.stderr)
         return 1
+
+
+def main(argv=None):
+    global PROGRESS
+    if any(arg in ('-h', '--help') for arg in (argv if argv is not None else sys.argv[1:])):
+        return _main(argv)
+    PROGRESS = Progress()
+    status = 'FAILED/INTERRUPTED'
+    try:
+        result = _main(argv)
+        status = 'OK' if result == 0 else 'FAILED/CANCELLED'
+        return result
+    finally:
+        PROGRESS.finish(status)
+        PROGRESS = None
 
 
 if __name__ == '__main__':

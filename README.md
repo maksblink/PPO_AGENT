@@ -813,3 +813,19 @@ removed by synchronization. Capacity estimates reserve space for new content,
 dumps and metadata; failures do not publish an incomplete generation. Access
 times, inode identities and filesystem allocation are not archive attributes.
 Operational commands and recovery steps are in the local instructions.
+
+
+Cold-storage operations expose per-stage progress and elapsed-time summaries.
+Hashing, content storage and verification report processed I/O bytes and an
+estimated remaining stage time when the byte total is known. Database export
+and initial inventory enumeration expose elapsed time without a fabricated
+percentage. Interactive terminals refresh one line without clearing scrollback;
+redirected output records stage boundaries only. Summary status distinguishes
+successful operations from cancellation and failure.
+
+The local pre-transfer plan records the complete inventory and path changes
+before confirmation, explicitly marked as not yet backed up. Completed manifests
+remain separate from this plan. Comparisons and final timing summaries are also
+stored as local JSON records. Console output contains aggregate change counts
+and locations of these records instead of listing every project path. I/O counts
+include checksum reads and must not be interpreted as archive size.

@@ -768,45 +768,48 @@ visible in the detail table.
 
 ## Cold-storage backup model
 
-The cold-storage utility captures the entire project tree, including Git history,
-ignored files, local configuration, datasets, virtual environments, experiment
-artifacts and checkpoints. The utility's own `.cold_storage` control directory is
-excluded to prevent recursive backups. Its project identity is retained in the
-backup metadata and reinstated during restoration. External data symlinks,
-external Git object stores, submodules and special device/socket files are
-rejected. System-interpreter links inside virtual environments are recorded as
-links; operating-system packages are outside the project backup boundary.
+Cold storage captures the complete project tree, including Git history, ignored
+files, secrets, datasets, virtual environments, checkpoints and reports. The
+`.cold_storage` working directory is excluded to prevent recursion. External data
+symlinks, external Git object stores, submodules and special files are rejected;
+virtual-environment system-interpreter links are retained as links. Operating
+system packages are outside the backup boundary.
 
-A manifest records relative paths, SHA-256 content hashes, sizes, owners,
-permissions, modification times and extended attributes. Changes are represented
-as additions, modifications and deletions; a rename is a deletion plus an
-addition. Local-scan changes and changes relative to the preceding disk backup
-are recorded separately. Access times, inode numbers and filesystem allocation
-are not portable archive attributes.
+Format 2 supports exFAT and native Linux filesystems. File contents are immutable
+SHA-256-addressed objects shared across paths and backup generations. The disk
+needs ordinary file storage, locking, rename and flush support; it does not need
+hardlinks, symlinks, POSIX owners, extended attributes or precise timestamps.
+Manifest records retain relative paths, file types, owners, permissions, extended
+attributes, modification timestamps and link targets. Case-sensitive source names
+are preserved as manifest keys even on case-insensitive destination filesystems.
+Renames appear as deletion/addition events while reusing identical content.
 
-PostgreSQL is captured as a full custom-format logical database dump, with a
-separate globals/roles dump. This includes experiment records, migrations,
-sequence values, schema objects and permissions, rather than copying a live
-Docker volume. Application workers and running database records prevent capture.
-User tables are locked against writes during capture, and the database dump uses
-an exported snapshot. File hashes are checked before and after copying; source
-changes prevent publication. Other writers and schema maintenance must remain
-stopped during backup.
+Each generation combines a project manifest with a full custom-format PostgreSQL
+dump and a globals/roles dump, also stored as content objects. Capture requires a
+clean Git checkout and stopped application workers. Running database records and
+unfinished cleanup/rename operations block capture. User tables are locked
+against writes and the dump uses an exported snapshot. Source files are hashed
+and rechecked before publication; other file/schema writers must remain stopped.
 
-Destination storage must be a separate mounted filesystem with Linux metadata,
-symlink and hardlink support. Each successful synchronization publishes a new
-verified generation through an atomic CURRENT pointer. Unchanged files use
-hardlinks to the preceding generation; modified files are new copies. Deleted
-paths are absent from the new generation. Old and interrupted generations are
-retained until explicit pruning, which first verifies the current generation.
-Backup generations must never be edited or used as live training directories,
-since unchanged files can be shared between generations.
+Only a fully verified generation is published through an atomic CURRENT pointer.
+Interrupted transfers can leave unreferenced objects; subsequent synchronization
+reuses valid content. Pruning verifies the current generation, removes older
+manifests, then removes only objects unreferenced by the current manifest. This
+ordering keeps current content reachable if pruning is interrupted. Destination
+corruption is reported rather than silently overwritten. Format 1 disk backups
+are not silently converted or reused.
 
-Restoration verifies file contents and restores into a new directory. Database
-restoration creates the original database only when that name is absent, and
-preserves the dump's ownership and grants. Role definitions are retained for
-administrator-led recovery of any additional roles. Virtual environments and
-external system dependencies may need rebuilding on another machine. A clean
-Git checkout is required for operations; restoration checks the archived Git
-checkout. The tool does not format disks or alter training behavior. Operational
-commands and recovery prerequisites are documented in the local instructions.
+A destination probe exercises a small file/metadata round-trip without accessing
+the experiment database. A standalone recovery script is saved beside CURRENT.
+File restoration reconstructs the tree and Linux metadata in a new directory on
+a suitable Linux filesystem, verifies it and checks the reconstructed Git tree.
+PostgreSQL restoration requires the original database name to be absent and
+preserves ownership and grants. Additional roles may require administrator-led
+recovery from the roles dump. Virtual environments may need rebuilding on a new
+machine. The exFAT archive is not a directly executable project directory.
+
+No source files, experiment records or existing unrelated disk contents are
+removed by synchronization. Capacity estimates reserve space for new content,
+dumps and metadata; failures do not publish an incomplete generation. Access
+times, inode identities and filesystem allocation are not archive attributes.
+Operational commands and recovery steps are in the local instructions.

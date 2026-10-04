@@ -2,7 +2,7 @@
 """Complete Linux project backup. Run --help; no Git ignore rules filter payloads.
 
 The destination is managed exclusively by this program. CURRENT is an atomic
-pointer to a verified generation. Never train in, or edit, backup generations.
+pointer to a verified generation. Never train in, or edit, backup generations. Payloads are SHA-256 objects; Linux metadata live in manifests.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ import tempfile
 import uuid
 
 STATE = '.cold_storage'
-FORMAT = 1
+FORMAT = 2
 ACTIVE_TABLES = ('runs', 'evaluations', 'walk_forward_studies', 'walk_forward_cycles')
 
 
@@ -367,7 +367,6 @@ def destination(store, project_id, create=False):
         if not create:
             yield None
             return
-        check_capabilities(store.parent)
         store.mkdir(mode=0o700)
         atomic_json(store / 'identity.json', {'format': FORMAT, 'project_id': project_id})
     marker = read_json(store / 'identity.json')
@@ -403,19 +402,96 @@ def current(store):
     return gen, manifest
 
 
-def verify_generation(gen, manifest):
-    if (gen / 'project').is_symlink():
-        raise BackupError('Unsafe project directory.')
-    if scan(gen / 'project') != manifest['files']:
-        raise BackupError('Backup files do not match their manifest. No backup was replaced.')
-    for name, entry in manifest['database_files'].items():
-        if name not in ('database.dump', 'roles.sql'):
-            raise BackupError('Invalid database artifact name.')
-        path = gen / name
-        if path.is_symlink() or path.stat().st_size != entry['size'] or digest(path) != entry['sha256']:
-            raise BackupError('Database dump checksum mismatch.')
-    if set(manifest['database_files']) != {'database.dump', 'roles.sql'}:
+def object_path(store, sha):
+    if not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{64}', sha):
+        raise BackupError('Invalid object SHA-256.')
+    base = store / 'objects'
+    shard = base / sha[:2]
+    if base.is_symlink() or shard.is_symlink():
+        raise BackupError('Object directories must not be symlinks.')
+    return shard / sha[2:]
+
+
+def put_object(store, source, entry):
+    target = object_path(store, entry['sha256'])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fsync_dir(store)
+    fsync_dir(target.parent.parent)
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or target.stat().st_size != entry['size'] or digest(target) != entry['sha256']:
+            raise BackupError('Existing object is damaged; refusing to overwrite it.')
+        return
+    fd, name = tempfile.mkstemp(prefix='.object-', dir=target.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'wb') as dst:
+            src_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(src_fd, 'rb') as src:
+                if not stat.S_ISREG(os.fstat(src.fileno()).st_mode):
+                    raise BackupError('Object source is not a regular file.')
+                shutil.copyfileobj(src, dst, 4 * 1024 * 1024)
+            dst.flush()
+            os.fsync(dst.fileno())
+        if temporary.stat().st_size != entry['size'] or digest(temporary) != entry['sha256']:
+            raise BackupError('Object changed during copying or failed checksum.')
+        os.replace(temporary, target)
+        fsync_dir(target.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def references(doc):
+    validate_entries(doc['files'])
+    if set(doc['database_files']) != {'database.dump', 'roles.sql'}:
         raise BackupError('Incomplete database backup.')
+    result = {}
+    for entry in list(doc['files'].values()) + list(doc['database_files'].values()):
+        if 'sha256' not in entry:
+            continue
+        sha, size = entry['sha256'], entry['size']
+        if not isinstance(sha, str) or not re.fullmatch(r'[0-9a-f]{64}', sha) or not isinstance(size, int) or size < 0:
+            raise BackupError('Invalid object reference.')
+        if sha in result and result[sha] != size:
+            raise BackupError('Conflicting object sizes.')
+        result[sha] = size
+    for entry in doc['files'].values():
+        if entry['kind'] == 'file' and ('sha256' not in entry or 'size' not in entry):
+            raise BackupError('Missing file content reference.')
+    for entry in doc['database_files'].values():
+        if 'sha256' not in entry or 'size' not in entry:
+            raise BackupError('Missing database content reference.')
+    return result
+
+
+def verify_generation(gen, manifest):
+    for sha, size in references(manifest).items():
+        path = object_path(gen.parent, sha)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size or digest(path) != sha:
+            raise BackupError(f'Object missing or damaged: {sha}. No backup was replaced.')
+
+
+def restore_tree(store, target, entries):
+    validate_entries(entries)
+    target.mkdir(mode=0o700)
+    for name in sorted(entries):
+        entry = entries[name]
+        path = target / name
+        if entry['kind'] == 'dir':
+            path.mkdir(mode=0o700)
+        elif entry['kind'] == 'link':
+            os.symlink(entry['target'], path)
+            set_metadata(path, entry)
+        else:
+            source = object_path(store, entry['sha256'])
+            fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, 'rb') as src, path.open('xb') as dst:
+                shutil.copyfileobj(src, dst, 4 * 1024 * 1024)
+            set_metadata(path, entry)
+    for name in sorted(entries, reverse=True):
+        if entries[name]['kind'] == 'dir':
+            set_metadata(target / name, entries[name])
+            fsync_dir(target / name)
+    fsync_dir(target)
 
 
 def set_metadata(path, entry):
@@ -433,40 +509,6 @@ def set_metadata(path, entry):
     if entry['kind'] == 'file':
         with path.open('rb') as f:
             os.fsync(f.fileno())
-
-
-def copy_tree(source, target, entries, old_root=None, old_entries=None):
-    validate_entries(entries)
-    target.mkdir(mode=0o700)
-    old_entries = old_entries or {}
-    for name, entry in entries.items():
-        dest = target / name
-        src = source / name
-        if entry['kind'] == 'dir':
-            dest.mkdir(mode=0o700)
-        elif entry['kind'] == 'link':
-            os.symlink(entry['target'], dest)
-            set_metadata(dest, entry)
-        elif old_root and old_entries.get(name) == entry:
-            os.link(old_root / name, dest, follow_symlinks=False)
-        else:
-            # Opening without following a late symlink prevents escaping source.
-            fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
-            with os.fdopen(fd, 'rb') as inp, dest.open('xb') as out:
-                if not stat.S_ISREG(os.fstat(inp.fileno()).st_mode):
-                    raise BackupError('Source file type changed.')
-                shutil.copyfileobj(inp, out, 4 * 1024 * 1024)
-                out.flush()
-                os.fchmod(out.fileno(), entry['mode'])
-                os.fsync(out.fileno())
-            set_metadata(dest, entry)
-    # Directory timestamps must be restored after all children are written.
-    for name, entry in reversed(list(entries.items())):
-        if entry['kind'] == 'dir':
-            path = target / name
-            set_metadata(path, entry)
-            fsync_dir(path)
-    fsync_dir(target)
 
 
 def manifest(root, project_id, files, database_files, database, previous):
@@ -496,7 +538,7 @@ def snapshot(root, local, project_id, store=None):
     no_workers(root)
     old_gen, old = current(store)
     if old:
-        print('Verifying previous backup (SHA-256; large disks can take hours)...', flush=True)
+        print('Verifying previous backup objects (SHA-256)...', flush=True)
         verify_generation(old_gen, old)
     previous = read_json(local / 'manifest.json')['files'] if (local / 'manifest.json').exists() else {}
     with frozen_database(root) as (env, snapshot_id, database):
@@ -504,29 +546,38 @@ def snapshot(root, local, project_id, store=None):
         files = scan(root, exclude_state=True)
         external_links(root, files)
         delta = changes(old['files'] if old else {}, files)
-        needed = sum(e['size'] for p, e in files.items() if e['kind'] == 'file' and (not old or old['files'].get(p) != e))
-        # Dump compression is not guaranteed; reserve twice database size plus slack.
-        db_size = database['size_bytes']
-        dump_reserve = max(1024**3, int(db_size) * 2)
-        work_parent = store or local
-        required = (needed if store else 0) + dump_reserve + max(256 * 1024**2, len(files) * 16384)
-        if shutil.disk_usage(work_parent).free < required:
-            raise BackupError(f'Not enough free space: need at least {required / 1024**3:.2f} GiB for this operation.')
+        unique = {e['sha256']: e['size'] for e in files.values() if e['kind'] == 'file'}
+        needed = sum(size for sha, size in unique.items() if store and not object_path(store, sha).exists())
+        dump_reserve = max(1024**3, int(database['size_bytes']) * 2)
+        metadata_reserve = max(256 * 1024**2, len(files) * 16384)
+        if shutil.disk_usage(local).free < dump_reserve + metadata_reserve:
+            raise BackupError('Not enough free local space for the database snapshot and manifest.')
         if store:
+            required = needed + dump_reserve + metadata_reserve
+            if shutil.disk_usage(store).free < required:
+                raise BackupError(f'Not enough free backup space: need at least {required / 1024**3:.2f} GiB.')
             report(delta)
-            print(f'New/changed file bytes: {needed:,}; unchanged files use hardlinks.')
+            print(f'New file content bytes: {needed:,}; existing content is reused without hardlinks.')
             if input('Type YES to create a new complete backup generation: ').strip() != 'YES':
                 raise BackupError('Cancelled; previous backup unchanged.')
-        pending = Path(tempfile.mkdtemp(prefix='.incomplete-', dir=work_parent))
+        # Dumps use local Linux storage, never permissions/xattrs on exFAT.
+        local_pending = Path(tempfile.mkdtemp(prefix='.incomplete-', dir=local))
+        pending = None
         try:
             print('Dumping PostgreSQL...', flush=True)
-            db_files = dump_database(pending, env, snapshot_id)
+            db_files = dump_database(local_pending, env, snapshot_id)
             doc = manifest(root, project_id, files, db_files, database, previous)
             doc['changes_since_backup'] = delta if store else None
             if store:
-                print('Copying new/modified files...', flush=True)
-                copy_tree(root, pending / 'project', files, old_gen / 'project' if old else None,
-                          old['files'] if old else None)
+                pending = Path(tempfile.mkdtemp(prefix='.incomplete-', dir=store))
+                print('Writing new content objects...', flush=True)
+                seen = set()
+                for name, entry in files.items():
+                    if entry['kind'] == 'file' and entry['sha256'] not in seen:
+                        put_object(store, root / name, entry)
+                        seen.add(entry['sha256'])
+                for name, entry in db_files.items():
+                    put_object(store, local_pending / name, entry)
                 verify_generation(pending, doc)
             print('Rechecking source stability...', flush=True)
             clean_git(root)
@@ -534,30 +585,31 @@ def snapshot(root, local, project_id, store=None):
             if scan(root, exclude_state=True) != files:
                 raise BackupError('Source changed during backup. Stop writers and retry; previous backup is intact.')
             if store:
+                atomic_bytes(store / 'RESTORE.py', Path(__file__).read_bytes())
                 gen = publish(store, pending, doc)
                 atomic_json(local / 'manifest.json', doc)
                 atomic_json(local / 'last_destination.json', {'path': str(store), 'generation': gen.name})
-                print(f'Backup committed and verified: {gen}\nPrevious generations retained; use prune to reclaim obsolete versions.')
+                print(f'Backup committed and verified: {gen}\nPrevious manifests retained; prune removes unreferenced content.')
             else:
-                # Store scan and dumps together, then point at the completed local capture.
-                atomic_json(pending / 'manifest.json', doc)
+                atomic_json(local_pending / 'manifest.json', doc)
                 capture = local / ('capture-' + uuid.uuid4().hex)
-                os.rename(pending, capture)
+                os.rename(local_pending, capture)
                 atomic_json(local / 'manifest.json', doc)
                 atomic_json(local / 'capture.json', {'path': capture.name})
                 report(doc['changes_since_local_scan'])
                 print(f'Local manifest: {local / "manifest.json"}\nDatabase snapshot: {capture}')
         finally:
-            if pending.exists():
+            if pending is not None and pending.exists():
                 shutil.rmtree(pending)
+            if local_pending.exists():
+                shutil.rmtree(local_pending)
 
 
 def restore_files(store, target):
     gen, doc = current(store)
     if not gen:
         raise BackupError('No complete backup exists.')
-    # The archived repository must itself be clean. No live checkout is needed.
-    clean_git(gen / 'project')
+    # Git cleanliness is checked after reconstructing into a temporary directory.
     verify_generation(gen, doc)
     if target.exists() or target.is_symlink():
         raise BackupError('Restore target must not exist; nothing is overwritten.')
@@ -573,7 +625,8 @@ def restore_files(store, target):
     check_capabilities(target.parent)
     pending = Path(tempfile.mkdtemp(prefix='.restore-', dir=target.parent))
     try:
-        copy_tree(gen / 'project', pending / 'project', doc['files'])
+        restore_tree(store, pending / 'project', doc['files'])
+        clean_git(pending / 'project')
         if scan(pending / 'project') != doc['files']:
             raise BackupError('Restored files failed verification.')
         state = pending / 'project' / STATE
@@ -581,7 +634,7 @@ def restore_files(store, target):
         atomic_json(state / 'identity.json', {'format': FORMAT, 'project_id': doc['project_id']})
         atomic_json(state / 'manifest.json', doc)
         for name in ('database.dump', 'roles.sql'):
-            shutil.copyfile(gen / name, state / name)
+            shutil.copyfile(object_path(store, doc['database_files'][name]['sha256']), state / name)
             (state / name).chmod(0o600)
             with (state / name).open('rb') as f:
                 os.fsync(f.fileno())
@@ -632,21 +685,76 @@ def prune(store):
     if not gen:
         raise BackupError('No current backup; refusing to prune.')
     verify_generation(gen, doc)
+    keep = set(references(doc))
     candidates = [p for p in store.iterdir() if p != gen and (re.fullmatch(r'[0-9TZ]+_[a-f0-9]{12}', p.name) or p.name.startswith('.incomplete-'))]
     for path in candidates:
         if path.is_symlink() or not path.is_dir():
             raise BackupError('Unexpected path in backup storage.')
-        print('DELETE generation:', path)
-    if candidates and input('Type YES to delete these old/incomplete generations: ').strip() == 'YES':
+    garbage = []
+    base = store / 'objects'
+    if base.is_symlink() or not base.is_dir():
+        raise BackupError('Invalid object directory.')
+    for shard in base.iterdir():
+        if shard.is_symlink() or not shard.is_dir() or not re.fullmatch(r'[0-9a-f]{2}', shard.name):
+            raise BackupError('Unexpected object shard; nothing deleted.')
+        for path in shard.iterdir():
+            if path.is_symlink() or not path.is_file():
+                raise BackupError('Unexpected object type; nothing deleted.')
+            if re.fullmatch(r'[0-9a-f]{62}', path.name):
+                if shard.name + path.name not in keep:
+                    garbage.append(path)
+            elif path.name.startswith('.object-'):
+                garbage.append(path)
+            else:
+                raise BackupError('Unexpected object name; nothing deleted.')
+    for path in candidates:
+        print('DELETE generation:', path.name)
+    print(f'Unreferenced objects/partial objects: {len(garbage)}; bytes: {sum(p.stat().st_size for p in garbage):,}')
+    if (candidates or garbage) and input('Type YES to delete old generations and unreferenced objects: ').strip() == 'YES':
+        # Delete old manifests first: after interruption remaining objects are harmless.
         for path in candidates:
             shutil.rmtree(path)
         fsync_dir(store)
-    print('Current generation retained.')
+        for path in garbage:
+            path.unlink()
+            fsync_dir(path.parent)
+    print('Current generation and every referenced object retained.')
+
+
+def probe(local, mount):
+    """Tiny round-trip on the actual HDD; only owned temporary folders touched."""
+    with tempfile.TemporaryDirectory(prefix='probe-', dir=local) as local_tmp, tempfile.TemporaryDirectory(prefix='.ppo-backup-probe-', dir=mount) as disk_tmp:
+        local_root, store = Path(local_tmp), Path(disk_tmp)
+        source = local_root / 'source'
+        source.mkdir()
+        (source / 'Case').write_bytes(b'upper case')
+        (source / 'case').write_bytes(b'lower case')
+        (source / 'empty').mkdir()
+        (source / '.hidden').write_bytes(b'same content')
+        (source / 'duplicate').write_bytes(b'same content')
+        (source / 'link').symlink_to('.hidden')
+        (source / '.hidden').chmod(0o640)
+        os.setxattr(source / '.hidden', 'user.backup_probe', b'metadata')
+        entries = scan(source)
+        for name, entry in entries.items():
+            if entry['kind'] == 'file':
+                put_object(store, source / name, entry)
+        # Exercise control-file replacement/fsync and advisory locking on HDD.
+        with (store / 'lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            atomic_json(store / 'probe.json', {'files': entries})
+            atomic_json(store / 'probe.json', {'files': entries, 'revision': 2})
+            read_back = read_json(store / 'probe.json')['files']
+            restored = local_root / 'restored'
+            restore_tree(store, restored, read_back)
+            if scan(restored) != entries:
+                raise BackupError('Destination probe failed metadata/content round-trip.')
+        print('PASS: content, case-sensitive names, deduplication, symlinks, metadata, locking and atomic pointer writes. Temporary test files removed on exit. No experiment database accessed.')
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['disks', 'scan', 'compare', 'sync', 'verify', 'prune', 'restore-files', 'restore-database'])
+    parser.add_argument('mode', choices=['disks', 'probe', 'scan', 'compare', 'sync', 'verify', 'prune', 'restore-files', 'restore-database'])
     parser.add_argument('--project', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--disk', help='Mounted filesystem root; omit for interactive selection.')
     parser.add_argument('--backup', type=Path, help='Existing backup folder, for restore-files only.')
@@ -672,6 +780,9 @@ def main(argv=None):
             else:
                 mount = choose_mount(args.disk)
                 store = store_path(root, mount, project_id)
+                if args.mode == 'probe':
+                    probe(local, mount)
+                    return 0
                 with destination(store, project_id, create=args.mode == 'sync') as dest:
                     if args.mode == 'sync':
                         snapshot(root, local, project_id, dest)

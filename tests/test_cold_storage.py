@@ -46,6 +46,13 @@ def test_inventory_includes_git_ignored_secrets_and_virtual_environment(project)
     assert backup.external_links(project, entries)[0]['path'] == '.venv/python'
 
 
+def archive_files(store, project, entries):
+    store.mkdir(exist_ok=True)
+    for name, entry in entries.items():
+        if entry['kind'] == 'file':
+            backup.put_object(store, project / name, entry)
+
+
 def test_scan_and_copy_preserve_modes_times_links_and_xattrs(project, tmp_path):
     p = project / 'data/market.bin'
     p.chmod(0o640)
@@ -53,15 +60,19 @@ def test_scan_and_copy_preserve_modes_times_links_and_xattrs(project, tmp_path):
     (project / 'data/alias').symlink_to('market.bin')
     source = backup.scan(project)
     target = tmp_path / 'copy'
-    backup.copy_tree(project, target, source)
+    store = tmp_path / 'objects-store'
+    archive_files(store, project, source)
+    backup.restore_tree(store, target, source)
     assert backup.scan(target) == source
     assert os.getxattr(target / 'data/market.bin', 'user.test') == b'value'
 
 
-def test_incremental_copy_reuses_only_unchanged_files_and_handles_rename(project, tmp_path):
+def test_incremental_objects_reuse_content_and_handle_rename(project, tmp_path):
     first = backup.scan(project)
-    old = tmp_path / 'old'
-    backup.copy_tree(project, old, first)
+    store = tmp_path / 'store'
+    archive_files(store, project, first)
+    original = backup.object_path(store, first['data/market.bin']['sha256'])
+    original_stat = original.stat()
     (project / 'data/market.bin').rename(project / 'data/renamed.bin')
     (project / '.env').write_text('PASSWORD=changed')
     new = backup.scan(project)
@@ -69,11 +80,14 @@ def test_incremental_copy_reuses_only_unchanged_files_and_handles_rename(project
     assert delta['data/market.bin'] == 'D'
     assert delta['data/renamed.bin'] == 'N'
     assert delta['.env'] == 'M'
+    archive_files(store, project, new)
+    assert original.stat().st_ino == original_stat.st_ino
+    assert original.stat().st_mtime_ns == original_stat.st_mtime_ns
+    old = tmp_path / 'old'
     target = tmp_path / 'new'
-    backup.copy_tree(project, target, new, old, first)
+    backup.restore_tree(store, old, first)
+    backup.restore_tree(store, target, new)
     assert backup.scan(target) == new
-    assert (old / 'code.py').stat().st_ino == (target / 'code.py').stat().st_ino
-    assert (old / '.env').stat().st_ino != (target / '.env').stat().st_ino
     assert (old / '.env').read_text() == 'PASSWORD=secret'
     assert not (target / 'data/market.bin').exists()
 
@@ -137,16 +151,18 @@ def test_reject_same_filesystem_and_nested_destination(project, tmp_path):
 
 def make_generation(project, store, pid='id'):
     store.mkdir()
-    backup.atomic_json(store / 'identity.json', {'format': 1, 'project_id': pid})
+    backup.atomic_json(store / 'identity.json', {'format': backup.FORMAT, 'project_id': pid})
     staging = store / '.incomplete-test'
     staging.mkdir()
     entries = backup.scan(project, exclude_state=True)
-    backup.copy_tree(project, staging / 'project', entries)
+    archive_files(store, project, entries)
     db = {}
     for name in ('database.dump', 'roles.sql'):
         (staging / name).write_bytes(name.encode())
         db[name] = {'size': len(name), 'sha256': backup.digest(staging / name)}
-    doc = {'format': 1, 'project_id': pid, 'files': entries, 'database_files': db, 'root_mode': 0o755}
+        backup.put_object(store, staging / name, db[name])
+        (staging / name).unlink()
+    doc = {'format': backup.FORMAT, 'project_id': pid, 'files': entries, 'database_files': db, 'root_mode': 0o755}
     gen = backup.publish(store, staging, doc)
     return gen, doc
 
@@ -156,8 +172,8 @@ def test_pointer_checksum_and_payload_corruption(project, tmp_path):
     gen, doc = make_generation(project, store)
     assert backup.current(store) == (gen, doc)
     backup.verify_generation(gen, doc)
-    (gen / 'project/.env').write_text('corruption')
-    with pytest.raises(backup.BackupError, match='do not match'):
+    backup.object_path(store, doc['files']['.env']['sha256']).write_text('corruption')
+    with pytest.raises(backup.BackupError, match='missing or damaged'):
         backup.verify_generation(gen, doc)
     (gen / 'manifest.json').write_text('{}')
     with pytest.raises(backup.BackupError, match='checksum'):
@@ -196,7 +212,7 @@ def test_restore_into_new_folder_preserves_payload_and_identity(project, tmp_pat
 def test_wrong_destination_identity_and_symlink_refused(tmp_path):
     store = tmp_path / 'backup'
     store.mkdir()
-    backup.atomic_json(store / 'identity.json', {'format': 1, 'project_id': 'other'})
+    backup.atomic_json(store / 'identity.json', {'format': backup.FORMAT, 'project_id': 'other'})
     with pytest.raises(backup.BackupError, match='different project'):
         with backup.destination(store, 'mine'):
             pass
@@ -277,21 +293,22 @@ def test_sync_twice_and_scan_compare_semantics(offline_snapshot, tmp_path):
             assert second != first
             backup.verify_generation(first, old)
             backup.verify_generation(second, new)
-            assert (first/'project/code.py').stat().st_ino == (second/'project/code.py').stat().st_ino
+            assert old['files']['code.py']['sha256'] == new['files']['code.py']['sha256']
+            assert not (first / 'project').exists() and not (second / 'project').exists()
             assert not backup.changes(new['files'], backup.read_json(local/'manifest.json')['files'])
 
 
 def test_source_changes_during_copy_does_not_commit(offline_snapshot, tmp_path, monkeypatch):
     project = offline_snapshot
     store = tmp_path / 'disk'
-    original = backup.copy_tree
+    original = backup.put_object
     with backup.local_state(project) as (local, pid), backup.destination(store, pid, create=True):
         backup.snapshot(project, local, pid, store)
         committed = backup.current(store)
         def changed(*args, **kwargs):
             original(*args, **kwargs)
             (project / 'data/market.bin').write_bytes(b'concurrent writer')
-        monkeypatch.setattr(backup, 'copy_tree', changed)
+        monkeypatch.setattr(backup, 'put_object', changed)
         with pytest.raises(backup.BackupError, match='Source changed'):
             backup.snapshot(project, local, pid, store)
         assert backup.current(store) == committed
@@ -321,18 +338,19 @@ def test_not_enough_space_does_not_copy_or_dump(offline_snapshot, tmp_path, monk
     with backup.local_state(project) as (local, pid), backup.destination(store, pid, create=True):
         monkeypatch.setattr(backup.shutil, 'disk_usage', lambda _: usage(10, 10, 0))
         monkeypatch.setattr(backup, 'dump_database', lambda *a: pytest.fail('must not dump'))
-        with pytest.raises(backup.BackupError, match='Not enough free space'):
+        with pytest.raises(backup.BackupError, match='Not enough free'):
             backup.snapshot(project, local, pid, store)
         assert backup.current(store) == (None, None)
 
 
 def test_postgresql_round_trip_in_isolated_database(project, tmp_path, monkeypatch):
-    """Opt-in: creates/drops only a random database; never restores over user data."""
+    """Creates/drops only a random database; never restores over user data."""
     import shutil
     import uuid
     raw = os.environ.get('COLD_STORAGE_TEST_DATABASE_URL')
     if not raw:
-        pytest.skip('Set COLD_STORAGE_TEST_DATABASE_URL for a real isolated PostgreSQL round-trip.')
+        from train_and_eval.database.session import get_database_url
+        raw = get_database_url()
     for binary in ('pg_dump', 'pg_dumpall', 'pg_restore'):
         if not shutil.which(binary):
             pytest.fail(f'Integration test requires {binary}')
@@ -381,3 +399,101 @@ def test_postgresql_round_trip_in_isolated_database(project, tmp_path, monkeypat
         with admin.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin.dispose()
+
+
+def test_destination_never_needs_posix_metadata_or_links(offline_snapshot, tmp_path, monkeypatch):
+    project = offline_snapshot
+    store = tmp_path / 'exfat'
+    def guard(original):
+        def wrapped(path, *args, **kwargs):
+            # exFAT rejects POSIX metadata operations: exercise that boundary.
+            if not isinstance(path, int):
+                p = Path(path).absolute()
+                if p == store or store in p.parents:
+                    raise OSError('simulated exFAT: unsupported operation')
+            return original(path, *args, **kwargs)
+        return wrapped
+    for name in ('chmod', 'chown', 'utime', 'setxattr', 'removexattr', 'symlink', 'link'):
+        monkeypatch.setattr(backup.os, name, guard(getattr(backup.os, name)))
+    (project / 'data/Case').write_text('A')
+    (project / 'data/case').write_text('a')
+    (project / 'data/symbolic').symlink_to('Case')
+    with backup.local_state(project) as (local, pid), backup.destination(store, pid, create=True):
+        backup.snapshot(project, local, pid, store)
+        gen, doc = backup.current(store)
+        backup.verify_generation(gen, doc)
+        assert (store / 'RESTORE.py').is_file()
+        target = tmp_path / 'restored'
+        backup.restore_files(store, target)
+        assert backup.scan(target, exclude_state=True) == doc['files']
+
+
+def test_prune_preserves_shared_content_and_removes_orphans(offline_snapshot, tmp_path):
+    project = offline_snapshot
+    store = tmp_path / 'backup'
+    with backup.local_state(project) as (local, pid), backup.destination(store, pid, create=True):
+        backup.snapshot(project, local, pid, store)
+        first, old = backup.current(store)
+        obsolete = backup.object_path(store, old['files']['data/market.bin']['sha256'])
+        shared = backup.object_path(store, old['files']['code.py']['sha256'])
+        (project / 'data/market.bin').write_bytes(b'new')
+        backup.snapshot(project, local, pid, store)
+        second, new = backup.current(store)
+        orphan_file = local / 'orphan'
+        orphan_file.write_bytes(b'orphan')
+        orphan = {'sha256': backup.digest(orphan_file), 'size': 6}
+        backup.put_object(store, orphan_file, orphan)
+        backup.prune(store)
+        assert not first.exists() and second.exists()
+        assert not obsolete.exists()
+        assert shared.exists()
+        assert not backup.object_path(store, orphan['sha256']).exists()
+        backup.verify_generation(second, new)
+
+
+def test_corrupt_object_refused_without_replacing_it(tmp_path):
+    source = tmp_path / 'source'
+    source.write_bytes(b'abc')
+    entry = {'size': 3, 'sha256': backup.digest(source)}
+    store = tmp_path / 'store'
+    store.mkdir()
+    backup.put_object(store, source, entry)
+    target = backup.object_path(store, entry['sha256'])
+    target.write_bytes(b'xyz')
+    with pytest.raises(backup.BackupError, match='damaged'):
+        backup.put_object(store, source, entry)
+    assert target.read_bytes() == b'xyz'
+
+
+def test_duplicate_bytes_with_different_metadata_restore_separately(tmp_path):
+    root = tmp_path / 'source'
+    root.mkdir()
+    (root / 'a').write_bytes(b'same')
+    (root / 'b').write_bytes(b'same')
+    (root / 'a').chmod(0o600)
+    (root / 'b').chmod(0o755)
+    entries = backup.scan(root)
+    store = tmp_path / 'store'
+    archive_files(store, root, entries)
+    assert len(list((store / 'objects').glob('*/*'))) == 1
+    target = tmp_path / 'restored'
+    backup.restore_tree(store, target, entries)
+    assert backup.scan(target) == entries
+    assert (target / 'a').stat().st_ino != (target / 'b').stat().st_ino
+
+
+def test_object_shard_symlink_cannot_escape_store(tmp_path):
+    store = tmp_path / 'store'
+    store.mkdir()
+    (store / 'objects').symlink_to(tmp_path)
+    with pytest.raises(backup.BackupError):
+        backup.object_path(store, 'a' * 64)
+
+
+def test_probe_cleans_temporary_files(tmp_path):
+    local, disk = tmp_path / 'local', tmp_path / 'disk'
+    local.mkdir()
+    disk.mkdir()
+    backup.probe(local, disk)
+    assert list(local.iterdir()) == []
+    assert list(disk.iterdir()) == []

@@ -1,6 +1,9 @@
 queue_schema_version: 1
 name: grid_w384x3_w384x4_w768x3_gamma_lr_5dataepochs_ne3_s1
 configs:
+- configs/stage_one/n_epochs3/width384x3_seed1_g090/fresh_v0_seed1/f_v0_w384x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g095/fresh_v0_seed1/f_v0_w384x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g099/fresh_v0_seed1/f_v0_w384x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/fresh_v0_seed1/f_v0_w384x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/fresh_v0_seed1/f_v0_w384x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/fresh_v0_seed1/f_v0_w384x3_g099_lr0p000010000_s1_ne3.yml
@@ -55,6 +58,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/fresh_v0_seed1/f_v0_w384x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/fresh_v0_seed1/f_v0_w384x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/fresh_v0_seed1/f_v0_w384x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v1_seed1/r_v1_w384x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v1_seed1/r_v1_w384x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v1_seed1/r_v1_w384x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v1_seed1/r_v1_w384x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v1_seed1/r_v1_w384x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v1_seed1/r_v1_w384x3_g099_lr0p000010000_s1_ne3.yml
@@ -109,6 +115,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v1_seed1/r_v1_w384x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v1_seed1/r_v1_w384x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v1_seed1/r_v1_w384x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v2_seed1/r_v2_w384x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v2_seed1/r_v2_w384x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v2_seed1/r_v2_w384x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v2_seed1/r_v2_w384x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v2_seed1/r_v2_w384x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v2_seed1/r_v2_w384x3_g099_lr0p000010000_s1_ne3.yml
@@ -163,6 +172,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v2_seed1/r_v2_w384x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v2_seed1/r_v2_w384x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v2_seed1/r_v2_w384x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v3_seed1/r_v3_w384x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v3_seed1/r_v3_w384x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v3_seed1/r_v3_w384x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v3_seed1/r_v3_w384x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v3_seed1/r_v3_w384x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v3_seed1/r_v3_w384x3_g099_lr0p000010000_s1_ne3.yml
@@ -217,6 +229,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v3_seed1/r_v3_w384x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v3_seed1/r_v3_w384x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v3_seed1/r_v3_w384x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v4_seed1/r_v4_w384x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v4_seed1/r_v4_w384x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v4_seed1/r_v4_w384x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v4_seed1/r_v4_w384x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v4_seed1/r_v4_w384x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v4_seed1/r_v4_w384x3_g099_lr0p000010000_s1_ne3.yml
@@ -271,6 +286,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x3_seed1_g090/resume_v4_seed1/r_v4_w384x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g095/resume_v4_seed1/r_v4_w384x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x3_seed1_g099/resume_v4_seed1/r_v4_w384x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g090/fresh_v0_seed1/f_v0_w384x4_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g095/fresh_v0_seed1/f_v0_w384x4_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g099/fresh_v0_seed1/f_v0_w384x4_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/fresh_v0_seed1/f_v0_w384x4_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/fresh_v0_seed1/f_v0_w384x4_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/fresh_v0_seed1/f_v0_w384x4_g099_lr0p000010000_s1_ne3.yml
@@ -325,6 +343,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/fresh_v0_seed1/f_v0_w384x4_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/fresh_v0_seed1/f_v0_w384x4_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/fresh_v0_seed1/f_v0_w384x4_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v1_seed1/r_v1_w384x4_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v1_seed1/r_v1_w384x4_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v1_seed1/r_v1_w384x4_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v1_seed1/r_v1_w384x4_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v1_seed1/r_v1_w384x4_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v1_seed1/r_v1_w384x4_g099_lr0p000010000_s1_ne3.yml
@@ -379,6 +400,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v1_seed1/r_v1_w384x4_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v1_seed1/r_v1_w384x4_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v1_seed1/r_v1_w384x4_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v2_seed1/r_v2_w384x4_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v2_seed1/r_v2_w384x4_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v2_seed1/r_v2_w384x4_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v2_seed1/r_v2_w384x4_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v2_seed1/r_v2_w384x4_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v2_seed1/r_v2_w384x4_g099_lr0p000010000_s1_ne3.yml
@@ -433,6 +457,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v2_seed1/r_v2_w384x4_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v2_seed1/r_v2_w384x4_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v2_seed1/r_v2_w384x4_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v3_seed1/r_v3_w384x4_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v3_seed1/r_v3_w384x4_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v3_seed1/r_v3_w384x4_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v3_seed1/r_v3_w384x4_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v3_seed1/r_v3_w384x4_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v3_seed1/r_v3_w384x4_g099_lr0p000010000_s1_ne3.yml
@@ -487,6 +514,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v3_seed1/r_v3_w384x4_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v3_seed1/r_v3_w384x4_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v3_seed1/r_v3_w384x4_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v4_seed1/r_v4_w384x4_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v4_seed1/r_v4_w384x4_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v4_seed1/r_v4_w384x4_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v4_seed1/r_v4_w384x4_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v4_seed1/r_v4_w384x4_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v4_seed1/r_v4_w384x4_g099_lr0p000010000_s1_ne3.yml
@@ -541,6 +571,9 @@ configs:
 - configs/stage_one/n_epochs3/width384x4_seed1_g090/resume_v4_seed1/r_v4_w384x4_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g095/resume_v4_seed1/r_v4_w384x4_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width384x4_seed1_g099/resume_v4_seed1/r_v4_w384x4_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g090/fresh_v0_seed1/f_v0_w768x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g095/fresh_v0_seed1/f_v0_w768x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g099/fresh_v0_seed1/f_v0_w768x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/fresh_v0_seed1/f_v0_w768x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/fresh_v0_seed1/f_v0_w768x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/fresh_v0_seed1/f_v0_w768x3_g099_lr0p000010000_s1_ne3.yml
@@ -595,6 +628,9 @@ configs:
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/fresh_v0_seed1/f_v0_w768x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/fresh_v0_seed1/f_v0_w768x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/fresh_v0_seed1/f_v0_w768x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v1_seed1/r_v1_w768x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v1_seed1/r_v1_w768x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v1_seed1/r_v1_w768x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v1_seed1/r_v1_w768x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v1_seed1/r_v1_w768x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v1_seed1/r_v1_w768x3_g099_lr0p000010000_s1_ne3.yml
@@ -649,6 +685,9 @@ configs:
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v1_seed1/r_v1_w768x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v1_seed1/r_v1_w768x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v1_seed1/r_v1_w768x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v2_seed1/r_v2_w768x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v2_seed1/r_v2_w768x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v2_seed1/r_v2_w768x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v2_seed1/r_v2_w768x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v2_seed1/r_v2_w768x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v2_seed1/r_v2_w768x3_g099_lr0p000010000_s1_ne3.yml
@@ -703,6 +742,9 @@ configs:
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v2_seed1/r_v2_w768x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v2_seed1/r_v2_w768x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v2_seed1/r_v2_w768x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v3_seed1/r_v3_w768x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v3_seed1/r_v3_w768x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v3_seed1/r_v3_w768x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v3_seed1/r_v3_w768x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v3_seed1/r_v3_w768x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v3_seed1/r_v3_w768x3_g099_lr0p000010000_s1_ne3.yml
@@ -757,6 +799,9 @@ configs:
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v3_seed1/r_v3_w768x3_g090_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v3_seed1/r_v3_w768x3_g095_lr0p000950000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v3_seed1/r_v3_w768x3_g099_lr0p000950000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v4_seed1/r_v4_w768x3_g090_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v4_seed1/r_v4_w768x3_g095_lr0p000005000_s1_ne3.yml
+- configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v4_seed1/r_v4_w768x3_g099_lr0p000005000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g090/resume_v4_seed1/r_v4_w768x3_g090_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g095/resume_v4_seed1/r_v4_w768x3_g095_lr0p000010000_s1_ne3.yml
 - configs/stage_one/n_epochs3/width768x3_seed1_g099/resume_v4_seed1/r_v4_w768x3_g099_lr0p000010000_s1_ne3.yml

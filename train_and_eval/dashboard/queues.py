@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 import plotly.graph_objects as go
+from train_and_eval.dashboard.formatting import decimals
 
 
 def queue_choices(frame: pd.DataFrame, search: str = "") -> list[int]:
@@ -46,7 +47,7 @@ def queue_figure(frame: pd.DataFrame, metric: str, *, label: str,
     if xs:
         figure.add_scatter(x=xs, y=ys, mode="lines", name="Continuation",
                            line={"color": "#6ab7ef"}, hoverinfo="skip", connectgaps=False)
-    value_format = "+.2%" if percent else ".6g"
+    value_format = "+.5%" if percent else f".{decimals(shown[metric])}f"
     custom = [[int(run_id), row["run.name"], row["run.status"],
                "—" if pd.isna(row["path.parent_run_id"]) else str(int(row["path.parent_run_id"]))]
               for run_id, row in shown.iterrows()]
@@ -63,6 +64,6 @@ def queue_figure(frame: pd.DataFrame, metric: str, *, label: str,
     )
     positions = sorted(int(v) for v in frame["path.position"].unique())
     figure.update_xaxes(title="Run position in training path", tickmode="array", tickvals=positions)
-    figure.update_yaxes(title=label, tickformat=".1%" if percent else None)
+    figure.update_yaxes(title=label, tickformat=".5%" if percent else None)
     figure.update_layout(hovermode="closest")
     return figure

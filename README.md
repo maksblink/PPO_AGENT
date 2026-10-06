@@ -829,3 +829,13 @@ remain separate from this plan. Comparisons and final timing summaries are also
 stored as local JSON records. Console output contains aggregate change counts
 and locations of these records instead of listing every project path. I/O counts
 include checksum reads and must not be interpreted as archive size.
+
+### Dashboard numeric presentation
+
+Percentage metrics use five decimal places in tables, metric cards, chart labels
+and tooltips. Percentage-point statistics retain their explicitly labelled units.
+Balanced score and profit factor remain dimensionless; counts and identifiers
+are shown as integers. Hyperparameters are displayed in decimal notation without
+rounding their stored scalar values. Numeric types remain intact for filtering,
+sorting, chart coordinates and statistical calculations; formatting affects only
+presentation. Formatting cannot recover precision already lost before storage.

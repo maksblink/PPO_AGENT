@@ -73,6 +73,7 @@ def summarize(frame: pd.DataFrame, groups: list[str], metrics: list[str]) -> pd.
 
 def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
     import streamlit as st
+    from train_and_eval.dashboard.formatting import dataframe, plotly_chart, decimal_text, decimals
 
     st.subheader(f'Grid Analysis · {scope}')
     st.caption('Final evaluations only; one record per run. Filters below are independent of the sidebar. '
@@ -101,15 +102,15 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
             if kind == 'Range':
                 lo, hi = float(series.min()), float(series.max())
                 left, right = st.columns(2)
-                lower = left.number_input(f'{label(column)} minimum', value=lo, format='%.9f', key=f'ga_lo_{column}')
-                upper = right.number_input(f'{label(column)} maximum', value=hi, format='%.9f', key=f'ga_hi_{column}')
+                lower = left.number_input(f'{label(column)} minimum', value=lo, format=f'%.{max(9, decimals([lo, hi]))}f', key=f'ga_lo_{column}')
+                upper = right.number_input(f'{label(column)} maximum', value=hi, format=f'%.{max(9, decimals([lo, hi]))}f', key=f'ga_hi_{column}')
                 if lower > upper:
                     st.error(f'{label(column)}: minimum must not exceed maximum.')
                     return
                 ranges[column] = (lower, upper)
             else:
                 selections[column] = st.multiselect(label(column), values, default=values,
-                    key=f'ga_values_{column}', format_func=lambda v: f'{v:.9f}' if isinstance(v, float) else str(v))
+                    key=f'ga_values_{column}', format_func=decimal_text)
         positions = sorted(frame['analysis.stage'].dropna().astype(int).unique().tolist())
         mode = st.radio('Training path stage', ['All stages', 'Selected stages', 'Latest existing runs'],
                         horizontal=True, key='ga_stage_mode')
@@ -153,14 +154,14 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
                'Balanced score, profit factor, counts and hyperparameters retain their original units. '
                'Downloaded tables use the same display units as these tables.')
     st.markdown('#### Overall statistics')
-    st.dataframe(overall, hide_index=True, width='stretch')
+    dataframe(overall, hide_index=True, width='stretch')
     st.markdown('#### Grouped statistics')
-    st.dataframe(grouped, hide_index=True, width='stretch')
+    dataframe(grouped, hide_index=True, width='stretch')
     st.download_button('Download grouped statistics CSV', grouped.to_csv(index=False),
                        f'grid_statistics_{scope.lower()}.csv', 'text/csv', key='ga_download_stats')
     if chosen:
         metric = st.selectbox('Distribution metric', chosen, format_func=label, key='ga_chart_metric')
-        st.plotly_chart(distribution_figure(selected, metric, grouping, label(metric)), width='stretch')
+        plotly_chart(distribution_figure(selected, metric, grouping, label(metric)), width='stretch')
         st.caption('Box = middle 50% (Q1–Q3); line = median. Whiskers extend to the most extreme '
                    'observations within 1.5 × IQR of the box. All run values are plotted; '
                    'points outside whiskers still count in the table minimum and maximum.')
@@ -169,7 +170,7 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
         progression = selected[['path.root_run_id','analysis.stage','run_id',metric]].copy()
         progression['value'] = progression.apply(lambda r: f"#{int(r['run_id'])}: {metric_text(metric, r[metric])}", axis=1)
         resolved = progression.dropna(subset=['path.root_run_id','analysis.stage'])
-        st.dataframe(resolved.pivot_table(index='path.root_run_id', columns='analysis.stage', values='value',
+        dataframe(resolved.pivot_table(index='path.root_run_id', columns='analysis.stage', values='value',
                      aggfunc=lambda values: ' | '.join(values)), width='stretch')
     if chosen:
         from train_and_eval.dashboard.path_improvement import render_path_improvements
@@ -178,6 +179,6 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
     columns = list(dict.fromkeys([c for c in ['run_id','run.name','run.architecture','analysis.stage',
                 'path.root_run_id',*fields,*grouping,*chosen] if c in selected]))
     displayed = runs_display(selected[columns])
-    st.dataframe(displayed, hide_index=True, width='stretch')
+    dataframe(displayed, hide_index=True, width='stretch')
     st.download_button('Download matching runs CSV', displayed.to_csv(index=False),
                        f'grid_runs_{scope.lower()}.csv', 'text/csv', key='ga_download_runs')

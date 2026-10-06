@@ -104,7 +104,7 @@ def test_chart_uses_ancestry_and_does_not_connect_siblings(tables):
     assert list(fig.data[0].y) == [.1, .2, None, .1, .4, None, .2, .3, None]
     assert fig.data[1].text == ('#10', '#30', '#40', '#90')
     assert fig.data[1].marker.size[-1] == 14
-    assert fig.layout.yaxis.tickformat == '.1%'
+    assert fig.layout.yaxis.tickformat == '.5%'
     frame.loc[frame.run_id == 30, 'eval.agent_return'] = float('nan')
     fig = queue_figure(frame, 'eval.agent_return', label='Return')
     assert list(fig.data[0].y) == [.1, .4, None]

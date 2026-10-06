@@ -35,7 +35,7 @@ def test_units_and_storage_values_unchanged():
     assert shown['unit'].tolist()==['%','raw']
     assert shown['std_unit'].tolist()==['pp','raw']
     pd.testing.assert_frame_equal(raw,original)
-    assert metric_text('eval.agent_return',-2.1)=='-210.00%'
+    assert metric_text('eval.agent_return',-2.1)=='-210.00000%'
     assert metric_text('eval.agent_return',np.nan)=='n/a'
 
 
@@ -51,10 +51,10 @@ def test_box_keeps_outliers_and_formats_categorical_groups():
     frame=pd.DataFrame({'run_id':[1,2,3], 'gamma':[.9,.9,.95], 'eval.agent_return':[-2.1,.1,.2]})
     fig=distribution_figure(frame,'eval.agent_return',['gamma'],'Return')
     assert fig.layout.xaxis.type=='category'
-    assert fig.layout.yaxis.tickformat=='.1%'
+    assert fig.layout.yaxis.tickformat=='.5%'
     assert fig.data[0].type=='box' and fig.data[0].boxpoints=='all'
     assert min(fig.data[0].y)==-2.1
-    assert '%{y:.2%}' in fig.data[0].hovertemplate
+    assert '%{y:.5%}' in fig.data[0].hovertemplate
     raw=distribution_figure(frame.rename(columns={'eval.agent_return':'eval.round_trips'}),'eval.round_trips',[],'Trips')
     assert raw.layout.yaxis.tickformat is None
 

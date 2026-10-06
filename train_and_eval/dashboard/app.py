@@ -5,6 +5,7 @@ from typing import Iterable
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from train_and_eval.dashboard.formatting import dataframe, plotly_chart, decimal_text, value_text, is_percent, decimals
 
 from train_and_eval.dashboard.queues import queue_choices, queue_runs, queue_figure
 
@@ -122,20 +123,7 @@ def is_seed_column(column: str | None) -> bool:
 
 
 def is_percent_column(column: str | None) -> bool:
-    if not column:
-        return False
-
-    return any(
-        column.endswith(suffix)
-        for suffix in (
-            "agent_return",
-            "always_long_return",
-            "agent_max_drawdown",
-            "always_long_max_drawdown",
-            "market_exposure",
-            "win_rate",
-        )
-    )
+    return is_percent(column)
 
 
 def is_scientific_column(column: str | None) -> bool:
@@ -182,10 +170,10 @@ def hover_format(
     column: str,
 ) -> str | bool:
     if is_percent_column(column):
-        return ":+.2%"
+        return ":+.5%"
 
     if is_scientific_column(column):
-        return ":.3e"
+        return True
 
     if column.endswith("round_trips"):
         return ":,.0f"
@@ -303,14 +291,14 @@ def apply_sidebar_filters(
                 "min",
                 value=minimum,
                 key=f"filter_{index}_{column}_min",
-                format="%.8g",
+                format=f"%.{max(9, decimals([minimum, maximum]))}f",
             )
 
             upper = col2.number_input(
                 "max",
                 value=maximum,
                 key=f"filter_{index}_{column}_max",
-                format="%.8g",
+                format=f"%.{max(9, decimals([minimum, maximum]))}f",
             )
 
             result = result.loc[
@@ -370,7 +358,7 @@ def metric_value(
         value = values.max()
 
     if percent:
-        return f"{100.0 * value:+.2f}%"
+        return f"{100.0 * value:+.5f}%"
 
     return f"{value:+.5f}"
 
@@ -445,7 +433,7 @@ def explorer_tab(
         }
     )
 
-    st.dataframe(
+    dataframe(
         table,
         width="stretch",
         hide_index=True,
@@ -661,12 +649,12 @@ def scatter_tab(
 
     if is_percent_column(x):
         figure.update_xaxes(
-            tickformat=".0%",
+            tickformat=".5%",
         )
 
     if is_percent_column(y):
         figure.update_yaxes(
-            tickformat=".0%",
+            tickformat=".5%",
         )
 
     figure.update_layout(
@@ -678,7 +666,7 @@ def scatter_tab(
     )
 
 
-    st.plotly_chart(
+    plotly_chart(
         figure,
         width="stretch",
     )
@@ -796,17 +784,17 @@ def activity_tab(
     )
 
     figure.update_xaxes(
-        tickformat=".0%",
+        tickformat=".5%",
     )
 
     if agent_return:
         figure.update_coloraxes(
             colorbar_title="Agent return",
-            colorbar_tickformat=".0%",
+            colorbar_tickformat=".5%",
         )
 
 
-    st.plotly_chart(
+    plotly_chart(
         figure,
         width="stretch",
     )
@@ -1124,12 +1112,12 @@ def pareto_tab(
 
     if is_percent_column(x):
         figure.update_xaxes(
-            tickformat=".0%",
+            tickformat=".5%",
         )
 
     if is_percent_column(y):
         figure.update_yaxes(
-            tickformat=".0%",
+            tickformat=".5%",
         )
 
     figure.update_layout(
@@ -1141,7 +1129,7 @@ def pareto_tab(
     )
 
 
-    st.plotly_chart(
+    plotly_chart(
         figure,
         width="stretch",
     )
@@ -1236,7 +1224,7 @@ def pareto_tab(
         columns=rename_map
     )
 
-    st.dataframe(
+    dataframe(
         table,
         width="stretch",
         hide_index=True,
@@ -1315,13 +1303,12 @@ def run_detail_tab(
     # ints, floats, timestamps and strings.  Streamlit uses
     # Arrow for dataframe transport, so keeping all of them in
     # one object column can cause ArrowInvalid type inference.
-    detail_frame["value"] = (
-        detail_frame["value"]
-        .astype("string")
-        .fillna("—")
-    )
+    detail_frame["value"] = [
+        value_text(field, value)
+        for field, value in zip(detail_frame["field"], detail_frame["value"])
+    ]
 
-    st.dataframe(
+    dataframe(
         detail_frame,
         width="stretch",
         hide_index=True,
@@ -1339,7 +1326,7 @@ def run_detail_tab(
             evaluations["run_id"] == run_id
         ].copy()
 
-        st.dataframe(
+        dataframe(
             run_evaluations,
             width="stretch",
             hide_index=True,
@@ -1374,7 +1361,7 @@ def run_detail_tab(
                     markers=True,
                 )
 
-                st.plotly_chart(
+                plotly_chart(
                     figure,
                     width="stretch",
                 )
@@ -1391,7 +1378,7 @@ def run_detail_tab(
             metrics["run_id"] == run_id
         ].copy()
 
-        st.dataframe(
+        dataframe(
             run_metrics,
             width="stretch",
             hide_index=True,
@@ -1450,7 +1437,7 @@ def run_detail_tab(
                     color="metric",
                 )
 
-                st.plotly_chart(
+                plotly_chart(
                     figure,
                     width="stretch",
                 )
@@ -1477,7 +1464,7 @@ def queues_tab(data: DashboardData) -> None:
     if unresolved:
         st.warning(f"{unresolved} runs have incomplete or cyclic ancestry and cannot be assigned to a queue.")
         with st.expander("Unresolved runs"):
-            st.dataframe(frame.loc[frame["path.root_run_id"].isna(),
+            dataframe(frame.loc[frame["path.root_run_id"].isna(),
                                    ["run_id", "run.name", "path.status"]], hide_index=True)
     if not roots:
         st.info("No training paths match the search.")
@@ -1508,7 +1495,7 @@ def queues_tab(data: DashboardData) -> None:
         if pd.to_numeric(members[metric], errors="coerce").notna().any():
             figure = queue_figure(members, metric, label=display_name(metric),
                                   percent=is_percent_column(metric), focus_run_id=focus)
-            st.plotly_chart(figure, width="stretch", key="queue_chart")
+            plotly_chart(figure, width="stretch", key="queue_chart")
         else:
             st.info("This metric has no values in the selected range.")
         st.caption(
@@ -1531,22 +1518,22 @@ def queues_tab(data: DashboardData) -> None:
         labels = [display_name(column) for column in selected]
         rename = {column: (label if labels.count(label) == 1 else f"{label} [{column}]")
                   for column, label in zip(selected, labels)}
-        st.dataframe(members[selected].rename(columns=rename), width="stretch", hide_index=True)
+        dataframe(members[selected].rename(columns=rename), width="stretch", hide_index=True)
 
     with st.expander("Checkpoints in this queue"):
         checkpoints = data.checkpoints
         if "run_id" in checkpoints:
-            st.dataframe(checkpoints.loc[checkpoints["run_id"].isin(ids)],
+            dataframe(checkpoints.loc[checkpoints["run_id"].isin(ids)],
                          width="stretch", hide_index=True)
     with st.expander("All evaluations in the selected range"):
         evaluations = data.evaluations
         if "run_id" in evaluations:
-            st.dataframe(evaluations.loc[evaluations["run_id"].isin(ids)],
+            dataframe(evaluations.loc[evaluations["run_id"].isin(ids)],
                          width="stretch", hide_index=True)
     with st.expander("PPO training diagnostics"):
         metrics_frame = data.training_metrics
         if "run_id" in metrics_frame:
-            st.dataframe(metrics_frame.loc[metrics_frame["run_id"].isin(ids)],
+            dataframe(metrics_frame.loc[metrics_frame["run_id"].isin(ids)],
                          width="stretch", hide_index=True)
     with st.expander("Stored run configuration"):
         config_run = st.selectbox("Configuration run", members["run_id"].astype(int).tolist(),

@@ -77,6 +77,7 @@ def path_improvements(selected: pd.DataFrame, population: pd.DataFrame,
 def render_path_improvements(selected: pd.DataFrame, population: pd.DataFrame,
                              metrics: list[str], scope: str) -> None:
     import streamlit as st
+    from train_and_eval.dashboard.formatting import dataframe
     st.markdown('#### Training path improvement')
     metric = st.selectbox('Path improvement metric', metrics, key='ga_path_metric')
     direction = st.radio('Improvement direction', ['Increase', 'Decrease'], horizontal=True,
@@ -99,9 +100,9 @@ def render_path_improvements(selected: pd.DataFrame, population: pd.DataFrame,
     if histogram.empty:
         st.info('No comparable linear paths. Select adjacent stages and runs with finite metric values.')
     else:
-        st.dataframe(histogram, hide_index=True, width='stretch',
-            column_config={'share_percent': st.column_config.NumberColumn('Share (%)', format='%.2f%%')})
-    st.dataframe(details, hide_index=True, width='stretch')
+        dataframe(histogram, hide_index=True, width='stretch',
+            column_config={'share_percent': st.column_config.NumberColumn('Share (%)', format='%.5f%%')})
+    dataframe(details, hide_index=True, width='stretch')
     st.download_button('Download path improvement summary CSV', histogram.to_csv(index=False),
                        f'path_improvement_summary_{scope.lower()}.csv', 'text/csv', key='ga_path_summary_csv')
     st.download_button('Download path improvement details CSV', details.to_csv(index=False),

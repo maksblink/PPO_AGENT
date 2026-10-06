@@ -233,7 +233,7 @@ def coverage_figure(cells):
         part = cells.loc[cells.state == state]
         if part.empty:
             continue
-        figure.add_scatter(x=part.gamma.tolist(), y=[f'{Decimal(v):.9f}' for v in part.lr],
+        figure.add_scatter(x=part.gamma.tolist(), y=[format(Decimal(v), f'.{max(9, -Decimal(v).as_tuple().exponent)}f') for v in part.lr],
             mode='markers+text', name=label,
             marker=dict(symbol='square', size=42, color=COLORS[state], line=dict(width=1, color='#444')),
             text=[f'{r.done}/{r.total}' for r in part.itertuples()],
@@ -246,12 +246,13 @@ def coverage_figure(cells):
     figure.update_xaxes(title='Gamma', type='category', categoryorder='array',
                        categoryarray=sorted(cells.gamma.unique(), key=Decimal))
     figure.update_yaxes(title='Learning rate', type='category', categoryorder='array',
-                       categoryarray=sorted({f'{Decimal(v):.9f}' for v in cells.lr}, reverse=True))
+                       categoryarray=sorted({format(Decimal(v), f'.{max(9, -Decimal(v).as_tuple().exponent)}f') for v in cells.lr}, key=Decimal, reverse=True))
     return figure
 
 
 def render_grid_coverage(root: Path):
     import streamlit as st
+    from train_and_eval.dashboard.formatting import dataframe, plotly_chart
     st.subheader('Grid Coverage')
     st.button('Refresh coverage')
     st.caption('Read-only plan and execution coverage. TRAIN/VAL performance values and sidebar filters do not apply.')
@@ -277,7 +278,7 @@ def render_grid_coverage(root: Path):
     frame, families = coverage_rows(entries, runs, cps, evals)
     outside = [dict(run_id=r['id'], name=r['name'], status=r['status']) for r in runs if r['name'] not in entries]
     with st.expander(f'Runs outside selected plan ({len(outside)})'):
-        st.dataframe(pd.DataFrame(outside), hide_index=True)
+        dataframe(pd.DataFrame(outside), hide_index=True)
     st.caption('Families separate all non-axis settings, including data ranges, reward, costs, rollout/batch settings and evaluation protocol.')
     family = st.selectbox('Configuration family', sorted(families),
         format_func=lambda f: f'{f} · {int(frame.family.eq(f).sum())} planned runs')
@@ -322,7 +323,7 @@ def render_grid_coverage(root: Path):
     st.caption('Ready = completed full requested budget + matching config/parent + one final checkpoint record + completed final TRAIN and VAL evaluations. Files on disk are not scanned. Stage number is continuation depth, not a measured data-epoch count.')
     for arch in arches:
         st.markdown(f'**{arch}**')
-        event = st.plotly_chart(coverage_figure(cells.loc[cells.architecture == arch]),
+        event = plotly_chart(coverage_figure(cells.loc[cells.architecture == arch]),
             use_container_width=True, on_select='rerun', selection_mode='points', key=f'coverage_chart_{family}_{ne}_{seed}_{arch}')
         points = event.get('selection', {}).get('points', [])
         if points:
@@ -331,16 +332,16 @@ def render_grid_coverage(root: Path):
                 detail = frame
                 for axis, value in zip(AXES, point):
                     detail = detail.loc[detail[axis] == value]
-                st.dataframe(detail.drop(columns=['family', 'ready']).sort_values('phase'), hide_index=True)
+                dataframe(detail.drop(columns=['family', 'ready']).sort_values('phase'), hide_index=True)
                 if detail.empty:
                     st.info('No configuration is planned for this cell.')
     st.subheader('Gaps')
     gaps = cells.loc[cells.state != 'complete'].copy()
-    st.dataframe(gaps, hide_index=True, use_container_width=True)
+    dataframe(gaps, hide_index=True, use_container_width=True)
     st.download_button('Download gaps CSV', gaps.to_csv(index=False), 'grid_coverage_gaps.csv', 'text/csv')
     st.subheader('Stage details')
     problems_only = st.checkbox('Only unfinished stages or issues', value=True)
     details = included.loc[~included.ready] if problems_only else included
     details = details.drop(columns=['family', 'ready']).sort_values(AXES+['phase'], na_position='last')
-    st.dataframe(details, hide_index=True, use_container_width=True)
+    dataframe(details, hide_index=True, use_container_width=True)
     st.download_button('Download stage details CSV', details.to_csv(index=False), 'grid_coverage_stages.csv', 'text/csv')

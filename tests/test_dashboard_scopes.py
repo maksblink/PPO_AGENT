@@ -69,17 +69,17 @@ def test_global_switch_updates_metrics_and_run_detail(mock_database):
     app = Path(__file__).resolve().parents[1] / "train_and_eval/dashboard/app.py"
     at = AppTest.from_file(str(app), default_timeout=30).run()
     assert not at.exception
-    assert next(m for m in at.metric if m.label == "Best return").value == "+20.00%"
+    assert next(m for m in at.metric if m.label == "Best return").value == "+20.00000%"
     at.segmented_control(key="evaluation_data_mode").set_value("TRAIN").run()
     assert not at.exception
-    assert next(m for m in at.metric if m.label == "Best return").value == "-10.00%"
+    assert next(m for m in at.metric if m.label == "Best return").value == "-10.00000%"
     assert not any(s.label == "Evaluation scope" for s in at.selectbox)
     for frame in at.dataframe:
         if "data_scope" in frame.value:
             assert set(frame.value.data_scope) == {"run_training"}
     at.segmented_control(key="evaluation_data_mode").set_value("VAL").run()
     assert not at.exception
-    assert next(m for m in at.metric if m.label == "Best return").value == "+20.00%"
+    assert next(m for m in at.metric if m.label == "Best return").value == "+20.00000%"
 
 
 def test_newer_scheduled_or_failed_evaluation_does_not_replace_final(mock_database):

@@ -2115,3 +2115,12 @@ def test_resume_reads_historical_common_swap_without_rewriting_source():
     assert config.environment.swap_long_bps == 3.0
     assert config.environment.swap_short_bps == 3.0
     assert source_run.normalized_config_json == original
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cpu_service_test_device_policy(monkeypatch):
+    """These service tests use CPU/fake models; hardware policy has separate tests."""
+    from train_and_eval.queue_execution import runtime
+    monkeypatch.setattr(runtime, 'require_training_config', lambda config: None)
+    monkeypatch.setattr(runtime, 'require_cuda', lambda: None)
+    monkeypatch.setattr(runtime, 'check_model_device', lambda model, expected: None)

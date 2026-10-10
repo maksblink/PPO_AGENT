@@ -106,18 +106,19 @@ class RunResult:
     chain_data_epochs: float | None = None
 
 
-def discover_queue_manifests() -> dict[str, Path]:
-    if not QUEUE_DIRECTORY.is_dir():
+def discover_queue_manifests(directory: Path | None = None) -> dict[str, Path]:
+    directory = QUEUE_DIRECTORY if directory is None else directory
+    if not directory.is_dir():
         raise RuntimeError(
-            f"Queue directory does not exist: {QUEUE_DIRECTORY}"
+            f"Queue directory does not exist: {directory}"
         )
 
     manifests: dict[str, Path] = {}
 
     paths = sorted(
         [
-            *QUEUE_DIRECTORY.glob("*.yml"),
-            *QUEUE_DIRECTORY.glob("*.yaml"),
+            *directory.glob("*.yml"),
+            *directory.glob("*.yaml"),
         ]
     )
 
@@ -133,7 +134,7 @@ def discover_queue_manifests() -> dict[str, Path]:
 
     if not manifests:
         raise RuntimeError(
-            f"No queue manifests found in {QUEUE_DIRECTORY}"
+            f"No queue manifests found in {directory}"
         )
 
     return manifests
@@ -1087,7 +1088,7 @@ def parse_args(
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run PPO experiment configs sequentially "
+            "Run PPO experiment configs with dependency-aware process scheduling "
             "and print a final comparison."
         )
     )
@@ -1135,11 +1136,45 @@ def parse_args(
         ),
     )
 
+    parser.add_argument('--workers', type=int, choices=(1, 2, 4), default=None,
+                        help='Enable the claimed scheduler with 1, 2 or 4 active runs; omit to retain the legacy queue.')
+    parser.add_argument('--serial-evaluation', action='store_true',
+                        help='Serialize evaluation across claimed workers; training remains parallel.')
+    parser.add_argument('--threads', type=int, default=1,
+                        help='PyTorch/BLAS intra-op threads per claimed worker (default: 1).')
+    parser.add_argument('--temperature-limit', type=float, default=91.5,
+                        help='Pause new starts at this CPU temperature in C (default: 91.5).')
+    parser.add_argument('--temperature-resume', type=float, default=84.5,
+                        help='Resume new starts after cooling to this temperature in C (default: 84.5).')
+    parser.add_argument('--abort-temperature', type=float, default=97.5,
+                        help='Interrupt owned workers at this CPU temperature in C (default: 97.5).')
+    parser.add_argument('--sample-seconds', type=float, default=6,
+                        help='Interval between host measurements (default: 6 seconds).')
+
+    parser.add_argument('--control-seconds', type=float, default=3)
+    parser.add_argument('--flush-seconds', type=float, default=30)
+    parser.add_argument('--cpu-affinity', choices=('none', 'split'), default='none')
     args = parser.parse_args(argv)
+    if args.control_seconds <= 0 or args.flush_seconds <= 0:
+        parser.error('Control and flush intervals must be positive')
+    if args.workers is not None:
+        args.serial_evaluation = True
+        if args.threads != 1:
+            parser.error('Claimed production workers require --threads 1')
+    if args.cpu_affinity == 'split' and args.workers not in (1, 2):
+        parser.error('Split affinity requires 1 or 2 workers')
+    if args.serial_evaluation and args.workers is None:
+        parser.error('--serial-evaluation requires --workers')
+    if args.threads < 1 or args.sample_seconds < 1:
+        parser.error('--threads and --sample-seconds must be positive (sampling >= 1 second)')
+    if not 0 < args.temperature_resume < args.temperature_limit <= 100:
+        parser.error('Require 0 < --temperature-resume < --temperature-limit <= 100')
+    if not args.temperature_limit < args.abort_temperature <= 100:
+        parser.error('Require --temperature-limit < --abort-temperature <= 100')
     # Help and missing-argument diagnostics must not depend on the filesystem.
     try:
         manifests = discover_queue_manifests()
-    except RuntimeError as error:
+    except (RuntimeError, ValueError) as error:
         parser.error(str(error))
     if args.queue not in manifests:
         parser.error(
@@ -1255,6 +1290,11 @@ def main() -> int:
         return 0
 
     if args.dry_run:
+        if getattr(args, 'workers', None) is not None:
+            from train_and_eval.queue_execution.core import plan_jobs
+            jobs = plan_jobs(selected)
+            print(f'Dependency plan: {len(jobs)} selected runs, '
+                  f'{sum(job.source is None for job in jobs)} fresh roots, workers={args.workers}')
         print_queue(
             args.queue,
             configs,
@@ -1270,6 +1310,20 @@ def main() -> int:
     assert_git_clean()
 
     print_queue(args.queue, configs, selected_positions)
+
+    if getattr(args, 'workers', None) is not None:
+        from train_and_eval.queue_execution.scheduler import run
+        try:
+            return run(selected, args, ROOT)
+        except Exception as error:
+            print(f'QUEUE STOPPED: {error}')
+            return 1
+        finally:
+            try:
+                database_results = load_results_from_database(configs)
+                print_train_then_val_summaries(configs, database_results)
+            except Exception as error:
+                print(f'WARNING: database summary unavailable: {error}')
 
     results: list[RunResult] = []
 

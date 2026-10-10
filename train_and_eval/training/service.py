@@ -676,6 +676,9 @@ def train_ppo_run(
         manifest_path=manifest_path,
     )
     config = loaded_config.config
+    from train_and_eval.queue_execution.runtime import require_training_config, require_cuda
+    require_training_config(config)
+    require_cuda()
     (
         _,
         split,
@@ -945,25 +948,29 @@ def train_ppo_run(
             ),
         )
 
-        if resume_source is None:
-            model = create_ppo_model(
-                environment,
-                config.ppo,
-                seed=int(config.run.seed),
-                verbose=verbose,
-            )
-        else:
-            model = load_persisted_ppo_checkpoint(
-                resume_source,
-                environment=environment,
-                device=config.ppo.device,
-                training_config=config.ppo,
-                seed=int(config.run.seed),
-                project_root=root,
-                artifacts_directory=(
-                    artifacts_directory
-                ),
-            )
+        from train_and_eval.queue_execution.runtime import model_initialization, check_model_device
+        with model_initialization():
+            if resume_source is None:
+                model = create_ppo_model(
+                    environment,
+                    config.ppo,
+                    seed=int(config.run.seed),
+                    verbose=verbose,
+                )
+            else:
+                model = load_persisted_ppo_checkpoint(
+                    resume_source,
+                    environment=environment,
+                    device=config.ppo.device,
+                    training_config=config.ppo,
+                    seed=int(config.run.seed),
+                    project_root=root,
+                    artifacts_directory=(
+                        artifacts_directory
+                    ),
+                )
+
+        check_model_device(model, 'cuda')
 
         model_steps_before = int(
             model.num_timesteps

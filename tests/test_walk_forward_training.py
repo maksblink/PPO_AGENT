@@ -98,3 +98,12 @@ def test_resume_applies_mutable_ppo_settings_before_learning(tmp_path):
     assert result.rollout_sizes == (12, 12)
     assert model.batch_size == 4 and model.n_epochs == 2
     assert model.policy.optimizer.param_groups[0]["lr"] == .0001
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cpu_service_test_device_policy(monkeypatch):
+    """These service tests use CPU/fake models; hardware policy has separate tests."""
+    from train_and_eval.queue_execution import runtime
+    monkeypatch.setattr(runtime, 'require_training_config', lambda config: None)
+    monkeypatch.setattr(runtime, 'require_cuda', lambda: None)
+    monkeypatch.setattr(runtime, 'check_model_device', lambda model, expected: None)

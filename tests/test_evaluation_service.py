@@ -654,3 +654,12 @@ def test_preserves_original_error_when_failure_persistence_also_fails(
     ) in notes[0]
     assert "OSError" in notes[0]
     assert "database unavailable" in notes[0]
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cpu_service_test_device_policy(monkeypatch):
+    """These service tests use CPU/fake models; hardware policy has separate tests."""
+    from train_and_eval.queue_execution import runtime
+    monkeypatch.setattr(runtime, 'require_training_config', lambda config: None)
+    monkeypatch.setattr(runtime, 'require_cuda', lambda: None)
+    monkeypatch.setattr(runtime, 'check_model_device', lambda model, expected: None)

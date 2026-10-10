@@ -255,3 +255,12 @@ def test_manual_stage_one_then_three_checkpoint_cycles(database, tmp_path, capsy
     protocol_path.write_text(yaml.safe_dump({**definition,"source_checkpoint_id":forbidden}))
     with pytest.raises(ValueError, match="Stage one|Stage-one"):
         prepare(protocol_path, root, factory)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cpu_service_test_device_policy(monkeypatch):
+    """These service tests use CPU/fake models; hardware policy has separate tests."""
+    from train_and_eval.queue_execution import runtime
+    monkeypatch.setattr(runtime, 'require_training_config', lambda config: None)
+    monkeypatch.setattr(runtime, 'require_cuda', lambda: None)
+    monkeypatch.setattr(runtime, 'check_model_device', lambda model, expected: None)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from train_and_eval.queue_execution.evaluation_gate import serialize_evaluation
+
 from train_and_eval.run_config import parse_persisted_run_config
 
 from collections.abc import Callable
@@ -364,6 +366,7 @@ def preserve_random_state(function):
     return wrapped
 
 
+@serialize_evaluation
 @preserve_random_state
 def evaluate_run_validation_checkpoint(
     session_factory,
@@ -542,10 +545,13 @@ def evaluate_run_validation_checkpoint(
         model = load_persisted_ppo_checkpoint(
             source,
             environment=None,
-            device=config.evaluation.device,
+            device="cpu",
             project_root=root,
             artifacts_directory=artifacts_directory,
         )
+
+        from train_and_eval.queue_execution.runtime import check_model_device
+        check_model_device(model, 'cpu')
 
         result = run_ppo_evaluation(
             model,
@@ -622,6 +628,7 @@ def evaluate_run_validation_checkpoint(
     return persisted
 
 
+@serialize_evaluation
 def replay_run_validation_checkpoint(
     *,
     checkpoint_id: int,
@@ -672,9 +679,11 @@ def replay_run_validation_checkpoint(
         config.evaluation.probability_threshold if policy_mode is None else probability_threshold
     )
     model = load_persisted_ppo_checkpoint(
-        source, environment=None, device=config.evaluation.device, project_root=root,
+        source, environment=None, device="cpu", project_root=root,
         artifacts_directory=artifacts_directory,
     )
+    from train_and_eval.queue_execution.runtime import check_model_device
+    check_model_device(model, 'cpu')
     return run_ppo_evaluation(
         model, market_data, config.environment,
         evaluation_start_index=start, evaluation_end_index=end,

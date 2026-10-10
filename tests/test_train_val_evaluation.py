@@ -31,7 +31,12 @@ def test_train_scope_uses_effective_scored_bounds(monkeypatch, tmp_path, tempora
         return _state(EvaluationStatus.PENDING)
     monkeypatch.setattr(service, "create_pending_evaluation", pending)
     monkeypatch.setattr(service, "mark_evaluation_running", lambda *a, **k: None)
-    monkeypatch.setattr(service, "load_persisted_ppo_checkpoint", lambda *a, **k: object())
+    # Keep the production device check active with a CPU model-shaped test double.
+    model = SimpleNamespace(device=torch.device("cpu"), policy=torch.nn.Linear(1, 1))
+    def load_checkpoint(*args, **kwargs):
+        assert kwargs["device"] == "cpu"
+        return model
+    monkeypatch.setattr(service, "load_persisted_ppo_checkpoint", load_checkpoint)
     def replay(model, data, env, **kwargs):
         assert kwargs["evaluation_start_index"] == (3 if temporal else 2)
         assert kwargs["evaluation_end_index"] == 4

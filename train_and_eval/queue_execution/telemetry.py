@@ -1,10 +1,8 @@
-"""Bounded host telemetry: one CSV, 30-second flush, gzip on close."""
+"""Bounded host telemetry: one CSV, 30-second flush, retained after close."""
 import csv
-import gzip
 import json
 import math
 from pathlib import Path
-import shutil
 import subprocess
 import time
 
@@ -98,11 +96,6 @@ class Recorder:
 
     def close(self):
         self.stream.close()
-        packed=self.path.with_suffix(self.path.suffix+'.gz')
-        # Retain original on any compression failure; never overwrite a prior output.
-        with self.path.open('rb') as src, packed.open('xb') as out:
-            with gzip.GzipFile(fileobj=out,mode='wb') as dest:shutil.copyfileobj(src,dest)
-        self.path.unlink()
         summary={k:{'min':v['min'],'max':v['max'],'mean':v['sum']/v['count'],'samples':v['count']}
                  for k,v in self.stats.items()}
         (self.path.parent/'telemetry_summary.json').write_text(json.dumps({'rows':self.rows,'metrics':summary},indent=2))

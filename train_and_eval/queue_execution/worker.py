@@ -122,7 +122,7 @@ def main(argv=None):
             try:
                 from train_and_eval.queue_execution.evaluation_gate import evaluation_lock_scope
                 with evaluation_lock_scope(args.evaluation_lock):
-                    code = train(['--config', args.config, '--plain-output', '--traceback'])
+                    code = train(['--config', args.config, '--plain-output', '--verbose', '0', '--traceback'])
             finally:
                 stop.set()
                 watcher.join(timeout=7)
@@ -141,6 +141,8 @@ def main(argv=None):
     except KeyboardInterrupt:
         return 130
     except Exception as error:
+        import traceback
+        traceback.print_exc()
         print(f'QUEUE WORKER FAILED: {error}', flush=True)
         return 1
     finally:

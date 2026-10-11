@@ -971,6 +971,10 @@ def train_ppo_run(
                 )
 
         check_model_device(model, 'cuda')
+        import os
+        if os.environ.get('PPO_QUEUE_EVENTS') == '1':
+            model.verbose = 0
+            log_interval = None
 
         model_steps_before = int(
             model.num_timesteps
@@ -1214,6 +1218,8 @@ def train_ppo_run(
 
             if event.final:
                 final_checkpoint = checkpoint
+                from train_and_eval.queue_execution.runtime import stage_event
+                stage_event('TRAIN', completed=True)
 
             if event.evaluation_due:
                 evaluation_trigger = (
@@ -1349,6 +1355,8 @@ def train_ppo_run(
                         final_checkpoint
                     )
 
+                    from train_and_eval.queue_execution.runtime import stage_event
+                    stage_event('TRAIN', completed=True)
                     evaluate_training_checkpoint(final_checkpoint, "final", completed_steps)
 
                     _progress_call(

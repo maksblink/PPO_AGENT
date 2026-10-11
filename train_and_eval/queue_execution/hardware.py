@@ -62,8 +62,9 @@ def thermal_session(directory, max_mhz, sysroot=Path("/sys")):
         if not low<=max_mhz*1000<=high:raise RuntimeError(f'Invalid cap for {path}')
     paths=[boost,legion/'powermode',*limits,legion/'fan_fullspeed']
     previous={str(p):p.read_text().strip() for p in paths}
-    metadata={'max_mhz':max_mhz,'previous':previous,'completed':False}
-    record=directory/'thermal_settings.json'
+    record=directory/'hardware.json'
+    metadata=json.loads(record.read_text()) if record.exists() else {}
+    metadata.update({'max_mhz':max_mhz,'previous':previous,'completed':False})
     record.write_text(json.dumps(metadata,indent=2))
     def write(path,value):
         subprocess.run(['sudo','-n','tee',str(path)],input=value+'\n',text=True,stdout=subprocess.DEVNULL,check=True)
@@ -103,5 +104,5 @@ def thermal_session(directory, max_mhz, sysroot=Path("/sys")):
             signal.signal(signal.SIGTERM,handler)
             if errors:
                 print('RESTORE ERRORS: '+'; '.join(errors),file=sys.stderr,flush=True)
-                raise RuntimeError('Hardware restoration incomplete; see thermal_settings.json')
+                raise RuntimeError('Hardware restoration incomplete; see hardware.json')
             print('Restored previous CPU limits, boost and fan settings.',flush=True)

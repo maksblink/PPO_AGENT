@@ -26,16 +26,30 @@ def validate_receipt(receipt, row, proc_root=Path('/proc')):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--attempt', type=Path, required=True)
+    parser.add_argument('--attempt', type=Path, required=True, help='events.jsonl or a legacy attempt receipt')
+    parser.add_argument('--attempt-id', help='Attempt identifier from events.jsonl')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     path = args.attempt.resolve(strict=True)
     storage = (root / 'artifacts').resolve()
     storage.relative_to(root)
     path.relative_to((storage / 'search_queues').resolve())
-    if not path.name.endswith('.attempt.json'):
-        raise ValueError('Expected scheduler attempt receipt')
-    receipt = json.loads(path.read_text())
+    if path.name == 'events.jsonl':
+        if not args.attempt_id:
+            raise ValueError('--attempt-id is required with events.jsonl')
+        matches = []
+        for line in path.read_text().splitlines():
+            try: entry = json.loads(line)
+            except ValueError: continue  # A crash can leave a partial final line.
+            if entry.get('event') == 'attempt_registered' and entry.get('attempt') == args.attempt_id:
+                matches.append(entry['receipt'])
+        if len(matches) != 1:
+            raise ValueError('Expected exactly one matching attempt registration')
+        receipt = matches[0]
+    elif path.name.endswith('.attempt.json'):
+        receipt = json.loads(path.read_text())
+    else:
+        raise ValueError('Expected events.jsonl or legacy scheduler receipt')
     engine = create_database_engine()
     control = None
     try:

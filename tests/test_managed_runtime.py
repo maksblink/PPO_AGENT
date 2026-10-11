@@ -57,7 +57,7 @@ class ManagedTests(unittest.TestCase):
             self.assertEqual(groups[1],[[16,18,20,22],[24,26,28,30]])
             with self.assertRaises(RuntimeError):affinity.discover_groups(root,range(16))
 
-    def test_telemetry_flush_compression_and_summary(self):
+    def test_telemetry_flush_retained_csv_and_summary(self):
         with tempfile.TemporaryDirectory() as d:
             path=Path(d)/'telemetry.csv'
             with patch.object(telemetry,'cpu_ticks',side_effect=[{'cpu':(100,60)},{'cpu':(200,100)}]),patch.object(telemetry,'memory',return_value=15000),patch.object(telemetry,'gpus',return_value=[['0','50','620','48']]):
@@ -66,8 +66,9 @@ class ManagedTests(unittest.TestCase):
                 recorder.last_flush-=31;recorder.flush_due()
                 self.assertIn('training',path.read_text())
                 recorder.close()
-            self.assertFalse(path.exists())
-            self.assertIn('70',gzip.open(str(path)+'.gz','rt').read())
+            self.assertTrue(path.exists())
+            self.assertFalse(Path(str(path)+'.gz').exists())
+            self.assertIn('70',path.read_text())
             result=json.loads((Path(d)/'telemetry_summary.json').read_text())
             self.assertEqual(result['rows'],1)
             self.assertEqual(result['metrics']['cpu_utilization_pct']['mean'],60)
@@ -87,7 +88,7 @@ class ManagedTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'workload'):
                     with hardware.thermal_session(report,5000,sysroot):raise ValueError('workload failed')
             for rel,v in values.items():self.assertEqual((sysroot/rel).read_text(),v)
-            self.assertEqual(json.loads((report/'thermal_settings.json').read_text())['restore_errors'],[])
+            self.assertEqual(json.loads((report/'hardware.json').read_text())['restore_errors'],[])
 
 
     def test_cuda_retry_execs_once_before_database_work(self):

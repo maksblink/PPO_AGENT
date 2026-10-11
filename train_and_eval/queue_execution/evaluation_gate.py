@@ -27,9 +27,13 @@ def serialize_evaluation(function):
         path = _path.get()
         if path is None or _inside.get():
             return function(*args, **kwargs)
+        scope = kwargs.get('data_scope')
+        scope = getattr(scope, 'value', scope)
+        stage = 'EVAL_TRAIN' if scope == 'run_training' else 'EVAL_VAL'
+        trigger = getattr(kwargs.get('trigger'), 'value', kwargs.get('trigger'))
         def event(phase):
             from train_and_eval.queue_execution.runtime import phase as record_phase
-            record_phase(phase, evaluation=function.__name__)
+            record_phase(phase, evaluation=function.__name__, stage=stage, trigger=trigger)
             if phase == 'evaluation_end':
                 record_phase('training')
         # The scheduler creates the shared parent. Never delete the lock file:
@@ -45,7 +49,12 @@ def serialize_evaluation(function):
             token = _inside.set(True)
             try:
                 event('evaluation_start')
-                return function(*args, **kwargs)
+                from train_and_eval.queue_execution.runtime import stage_event
+                stage_event(stage, trigger=trigger, checkpoint_id=kwargs.get('checkpoint_id'))
+                result = function(*args, **kwargs)
+                if function.__name__ == 'evaluate_run_validation_checkpoint':
+                    stage_event(stage, completed=True, trigger=trigger, checkpoint_id=kwargs.get('checkpoint_id'))
+                return result
             finally:
                 _inside.reset(token)
                 fcntl.flock(handle, fcntl.LOCK_UN)

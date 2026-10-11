@@ -49,16 +49,18 @@ def main():
     subprocess.run(command+['--dry-run'],cwd=root,check=True)
     artifacts=(root/'artifacts').resolve()
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'_'+uuid.uuid4().hex[:8]
-    directory=artifacts/'hardware_sessions'/stamp
+    directory=artifacts/'search_queues'/parsed.queue/stamp
     directory.mkdir(parents=True,exist_ok=False)
-    (directory/'launch.json').write_text(json.dumps({'arguments':queue_args,'fixed':fixed,'groups':groups,'max_mhz':args.max_mhz},indent=2))
+    (directory/'hardware.json').write_text(json.dumps({'arguments':queue_args,'fixed':fixed,'groups':groups,'max_mhz':args.max_mhz},indent=2))
     lock_path=Path('/tmp')/f'ppo-managed-hardware-{os.getuid()}.lock'
     with lock_path.open('a') as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:raise RuntimeError('Another managed hardware session is active')
         with thermal_session(directory,args.max_mhz) as cooldown:
             cooldown()
-            process=subprocess.Popen(command,cwd=root,start_new_session=True)
+            env=os.environ.copy()
+            env['PPO_QUEUE_SESSION_DIR']=str(directory)
+            process=subprocess.Popen(command,cwd=root,env=env,start_new_session=True)
             try:
                 code=process.wait()
             finally:

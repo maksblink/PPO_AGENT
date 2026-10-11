@@ -8,7 +8,8 @@ import time
 
 def phase(name, **details):
     event = dict(phase=name, time=time.time(), worker_pid=os.getpid(), **details)
-    print(json.dumps(event), flush=True)
+    prefix = '@@PPO_QUEUE@@' if os.environ.get('PPO_QUEUE_EVENTS') == '1' else ''
+    print(prefix + json.dumps(event), flush=True)
     destination = os.environ.get('PPO_QUEUE_PHASE_PATH')
     if destination:
         path = Path(destination)
@@ -51,3 +52,9 @@ def model_initialization():
         if enabled:
             torch.set_num_threads(previous)
             phase('training', threads=torch.get_num_threads(), cpus=sorted(os.sched_getaffinity(0)))
+
+
+def stage_event(stage, completed=False, **details):
+    """Observation only; standalone training/evaluation stays silent."""
+    if os.environ.get('PPO_QUEUE_EVENTS') == '1':
+        phase(stage, stage=stage, completed=completed, **details)

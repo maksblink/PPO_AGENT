@@ -1,0 +1,4 @@
+queue_schema_version: 1
+name: repeat_recent_ne9
+configs:
+- configs/repeats/repeat01_r_v3_w384x3_g099_lr0p000040000_s1_ne9.yml

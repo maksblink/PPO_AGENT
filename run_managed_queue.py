@@ -46,7 +46,11 @@ def main():
             raise RuntimeError(f'{path}: managed queue requires CUDA training and CPU evaluation')
     if other_local_queue(root) is not None:raise RuntimeError('Another queue is active; no hardware settings changed')
     # Validate queue selection/dependencies before sudo or hardware writes.
-    subprocess.run(command+['--dry-run'],cwd=root,check=True)
+    validation=subprocess.run(command+['--dry-run'],cwd=root,
+                              stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+    if validation.returncode:
+        print(validation.stdout, end='', flush=True)
+        raise RuntimeError('Queue validation failed; hardware settings were not changed')
     artifacts=(root/'artifacts').resolve()
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'_'+uuid.uuid4().hex[:8]
     directory=artifacts/'search_queues'/parsed.queue/stamp

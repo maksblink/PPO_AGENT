@@ -5,6 +5,9 @@ from pathlib import Path
 import queue
 import threading
 import time
+import sys
+import os
+import shutil
 
 PREFIX = '@@PPO_QUEUE@@'
 STAGES = ('TRAIN', 'EVAL_TRAIN', 'EVAL_VAL')
@@ -79,8 +82,45 @@ class OutputReader:
             self.error = 'Worker output did not reach EOF after exit'
 
 
+class TerminalBlock:
+    """Keep the cursor beneath a fixed-height block; rewrite changed rows only."""
+    def __init__(self, stream=None):
+        self.stream = stream if stream is not None else sys.stdout
+        self.interactive = bool(getattr(self.stream, 'isatty', lambda: False)()) and os.environ.get('TERM') != 'dumb'
+        self.previous = []
+        self.closed = False
+
+    def render(self, lines, final=False):
+        if self.closed: return
+        # No escape sequences or periodic table spam in redirected output.
+        if not self.interactive:
+            if not self.previous or final:
+                self.stream.write('\n'.join(lines) + '\n')
+                self.stream.flush()
+            self.previous = list(lines)
+            return
+        columns = shutil.get_terminal_size((120, 30)).columns
+        width = max(1, columns - 1)
+        clean = [''.join(c if c >= ' ' and c != '\x7f' else ' ' for c in line) for line in lines]
+        rows = [line if len(line) <= width else line[:max(0, width-3)] + '...'[:width] for line in clean]
+        if not self.previous:
+            self.stream.write('\n'.join(rows) + '\n')
+        else:
+            if len(rows) != len(self.previous):
+                raise ValueError('Terminal status block height changed')
+            for i, (old, new) in enumerate(zip(self.previous, rows)):
+                if old == new: continue
+                distance = len(rows) - i
+                self.stream.write(f'\x1b[{distance}A\r\x1b[2K{new}\x1b[{distance}B\r')
+        self.stream.flush()
+        self.previous = rows
+
+    def close(self):
+        self.closed = True
+
+
 class Progress:
-    def __init__(self, jobs, configs):
+    def __init__(self, jobs, configs, workers=2):
         self.targets = {stage: set() for stage in STAGES}
         for job in jobs:
             self.targets['TRAIN'].add(job.name)
@@ -93,6 +133,10 @@ class Progress:
         self.started = time.monotonic()
         self.last_print = 0
         self.dirty = True
+        self.workers = workers
+        self.block = TerminalBlock()
+        self.lines = []
+        self.thermal_text = 'Thermal admission: RUNNING'
 
     def accept(self, name, message):
         stage = message.get('stage')
@@ -110,20 +154,37 @@ class Progress:
         return {s: {'completed': len(self.done[s] & self.targets[s]),
                     'total': len(self.targets[s])} for s in STAGES}
 
-    def display(self, active, records, force=False):
+    def thermal(self, message):
+        self.thermal_text = message
+        if self.lines:
+            self.lines[-1] = message
+            self.block.render(self.lines)
+        if not self.block.interactive:
+            print(message, file=self.block.stream, flush=True)
+
+    def close(self):
+        self.block.close()
+
+    def display(self, active, records, force=False, final=False):
         now = time.monotonic()
-        if not force and now-self.last_print < (3 if self.dirty else 30): return
+        if not force and now-self.last_print < 90: return
         self.last_print = now; self.dirty = False
         completed = sum(r['completed'] for r in records)
         failures = sum(not r['completed'] and r.get('exit_code') not in (130, -2, -15) for r in records)
         hours = (now-self.started)/3600
-        print(f'\nQUEUE STATUS | Elapsed: {hours:.2f} h | Completed runs: {completed}/{len(self.targets["TRAIN"])} | Failed attempts: {failures} | Rate: {completed/hours if hours else 0:.2f} runs/h', flush=True)
-        print('Final stages per run | Completed | Active | Remaining', flush=True)
+        lines = [f'QUEUE STATUS | Elapsed: {hours:.2f} h | Completed: {completed}/{len(self.targets["TRAIN"])} | Failed: {failures} | Rate: {completed/hours if hours else 0:.2f} runs/h',
+                 'Final stages per run | Completed | Active | Remaining']
         for stage, counts in self.counts().items():
             busy = sum(i.state.get('phase') == stage for i in active.values())
             remaining = counts['total']-counts['completed']
-            print(f'{stage:20} {counts["completed"]:4}/{counts["total"]:<4} {busy:6} {remaining:10}', flush=True)
-        print('Remaining includes active work. All completed evaluations (including periodic): '
-              + ', '.join(f'{s}={n}' for s,n in self.evaluations.items()), flush=True)
-        for item in sorted(active.values(), key=lambda i:i.slot):
-            print(f'Worker {item.slot}: {item.job.name} | {item.state.get("phase", "STARTING")}', flush=True)
+            lines.append(f'{stage:20} {counts["completed"]:4}/{counts["total"]:<4} {busy:6} {remaining:10}')
+        lines.append('Remaining includes active work. Refresh: 90 s. Periodic + final evaluations:')
+        lines.append(', '.join(f'{s}={n}' for s,n in self.evaluations.items()))
+        by_slot = {item.slot:item for item in active.values()}
+        for slot in range(1, self.workers+1):
+            item = by_slot.get(slot)
+            lines.append(f'Worker {slot}: {item.job.name} | {item.state.get("phase", "STARTING")}' if item else
+                         f'Worker {slot}: - | {"STOPPED" if final else "IDLE"}')
+        lines.append(self.thermal_text)
+        self.lines = lines
+        self.block.render(lines, final=final)

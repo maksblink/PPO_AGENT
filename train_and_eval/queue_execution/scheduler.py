@@ -162,7 +162,7 @@ def run(selected, args, root):
         # Restart decisions can remove children too: refresh the entire plan.
         states = database_states(control, names)
         completed_before, blocked, pending = classify(jobs, states, skipped)
-        progress = Progress(pending, configs)
+        progress = Progress(pending, configs, workers=args.workers)
         print(f'QUEUE PLAN | Selected: {len(jobs)} | Already completed: {len(completed_before)} | To run: {len(pending)} | Skipped: {len(skipped)} | Blocked: {len(blocked)}', flush=True)
         for name in sorted(blocked): print(f'BLOCKED: {name}', flush=True)
         directory.mkdir(parents=True, exist_ok=bool(managed_directory))
@@ -242,7 +242,6 @@ def run(selected, args, root):
                     failed = True
                 records.append({'name': name, 'attempt': item.attempt, 'pid': item.process.pid,
                     'wall_seconds': elapsed, 'exit_code': code, 'completed': ok})
-                print(f'{name}: {"completed" if ok else "failed"}, {elapsed:.1f}s', flush=True)
             if now >= next_control:
                 sensors = temperatures()
                 temperature = max(sensors.values()) if sensors else None
@@ -260,7 +259,7 @@ def run(selected, args, root):
             message = None if admit else 'Thermal admission paused'
             if message != last_message:
                 event('admission_paused' if message else 'admission_resumed', cpu_c=temperature)
-                print(f'{message or "Thermal admission resumed"}: CPU={temperature}', flush=True)
+                progress.thermal(f'{message or "Thermal admission resumed"}: CPU={temperature}')
             last_message = message
             if now >= next_sample:
                 workers=[]
@@ -332,7 +331,6 @@ def run(selected, args, root):
                 active[candidate.name].receipt = receipt
                 event('attempt_registered', attempt=attempt, slot=slot, receipt=receipt, _durable=True)
                 launched = True
-                print(f'Start {candidate.name}: PID {process.pid}, worker {slot}', flush=True)
             if pending and not active and not launched and occupied_slots(control) == 0:
                 eligible = any(states.get(job.name) is None and runnable(job, states) for job in pending)
                 if not eligible:
@@ -342,7 +340,10 @@ def run(selected, args, root):
         return 1 if failed else 0
     except (KeyboardInterrupt, EOFError):
         interrupted = True
-        print('Queue interrupted; signalling owned children to persist their interrupted state.', flush=True)
+        if progress:
+            progress.thermal('Queue interrupted; stopping owned workers.')
+        else:
+            print('Queue interrupted before worker start.', flush=True)
         return 130
     except Exception:
         failed = True
@@ -364,11 +365,12 @@ def run(selected, args, root):
                         record['completed'] = (item.process.returncode == 0 and
                             database_states(final_connection, [name]).get(name) == 'completed')
                 except Exception as error:
-                    print(f'Could not reconcile {name}; preserve and inspect database state: {error}', flush=True)
+                    progress.thermal(f'Reconciliation failed for {name}; see events.jsonl')
                     event('reconciliation_error', name=name, traceback=traceback.format_exc())
                 finish(item, record['completed'], item.process.returncode, interrupted_worker=interrupted)
         if progress:
-            progress.display({}, records, force=True)
+            progress.display({}, records, force=True, final=True)
+            progress.close()
         if recorder:
             try: recorder.close()
             except Exception as error:

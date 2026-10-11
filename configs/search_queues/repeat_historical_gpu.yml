@@ -1,4 +1,0 @@
-queue_schema_version: 1
-name: repeat_historical_gpu
-configs:
-- configs/repeats/repeat02_gpu_original_5.yml

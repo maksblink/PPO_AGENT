@@ -1,5 +1,0 @@
-queue_schema_version: 1
-name: repeat_after_ubuntu_update
-configs:
-- configs/repeat_after_ubuntu_update/repeat_ubuntu_fresh_2027.yml
-- configs/repeat_after_ubuntu_update/repeat_ubuntu_resume_1655.yml

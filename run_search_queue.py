@@ -117,8 +117,8 @@ def discover_queue_manifests(directory: Path | None = None) -> dict[str, Path]:
 
     paths = sorted(
         [
-            *directory.glob("*.yml"),
-            *directory.glob("*.yaml"),
+            *directory.rglob("*.yml"),
+            *directory.rglob("*.yaml"),
         ]
     )
 

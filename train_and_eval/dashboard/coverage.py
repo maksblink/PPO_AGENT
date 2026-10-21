@@ -256,7 +256,10 @@ def render_grid_coverage(root: Path):
     st.subheader('Grid Coverage')
     st.button('Refresh coverage')
     st.caption('Read-only plan and execution coverage. TRAIN/VAL performance values and sidebar filters do not apply.')
-    manifests = sorted(p for p in (root/'configs/search_queues').glob('*') if p.suffix in {'.yml', '.yaml'})
+    manifests = sorted(
+        p for p in (root / 'configs/search_queues').rglob('*')
+        if p.is_file() and p.suffix in {'.yml', '.yaml'}
+    )
     if not manifests:
         st.info('No queue manifests found.'); return
     selected = st.multiselect('Planned queues', manifests,

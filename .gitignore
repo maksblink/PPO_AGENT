@@ -52,3 +52,7 @@ train_and_eval/market_data/manifest.json.tmp
 # Private seed2 configs and queues
 /configs/stage_one/seed2/
 /configs/search_queues/seed2/
+
+# Private seed1_low_LR_big_arch configs and queues
+/configs/stage_one/seed1_low_LR_big_arch/
+/configs/search_queues/seed1_low_LR_big_arch/

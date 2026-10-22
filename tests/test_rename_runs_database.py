@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from tests.test_clean_training import cleanup_database
 from train_and_eval.database.models import Run, Checkpoint, TrainingMetric
 from train_and_eval.run_config import RunConfig, normalize_config
-from extra_tools import rename_runs as tool
-from extra_tools.audit_run_names import proposed_names
+from extra_tools.maintenance import rename_runs as tool
+from extra_tools.maintenance.audit_run_names import proposed_names
 
 
 @pytest.fixture

@@ -921,7 +921,7 @@ def probe(local, mount):
 def _main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=['disks', 'probe', 'scan', 'compare', 'sync', 'verify', 'prune', 'restore-files', 'restore-database'])
-    parser.add_argument('--project', type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument('--project', type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument('--disk', help='Mounted filesystem root; omit for interactive selection.')
     parser.add_argument('--backup', type=Path, help='Existing backup folder, for restore-files only.')
     parser.add_argument('--target', type=Path, help='New project folder, for restore-files only.')

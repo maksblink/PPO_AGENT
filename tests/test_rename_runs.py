@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from extra_tools import rename_runs as tool
+from extra_tools.maintenance import rename_runs as tool
 
 
 class RenameFilesTests(unittest.TestCase):

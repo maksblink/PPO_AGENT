@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from extra_tools.audit_run_names import learning_rate_token, proposed_names
-from extra_tools.rename_runs import rename_config, sha
+from extra_tools.maintenance.audit_run_names import learning_rate_token, proposed_names
+from extra_tools.maintenance.rename_runs import rename_config, sha
 from train_and_eval.run_config import RunConfig, normalize_config
 
 
@@ -78,7 +78,7 @@ def test_duplicate_destination_rejected():
 
 
 def test_file_only_recovery_rolls_forward_but_rejects_new_db_run(monkeypatch):
-    from extra_tools import rename_runs as tool
+    from extra_tools.maintenance import rename_runs as tool
     plan = {'runs': [], 'file_only': True}
     monkeypatch.setattr(tool, 'run_rows', lambda _: {})
     assert tool.db_side(None, plan) == 'after'

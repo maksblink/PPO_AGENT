@@ -13,7 +13,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 HISTORY = 'extra_tools/maintenance/run_rename'
@@ -125,7 +125,7 @@ def build_plan(connection, root, audit):
     from train_and_eval.database.models import Checkpoint, Evaluation, WalkForwardStudy, WalkForwardCycle
     from train_and_eval.run_config import RunConfig, normalize_config
     import yaml
-    from extra_tools.audit_run_names import proposed_names, LR_DECIMAL_PLACES
+    from extra_tools.maintenance.audit_run_names import proposed_names, LR_DECIMAL_PLACES
     if audit.get('audit_version') != 2 or audit.get('lr_decimal_places') != LR_DECIMAL_PLACES or audit.get('errors'):
         raise ValueError('A successful version-2 fixed-LR audit is required')
     entries = audit['mapping']
@@ -388,7 +388,7 @@ def main():
     except (Exception, KeyboardInterrupt) as error:
         print(f'Rename stopped: {error}',file=sys.stderr)
         if pending_path(ROOT).exists():
-            print('Before training/cleanup, run: python extra_tools/rename_runs.py --recover',file=sys.stderr)
+            print('Before training/cleanup, run: python extra_tools/maintenance/rename_runs.py --recover',file=sys.stderr)
         return 1
     finally:
         engine.dispose()

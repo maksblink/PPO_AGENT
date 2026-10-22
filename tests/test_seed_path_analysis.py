@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-spec = importlib.util.spec_from_file_location('seed_paths', Path(__file__).resolve().parents[1]/'extra_tools/ppo_analyze_grid.py')
+spec = importlib.util.spec_from_file_location('seed_paths', Path(__file__).resolve().parents[1]/'extra_tools/analysis/ppo_analyze_grid.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 

@@ -1,6 +1,6 @@
 # Grid, seed and path analysis
 
-Version 4.0.0. One entry point: `extra_tools/ppo_analyze_grid.py`.
+Version 4.0.0. One entry point: `extra_tools/analysis/ppo_analyze_grid.py`.
 Run from the project root using its virtual environment. Requirements are the
 project's existing NumPy, pandas, PyArrow, matplotlib, SQLAlchemy and database
 configuration. No new service is required.
@@ -17,7 +17,7 @@ configuration. No new service is required.
 ### Grid only
 
 ```bash
-python extra_tools/ppo_analyze_grid.py --mode grid --all-runs --top-percent 1
+python extra_tools/analysis/ppo_analyze_grid.py --mode grid --all-runs --top-percent 1
 ```
 
 Add `--compare-seeds 1 2` for matched-stage and complete-path seed comparisons.
@@ -29,7 +29,7 @@ Queues can be nested under `configs/search_queues`; names must be unique.
 ### Full report
 
 ```bash
-python extra_tools/ppo_analyze_grid.py --mode full --all-runs \
+python extra_tools/analysis/ppo_analyze_grid.py --mode full --all-runs \
   --compare-seeds 1 2 --top-percent 1 \
   --detail-run-id 101 --detail-run-id 202
 ```
@@ -41,7 +41,7 @@ included, while detailed artifacts are read only for the selected stage pair.
 ### Paths only, without recomputing the grid
 
 ```bash
-python extra_tools/ppo_analyze_grid.py --mode paths \
+python extra_tools/analysis/ppo_analyze_grid.py --mode paths \
   --report artifacts/queue_analysis/SESSION/report.json \
   --detail-run-id 101 --detail-run-id 202
 ```

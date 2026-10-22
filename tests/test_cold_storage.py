@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-spec = importlib.util.spec_from_file_location('cold_storage', Path(__file__).resolve().parents[1] / 'extra_tools/cold_storage.py')
+spec = importlib.util.spec_from_file_location('cold_storage', Path(__file__).resolve().parents[1] / 'extra_tools/maintenance/cold_storage.py')
 backup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(backup)
 

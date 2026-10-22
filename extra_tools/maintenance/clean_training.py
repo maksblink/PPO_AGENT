@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Delete selected PPO_AGENT experiments and their registered artifacts.
 
-Run from the repository: python extra_tools/clean_training.py MODE [--dry-run].
+Run from the repository: python extra_tools/maintenance/clean_training.py MODE [--dry-run].
 clean-all resets experiment ID sequences; stage-specific modes preserve them.
 No schema changes, data/config deletion, or implicit cascades.
 Stop trainers/evaluators before use. Stage-two selection always covers a study.
@@ -19,7 +19,7 @@ import shutil
 import sys
 import uuid
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 

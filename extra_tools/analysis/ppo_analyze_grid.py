@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Grid, seed comparison and path analysis v4. Read-only PostgreSQL snapshot; writes only HTML and JSON reports.
-Run from PPO_AGENT: python extra_tools/ppo_analyze_grid.py --all-runs
+Run from PPO_AGENT: python extra_tools/analysis/ppo_analyze_grid.py --all-runs
 No training, model loading, hardware changes, database updates or network requests.
 """
 from __future__ import annotations

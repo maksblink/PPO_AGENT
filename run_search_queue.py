@@ -1225,7 +1225,7 @@ def inspect_incomplete_run(engine, run_id, name):
 
 def delete_incomplete_run(engine, config, snapshot):
     from sqlalchemy import select
-    from extra_tools.clean_training import cleanup
+    from extra_tools.maintenance.clean_training import cleanup
     from train_and_eval.database.models import Run
     run_id = snapshot['id']
     def validate(connection, plan):
@@ -1241,7 +1241,7 @@ def delete_incomplete_run(engine, config, snapshot):
         # Authorization applies only to this run, never to another pending cleanup.
         if prompt.startswith('Type SURE to apply'):
             return 'SURE'
-        raise ValueError("Pending cleanup requires recovery with extra_tools/clean_training.py before queue execution")
+        raise ValueError("Pending cleanup requires recovery with extra_tools/maintenance/clean_training.py before queue execution")
     if not cleanup(engine, ROOT, 'clean-first-stage', run_ids=[run_id],
                    confirm=confirmed, validate_plan=validate):
         raise ValueError("Cleanup was not completed; the run will not restart")

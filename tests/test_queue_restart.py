@@ -83,7 +83,7 @@ def test_cleanup_failure_never_starts_training(monkeypatch):
 
 
 def test_queue_does_not_authorize_unrelated_pending_cleanup(monkeypatch):
-    from extra_tools import clean_training
+    from extra_tools.maintenance import clean_training
     def cleanup(*args, **kwargs):
         kwargs['confirm']('Recover the interrupted cleanup first? Type RECOVER: ')
     monkeypatch.setattr(clean_training, 'cleanup', cleanup)

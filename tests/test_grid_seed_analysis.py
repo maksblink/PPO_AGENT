@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "extra_tools" / "ppo_analyze_grid.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "extra_tools" / "analysis" / "ppo_analyze_grid.py"
 spec = importlib.util.spec_from_file_location("grid_analysis_under_test", SCRIPT)
 g = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(g)

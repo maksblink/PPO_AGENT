@@ -11,7 +11,7 @@ import pandas as pd
 from matplotlib.ticker import PercentFormatter
 from sqlalchemy import select
 
-from extra_tools.policy_probability_diagnostic import (
+from extra_tools.diagnostics.policy_probability_diagnostic import (
     SourceRun,
     collect_probability_data,
     parse_int_list,

@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select, func, update, delete, text
 from sqlalchemy.orm import Session
 from train_and_eval.database.models import Base, Run, Checkpoint, Evaluation, TrainingMetric, WalkForwardStudy, WalkForwardCycle
-from extra_tools import clean_training as tool
+from extra_tools.maintenance import clean_training as tool
 from tests.database_support import isolated_test_schema, resolve_test_database_url
 
 

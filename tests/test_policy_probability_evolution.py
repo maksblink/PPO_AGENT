@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from extra_tools.policy_probability_evolution import (
+from extra_tools.diagnostics.policy_probability_evolution import (
     build_checkpoint_diagnostics,
     build_probability_transitions,
     distribution_metrics,

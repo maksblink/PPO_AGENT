@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Grid and seed comparison analysis v3. Read-only PostgreSQL snapshot; writes only HTML and JSON reports.
+"""Grid, seed comparison and path analysis v4. Read-only PostgreSQL snapshot; writes only HTML and JSON reports.
 Run from PPO_AGENT: python extra_tools/ppo_analyze_grid.py --all-runs
 No training, model loading, hardware changes, database updates or network requests.
 """
 from __future__ import annotations
 import argparse
+import base64
+from io import BytesIO
+import numpy as np
+import pandas as pd
 import os
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -20,7 +24,7 @@ import statistics as st
 import sys
 import zipfile
 
-VERSION = '3.0.0'
+VERSION = '4.0.0'
 EPS = 1e-10
 METRICS = ('agent_return', 'balanced_score', 'agent_max_drawdown')
 EXTRA = ('market_exposure', 'round_trips', 'profit_factor', 'win_rate', 'always_long_return')
@@ -1022,9 +1026,390 @@ def seed_comparison_html(c):
     return '\n'.join(parts)
 
 
+def load_detail_ids(path):
+    payload = json.loads(Path(path).expanduser().read_text())
+    if not isinstance(payload, dict) or set(payload) != {'reference_run_ids'}:
+        raise ValueError('Details config must contain only reference_run_ids')
+    ids = payload['reference_run_ids']
+    if not isinstance(ids, list) or not ids or any(type(x) is not int or x <= 0 for x in ids):
+        raise ValueError('reference_run_ids must be a nonempty list of positive integers')
+    return list(dict.fromkeys(ids))
+
+
+def tabbed_report(grid_html, diagnostics=None, detail_html=None):
+    """Keep original report content; add offline accessible navigation panels."""
+    split = grid_html.index('<h1>')
+    head, grid_body = grid_html[:split], grid_html[split:].removesuffix('</html>')
+    tabs = [('Grid overview', grid_body)]
+    if diagnostics is not None:
+        sections = re.findall(r'<section>(.*?)</section>', detail_html, flags=re.S)
+        pairs = diagnostics['detailed_pairs']
+        npaths = len(sections)-len(pairs)
+        if npaths < 1 or len(pairs) < 1:
+            raise ValueError('Unexpected path diagnostics HTML structure')
+        notes = '<p>'+esc(' '.join(diagnostics['notes']))+'</p>'
+        tabs.append(('Full paths', notes+''.join('<section>'+x+'</section>' for x in sections[:npaths])))
+        for p, section in zip(pairs, sections[npaths:]):
+            tabs.append((f"VAL #{p['reference']['id']} / #{p['replay']['id']}", notes+'<section>'+section+'</section>'))
+    else:
+        tabs.append(('Path diagnostics', '<section><h2>Detailed diagnostics not requested</h2>'
+            '<p>Use --compare-seeds with --detail-run-id or --details-config. '
+            'Only explicitly selected pairs require trajectory reads.</p></section>'))
+    controls = '<nav role="tablist" aria-label="Report sections">'+''.join(
+        f'<button type="button" role="tab" id="tab{i}" aria-controls="panel{i}" '
+        f'aria-selected="{str(i==0).lower()}" tabindex="{0 if i==0 else -1}" data-panel="panel{i}">{esc(label)}</button>'
+        for i,(label,_) in enumerate(tabs))+'</nav>'
+    panels = ''.join(f'<div role="tabpanel" id="panel{i}" aria-labelledby="tab{i}" tabindex="0">{body}</div>'
+                     for i,(_,body) in enumerate(tabs))
+    return head+"""<style>
+    nav[role=tablist]{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0}
+    button[role=tab]{padding:12px;border:1px solid #bed0df;border-radius:6px;cursor:pointer}
+    button[aria-selected=true]{background:#123d64;color:white}
+    [hidden]{display:none!important}img{max-width:100%}
+    </style><noscript><p>JavaScript is disabled: all report sections are shown below.</p></noscript>"""+controls+panels+"""
+    <script>
+    const tabs=Array.from(document.querySelectorAll('button[role=tab]'));
+    function activate(tab){tabs.forEach(t=>{
+      const selected=t===tab;t.setAttribute('aria-selected',String(selected));
+      t.tabIndex=selected?0:-1;document.getElementById(t.dataset.panel).hidden=!selected;
+    });}
+    tabs.forEach((t,i)=>{t.addEventListener('click',()=>activate(t));
+      t.addEventListener('keydown',e=>{let next=null;
+        if(e.key==='ArrowRight')next=(i+1)%tabs.length;
+        if(e.key==='ArrowLeft')next=(i+tabs.length-1)%tabs.length;
+        if(e.key==='Home')next=0;if(e.key==='End')next=tabs.length-1;
+        if(next!==null){e.preventDefault();activate(tabs[next]);tabs[next].focus();}
+      });});activate(tabs[0]);
+    </script></html>"""
+
+
+path_TOL = 1e-8
+path_METRICS = ('agent_return', 'agent_max_drawdown', 'balanced_score',
+           'market_exposure', 'round_trips', 'always_long_return')
+
+
+def path_require(ok, message):
+    if not ok:
+        raise ValueError(message)
+
+
+def path_close(a, b, label):
+    path_require(np.isfinite(float(a)) and np.isfinite(float(b))
+            and abs(float(a)-float(b)) <= path_TOL, f'{label}: {a} != {b}')
+
+
+def path_sha(path):
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda: f.read(1024*1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def path_read_snapshot(root, runs):
+    sys.path.insert(0, str(root))
+    from sqlalchemy import text
+    from train_and_eval.database.session import create_database_engine
+    engine = create_database_engine()
+    try:
+        with engine.connect() as conn, conn.begin():
+            conn.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'))
+            conn.execute(text("SET LOCAL statement_timeout = '120s'"))
+            records = [dict(r) for r in conn.execute(text('''
+                SELECT r.id AS run_id, r.name, r.status AS run_status,
+                       r.source_checkpoint_id, r.normalized_config_json,
+                       r.training_steps_completed,
+                       e.*, c.run_step AS checkpoint_run_step
+                FROM runs r JOIN checkpoints c ON c.run_id=r.id
+                JOIN evaluations e ON e.checkpoint_id=c.id
+                WHERE r.id=ANY(:ids) AND e.trigger='final'
+                  AND e.data_scope IN ('run_validation','run_training') AND e.status='completed'
+            '''), {'ids': list(runs)}).mappings()]
+    finally:
+        engine.dispose()
+    found = {}
+    seen = set()
+    for row in records:
+        rid = row['run_id']
+        key = (rid, row['data_scope'])
+        path_require(key not in seen, f'Ambiguous final evaluation: {key}')
+        seen.add(key)
+        reference = runs[rid]
+        path_require(row['run_status'] == 'completed', f'Run #{rid} is incomplete')
+        path_require(row['name'] == reference['name'], f'Identity mismatch: #{rid}')
+        path_require(row['source_checkpoint_id'] == reference['source_checkpoint_id'],
+                f'Ancestry changed: #{rid}')
+        path_require(row['steps_completed'] == row['steps_expected'], f'Incomplete VAL: #{rid}')
+        path_require(row['checkpoint_run_step'] == row['training_steps_completed'],
+                f'VAL is not from final training step: #{rid}')
+        scope = 'VAL' if row['data_scope'] == 'run_validation' else 'TRAIN'
+        for metric in path_METRICS:
+            path_close(row[metric], reference[scope][metric], f'#{rid} {scope} report/DB {metric}')
+        cfg = row['normalized_config_json']
+        row['config'] = json.loads(cfg) if isinstance(cfg, str) else cfg
+        path_require(row['config']['run']['seed'] == reference['seed'], f'Seed mismatch: #{rid}')
+        path_require(row['config']['ppo']['device'] == 'cuda'
+                and row['config']['evaluation']['device'] == 'cpu', f'Device config: #{rid}')
+        if scope == 'VAL':
+            found[rid] = row
+    path_require(set(found) == set(runs), 'Missing completed final VAL evaluations')
+    path_require(len(seen) == 2*len(runs), 'Missing completed final TRAIN evaluations')
+    return found
+
+
+def path_temporal_summary(frame, events, expected, force_close):
+    """Equity is cumulative additive return on stake, starting at zero."""
+    required = {'timestamp', 'execution_index', 'position', 'agent_equity',
+                'always_long_equity', 'fee_cost', 'swap_cost', 'trade_cost'}
+    path_require(required <= set(frame), f'Missing trajectory columns: {required-set(frame)}')
+    f = frame.copy()
+    f['timestamp'] = pd.to_datetime(f['timestamp'], utc=True, errors='raise')
+    path_require(len(f) > 0 and not f['timestamp'].isna().any(), 'Empty/invalid timestamps')
+    path_require(f['timestamp'].is_monotonic_increasing and f['timestamp'].is_unique,
+            'Trajectory timestamps must be strictly increasing')
+    path_require(np.all(np.diff(f['execution_index'].to_numpy()) == 1), 'Noncontiguous execution indices')
+    for column in required - {'timestamp'}:
+        path_require(np.isfinite(f[column].to_numpy(dtype=float)).all(), f'Nonfinite {column}')
+    path_require(set(f['position'].unique()) <= {-1, 0, 1}, 'Unsupported position encoding')
+    equity = f['agent_equity'].to_numpy(dtype=float)
+    long = f['always_long_equity'].to_numpy(dtype=float)
+    augmented = np.r_[0., equity]
+    peaks = np.maximum.accumulate(augmented)
+    dd = augmented - peaks
+    trough = int(np.argmin(dd))
+    peak = int(np.argmax(augmented[:trough+1]))
+    recovery = np.flatnonzero(augmented[trough+1:] >= peaks[trough])
+    recovered = trough+1+int(recovery[0]) if recovery.size else None
+    def point(i):
+        return 'before first evaluated bar' if i == 0 else f['timestamp'].iloc[i-1].isoformat()
+    actual = dict(agent_return=float(equity[-1]), always_long_return=float(long[-1]),
+                  agent_max_drawdown=float(dd.min()),
+                  market_exposure=float((f['position'] != 0).mean()))
+    for metric, value in actual.items():
+        path_close(value, expected[metric], 'trajectory/DB '+metric)
+    path_require('event' in events, 'Missing trade-event column')
+    path_require(set(events['event'].unique()) <= {'OPEN_LONG','OPEN_SHORT','CLOSE_LONG','CLOSE_SHORT'},
+            'Unknown trade event type')
+    closed = events.loc[events['event'].str.startswith('CLOSE_', na=False)].copy()
+    path_close(len(closed), expected['round_trips'], 'trade count/DB')
+    returns = np.array([], dtype=float)
+    hold = np.array([], dtype=float)
+    if len(closed):
+        for col in ('timestamp', 'net_return', 'gross_return', 'entry_fee',
+                    'close_fee', 'swap_cost', 'bars_held'):
+            path_require(col in closed, f'Missing close-event field: {col}')
+        returns = closed['net_return'].to_numpy(dtype=float)
+        hold = closed['bars_held'].to_numpy(dtype=float)
+        path_require(np.isfinite(returns).all() and np.isfinite(hold).all(), 'Invalid trade values')
+        calculated = (closed['gross_return']-closed['entry_fee']-
+                      closed['close_fee']-closed['swap_cost']).to_numpy(dtype=float)
+        path_require(np.allclose(calculated, returns, atol=path_TOL, rtol=0), 'Trade costs do not reconcile')
+    residual = float(equity[-1]-returns.sum())
+    if force_close:
+        path_close(returns.sum(), equity[-1], 'closed-trade sum/final equity')
+    f['agent_increment'] = np.diff(augmented)
+    f['long_increment'] = np.diff(np.r_[0., long])
+    f['exposure'] = (f['position'] != 0).astype(float)
+    f['dd'] = dd[1:]
+    path_require(np.allclose(f['fee_cost'] + f['swap_cost'], f['trade_cost'], atol=path_TOL, rtol=0),
+            'Per-bar trade costs do not reconcile')
+    periods = {}
+    indexed = f.set_index('timestamp')
+    for label, frequency in (('weekly', 'W-SUN'), ('monthly', 'MS')):
+        grouped = indexed.resample(frequency)
+        grouped_rows = []
+        for _, segment in grouped:
+            if segment.empty:
+                continue
+            grouped_rows.append(dict(start=segment.index[0].isoformat(), end=segment.index[-1].isoformat(),
+                bars=len(segment), agent_return=float(segment.agent_increment.sum()),
+                always_long_return=float(segment.long_increment.sum()),
+                exposure=float(segment.exposure.mean()), fees=float(segment.fee_cost.sum()),
+                swaps=float(segment.swap_cost.sum()),
+                worst_full_period_drawdown=float(segment.dd.min())))
+        periods[label] = grouped_rows
+        path_close(sum(x['agent_return'] for x in grouped_rows), equity[-1], label+' sum')
+    positive = np.sort(returns[returns > 0])[::-1]
+    gross_profit = float(positive.sum())
+    concentration = []
+    for k in (1, 5, 10):
+        contribution = float(positive[:k].sum())
+        concentration.append(dict(top_winning_trades=min(k, len(positive)), requested_k=k,
+            contribution=contribution,
+            share_of_positive_trade_pnl=contribution/gross_profit if gross_profit else None,
+            total_minus_contribution=float(equity[-1]-contribution)))
+    weekly = sorted(periods['weekly'], key=lambda x: -x['agent_return'])
+    w_agent = np.array([x['agent_return'] for x in weekly])
+    w_long = np.array([x['always_long_return'] for x in weekly])
+    weekly_benchmark_correlation = (float(np.corrcoef(w_agent, w_long)[0,1])
+        if len(weekly)>1 and w_agent.std()>0 and w_long.std()>0 else None)
+
+    result = dict(reconciled_metrics=actual, rows=len(f),
+        attribution=dict(excess_return=float(equity[-1]-long[-1]),
+            weekly_benchmark_correlation=weekly_benchmark_correlation,
+            total_cost=float(f.trade_cost.sum()),
+            best_five_weeks_contribution=float(w_agent[:5].sum()),
+            return_minus_best_five_weeks=float(equity[-1]-w_agent[:5].sum())),
+        start=f.timestamp.iloc[0].isoformat(), end=f.timestamp.iloc[-1].isoformat(),
+        drawdown=dict(value=float(dd.min()), peak=point(peak), trough=point(trough),
+                      recovery=point(recovered) if recovered is not None else None,
+                      bars_peak_to_trough=trough-peak),
+        costs=dict(fees=float(f.fee_cost.sum()), swaps=float(f.swap_cost.sum())),
+        trade_summary=dict(count=len(returns), net_total=float(returns.sum()),
+            residual_open_or_unallocated_pnl=residual,
+            winning=int((returns > 0).sum()), losing=int((returns < 0).sum()),
+            median_bars_held=float(np.median(hold)) if len(hold) else None,
+            max_bars_held=float(hold.max()) if len(hold) else None,
+            positive_trade_pnl=gross_profit,
+            negative_trade_pnl=float(returns[returns < 0].sum()), concentration=concentration),
+        periods=periods, positive_weeks=sum(x['agent_return'] > 0 for x in weekly),
+        weeks_beating_long=sum(x['agent_return'] > x['always_long_return'] for x in weekly),
+        best_weeks=weekly[:5], worst_weeks=weekly[-5:][::-1])
+    return result, f
+
+
+def path_read_artifacts(root, row):
+    directory = (root/'artifacts/runs'/f"{row['run_id']:08d}"/'evaluations'/f"{row['id']:08d}").resolve()
+    directory.relative_to((root/'artifacts/runs').resolve())
+    paths = [directory/name for name in ('trajectory_val.parquet','trade_events_val.parquet','metrics_val.json')]
+    path_require(all(p.is_file() for p in paths), 'Missing saved VAL artifacts: '+str(directory))
+    before = [(p.stat().st_size, p.stat().st_mtime_ns) for p in paths]
+    metadata = json.loads(paths[2].read_text())
+    for key, value in (('run_id', row['run_id']), ('evaluation_id', row['id']),
+                       ('checkpoint_id', row['checkpoint_id']), ('data_scope', 'run_validation'),
+                       ('steps_completed', row['steps_completed'])):
+        path_require(metadata.get(key) == value, f'Artifact identity mismatch: {key}')
+    for metric in path_METRICS:
+        path_close(metadata['metrics'][metric], row[metric], 'artifact/DB '+metric)
+    frame, events = pd.read_parquet(paths[0]), pd.read_parquet(paths[1])
+    path_require(len(frame) == row['steps_completed'], 'Trajectory length mismatch')
+    detail, frame = path_temporal_summary(frame, events, row,
+        row['config']['environment'].get('force_close_on_done', False))
+    hashes = {str(p.relative_to(root)): path_sha(p) for p in paths}
+    path_require(before == [(p.stat().st_size, p.stat().st_mtime_ns) for p in paths],
+            'Artifacts changed while reading')
+    detail['files_sha256'] = hashes
+    return detail, frame
+
+
+def path_compare_positions(a, b):
+    path_require(a['timestamp'].equals(b['timestamp']) and
+            np.array_equal(a.execution_index, b.execution_index), 'Seed timelines differ')
+    path_require(np.allclose(a.always_long_equity, b.always_long_equity, atol=path_TOL, rtol=0),
+            'Seed benchmark trajectories differ')
+    result = dict(position_agreement=float((a.position == b.position).mean()),
+                  both_exposed=float(((a.position != 0) & (b.position != 0)).mean()),
+                  only_reference_exposed=float(((a.position != 0) & (b.position == 0)).mean()),
+                  only_replay_exposed=float(((a.position == 0) & (b.position != 0)).mean()))
+    for frequency, label in (('W-SUN','weekly'), ('MS','monthly')):
+        x = a.set_index('timestamp').agent_increment.resample(frequency).sum()
+        y = b.set_index('timestamp').agent_increment.resample(frequency).sum()
+        result[label+'_return_correlation'] = (float(x.corr(y))
+            if len(x) > 1 and x.std() > 0 and y.std() > 0 else None)
+    return result
+
+
+def path_chart(a, b):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True, layout='constrained')
+    for frame, label in ((a,'Reference seed'), (b,'Replay seed')):
+        axs[0].plot(frame.timestamp, frame.agent_equity*100, label=label, lw=1)
+        axs[1].plot(frame.timestamp, frame.dd*100, label=label, lw=1)
+        exposure = frame.set_index('timestamp').exposure.resample('W-SUN').mean()
+        axs[2].plot(exposure.index, exposure*100, label=label, lw=1)
+    axs[0].plot(a.timestamp, a.always_long_equity*100, label='Always long', color='gray', lw=1)
+    for ax, label in zip(axs, ('Cumulative return [% of stake]', 'Drawdown [pp of stake]', 'Weekly exposure [%]')):
+        ax.set_ylabel(label); ax.grid(alpha=.2); ax.legend(loc='best')
+    buffer = BytesIO(); fig.savefig(buffer, format='png', dpi=110); plt.close(fig)
+    return '<img alt="Return, drawdown and exposure by seed" src="data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode()+'">'
+
+
+def path_table(headers, rows):
+    def cell(v):
+        return html.escape('—' if v is None else f'{v:.5g}' if isinstance(v, float) else str(v))
+    return '<div class="scroll"><table><tr>'+''.join('<th>'+cell(h)+'</th>' for h in headers)+'</tr>'+''.join(
+        '<tr>'+''.join('<td>'+cell(v)+'</td>' for v in row)+'</tr>' for row in rows)+'</table></div>'
+
+
+def path_build_analysis(root, original, reference_ids, source_label='Current grid snapshot', source_hash=None):
+    """Compute diagnostics without writing files; usable by the grid CLI."""
+    root = Path(root).resolve()
+    comparison = original['seed_comparison']
+    path_require(comparison['readiness'] == 'PASS', 'Source comparison did not pass')
+    all_pairs = comparison['pairs']
+    pairs = []
+    for rid in dict.fromkeys(reference_ids):
+        matched = [p for p in all_pairs if p['reference']['id'] == rid]
+        path_require(len(matched) == 1, f'Expected one pair for reference #{rid}')
+        pairs.append(matched[0])
+    path_require(pairs, 'Select at least one matched pair')
+    names = {p['reference']['name'] for p in pairs}
+    chains = [c for c in comparison['chains'] if names & set(c['reference_run_names'])]
+    chain_names = {n for c in chains for side in ('reference','replay') for n in c[side+'_run_names']}
+    runs = {r['id']: r for p in all_pairs for side in ('reference','replay')
+            if (r := p[side])['name'] in chain_names}
+    path_require(len(runs) == len(chain_names), 'Missing path detail in source report')
+    print(f'Checking {len(runs)} run identities and final TRAIN/VAL metrics in a read-only snapshot...', flush=True)
+    database = path_read_snapshot(root, runs)
+    output = dict(version='1.1.0', created_at=datetime.now(timezone.utc).isoformat(),
+        source_report=source_label, source_sha256=source_hash,
+        base_seed=comparison['base_seed'], replay_seed=comparison['replay_seed'],
+        chain_runs=list(runs.values()), detailed_pairs=[],
+        notes=['Additive return on stake, not compounded account return.',
+               'UTC calendar weeks/months; first/last buckets can be partial.',
+               'Period drawdown column uses the full-period high-water mark, not a reset per bucket.',
+               'Removing top trade contributions is arithmetic attribution, not a retrained strategy.',
+               'Both seeds and these candidates were selected using known validation outcomes.'])
+    parts = ['<!doctype html><html lang="en"><meta charset="utf-8"><title>Seed path diagnostics</title>',
+        '<style>body{font:15px system-ui;max-width:1250px;margin:30px auto;padding:20px}table{border-collapse:collapse}th,td{padding:8px;border-bottom:1px solid #ccc;white-space:nowrap}.scroll{overflow:auto}img{width:100%}section{margin:30px 0}summary{cursor:pointer}</style>',
+        '<h1>Seed path diagnostics</h1>', '<p>'+html.escape(' '.join(output['notes']))+'</p>']
+    for chain in chains:
+        selected = [r for r in runs.values() if r['name'] in chain_names and
+                    r['name'] in chain['reference_run_names']+chain['replay_run_names']]
+        parts += ['<section><h2>'+html.escape(chain['reference_root'])+'</h2>',
+            path_table(['Seed','Stage','ID','TRAIN return %','VAL return %','VAL DD %','VAL score','Exposure %','Trips'],
+                [[r['seed'],r['stage'],r['id'],100*r['TRAIN']['agent_return'],100*r['VAL']['agent_return'],
+                  100*r['VAL']['agent_max_drawdown'],r['VAL']['balanced_score'],100*r['VAL']['market_exposure'],r['VAL']['round_trips']]
+                 for r in sorted(selected, key=lambda r:(r['stage'],r['seed']))]), '</section>']
+    for pair in pairs:
+        details, frames = {}, {}
+        for side in ('reference','replay'):
+            run = pair[side]
+            print(f"Reading VAL artifacts: #{run['id']} {run['name']}", flush=True)
+            details[side], frames[side] = path_read_artifacts(root, database[run['id']])
+        position = path_compare_positions(frames['reference'], frames['replay'])
+        output['detailed_pairs'].append(dict(reference=pair['reference'], replay=pair['replay'],
+                                             position_comparison=position, details=details))
+        parts += ['<section><h2>'+html.escape(pair['reference']['name'])+'</h2>',
+                  path_chart(frames['reference'], frames['replay']),
+                  path_table(['Behavior comparison','Value'], list(position.items()))]
+        for side in ('reference','replay'):
+            d = details[side]
+            parts += ['<h3>'+side.title()+'</h3>',
+                '<p>Raw return/cost values below are fractions of stake (0.01 = 1 pp). Correlations and shares are unitless.</p>',
+                path_table(['Attribution','Value'],list(d['attribution'].items())),
+                path_table(['Drawdown','Value'],list(d['drawdown'].items())),
+                path_table(['Costs / trade summary','Value'],list(d['costs'].items())+
+                      [(k,v) for k,v in d['trade_summary'].items() if k != 'concentration']),
+                path_table(['Top winning trades','Contribution [pp]','Share of positive trade PnL','Total minus contribution [pp]'],
+                      [[x['top_winning_trades'],100*x['contribution'],x['share_of_positive_trade_pnl'],100*x['total_minus_contribution']]
+                       for x in d['trade_summary']['concentration']])]
+            for label in ('monthly','weekly'):
+                parts += ['<details><summary>'+label.title()+'</summary>',
+                    path_table(['Start UTC','End UTC','Bars','Return [pp]','Long [pp]','Exposure %','Fees [pp]','Swaps [pp]'],
+                    [[x['start'],x['end'],x['bars'],100*x['agent_return'],100*x['always_long_return'],
+                      100*x['exposure'],100*x['fees'],100*x['swaps']] for x in d['periods'][label]]), '</details>']
+        parts.append('</section>')
+    parts.append('</html>')
+    return output, '\n'.join(parts)
+
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    scope=parser.add_mutually_exclusive_group(required=True)
+    scope=parser.add_mutually_exclusive_group()
     scope.add_argument('--all-runs',action='store_true',help='Inventory every DB run; analyze eligible stage-one runs')
     scope.add_argument('--queue',action='append',help='Queue name/path; may be repeated to combine queues')
     parser.add_argument('--output-dir',type=Path,default=Path('artifacts/queue_analysis'))
@@ -1038,7 +1423,55 @@ def main():
                         help='Expected replay queue name/path; repeat for multiple queues')
     parser.add_argument('--selection-report', type=Path,
                         help='Optional previous JSON report to freeze the original candidate names')
+    parser.add_argument('--detail-run-id', action='append', type=int, default=[],
+                        help='Reference-seed run ID for detailed VAL diagnostics; repeat per pair')
+    parser.add_argument('--details-config', type=Path,
+                        help='JSON object with reference_run_ids; convenient reusable local selection')
+    parser.add_argument('--detail-all-matched', action='store_true',
+                        help='Read VAL artifacts for every matched pair (can be expensive)')
+    parser.add_argument('--mode', choices=('auto','full','grid','paths'), default='auto',
+                        help='full: grid plus selected path diagnostics; grid: no trajectory reads; paths: existing report only')
+    parser.add_argument('--report', type=Path, help='Source grid JSON for --mode paths')
     args=parser.parse_args()
+    detail_ids = list(args.detail_run_id)
+    if args.details_config:
+        detail_ids += load_detail_ids(args.details_config)
+    if args.mode == 'paths':
+        if not args.report or args.all_runs or args.queue or args.compare_seeds or args.comparison_queue or args.selection_report or args.clean_old_reports:
+            raise ValueError('Paths mode requires --report and cannot use grid scope/comparison/cleanup options')
+        source_path = args.report.expanduser().resolve()
+        source = json.loads(source_path.read_text())
+        if args.detail_all_matched:
+            detail_ids += [p['reference']['id'] for p in source['seed_comparison']['pairs']]
+        if not detail_ids:
+            raise ValueError('Select paths using --detail-run-id, --details-config or --detail-all-matched')
+        root = Path.cwd().resolve()
+        if not (root/'run_search_queue.py').is_file():
+            raise ValueError('Run from PPO_AGENT repository root')
+        details, detail_html = path_build_analysis(root, source, detail_ids, str(source_path), path_sha(source_path))
+        shell = '<!doctype html><html lang="en"><meta charset="utf-8"><title>Path diagnostics</title><h1>Path diagnostics</h1><p>Source: '+esc(str(source_path))+'</p></html>'
+        rendered = tabbed_report(shell, details, detail_html)
+        parent=args.output_dir.expanduser()
+        if not parent.is_absolute():parent=root/parent
+        if parent.is_symlink():raise ValueError('Output directory must not be a symlink')
+        out=parent/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+        out.mkdir(parents=True,exist_ok=False)
+        (out/'report.json').write_text(json.dumps(dict(metadata=dict(version=VERSION,mode='paths'),path_diagnostics=details),indent=2,allow_nan=False)+'\n')
+        (out/'report.html').write_text(rendered)
+        print('PASS: selected paths reconciled. HTML:',out/'report.html')
+        print('JSON:',out/'report.json')
+        print('Database and source artifacts only read; only new reports written.')
+        return
+    if args.report:
+        raise ValueError('--report is only valid with --mode paths')
+    if not (args.all_runs or args.queue):
+        raise ValueError('Grid/full mode requires --all-runs or --queue')
+    if args.mode == 'grid' and (detail_ids or args.detail_all_matched):
+        raise ValueError('Grid mode excludes trajectory diagnostics; use full mode')
+    if args.mode == 'full' and not (detail_ids or args.detail_all_matched):
+        raise ValueError('Full mode requires a detailed pair selection')
+    if (detail_ids or args.detail_all_matched) and not args.compare_seeds:
+        raise ValueError('Detailed diagnostics require --compare-seeds')
     if args.compare_seeds and args.compare_seeds[0] == args.compare_seeds[1]:
         raise ValueError('Comparison requires two different seeds')
     if (args.comparison_queue or args.selection_report) and not args.compare_seeds:
@@ -1137,6 +1570,21 @@ def main():
     legacy=legacy.replace('<section><h2>All eligible runs</h2>','</details><section><h2>All eligible runs</h2>',1)
     legacy=legacy.replace('All comparisons stay within a cohort and n_epochs.',
         'Primary rankings pool epochs within a cohort. Supplementary matched comparisons are separated by n_epochs.')
+    exported = compact_export(report)
+    diagnostics = None
+    detail_html = None
+    if args.detail_all_matched:
+        detail_ids += [p['reference']['id'] for p in report['seed_comparison']['pairs']]
+    detail_ids = list(dict.fromkeys(detail_ids))
+    if detail_ids:
+        diagnostics, detail_html = path_build_analysis(root, exported, detail_ids,
+            source_label='Integrated grid report; '+str(stamp))
+        exported['path_diagnostics'] = diagnostics
+        print(f'Detailed diagnostics: {len(diagnostics["chain_runs"])} path runs; '
+              f'{len(diagnostics["detailed_pairs"])} stage pairs; PASS', flush=True)
+    else:
+        exported['path_diagnostics'] = None
+    legacy = tabbed_report(legacy, diagnostics, detail_html)
     parent=args.output_dir.expanduser()
     if not parent.is_absolute():parent=root/parent
     if parent.is_symlink():raise ValueError('Output directory must not be a symlink')
@@ -1146,7 +1594,7 @@ def main():
     parent.mkdir(parents=True,exist_ok=True)
     out=parent/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     out.mkdir()
-    for filename,content in [('report.json',json.dumps(compact_export(report),default=serial,indent=2,allow_nan=False)+'\n'),('report.html',legacy)]:
+    for filename,content in [('report.json',json.dumps(exported,default=serial,indent=2,allow_nan=False)+'\n'),('report.html',legacy)]:
         with (out/filename).open('x',encoding='utf-8') as f:
             f.write(content);f.flush();os.fsync(f.fileno())
     print(f'Inventoried: {selected}; eligible: {len(rows)}; issues: {len(issues)}')

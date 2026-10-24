@@ -15,7 +15,7 @@ import sys
 import uuid
 
 
-def main():
+def _main_before_name_migration_guard():
     parser=argparse.ArgumentParser(description=__doc__,epilog='Pass queue options such as --queue NAME --select 1-10. --dry-run never changes hardware.')
     parser.add_argument('--max-mhz',type=int,default=5000)
     parser.add_argument('--dry-run',action='store_true')
@@ -79,6 +79,12 @@ def main():
                         process.wait()
     print(f'Hardware session: {directory}',flush=True)
     return code
+
+
+def main(*args, **kwargs):
+    from extra_tools.maintenance.maintenance_guard import activity_guard
+    with activity_guard(Path(__file__).resolve().parent):
+        return _main_before_name_migration_guard(*args, **kwargs)
 
 
 if __name__=='__main__':

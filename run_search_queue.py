@@ -1261,7 +1261,7 @@ def handle_incomplete_run(config, run_id):
         engine.dispose()
 
 
-def main() -> int:
+def _main_before_name_migration_guard() -> int:
     args = parse_args()
 
     config_paths = load_queue_config_paths(args.queue)
@@ -1390,6 +1390,12 @@ def main() -> int:
     )
 
     return 1 if failed else 0
+
+
+def main(*args, **kwargs):
+    from extra_tools.maintenance.maintenance_guard import activity_guard
+    with activity_guard(Path(__file__).resolve().parent):
+        return _main_before_name_migration_guard(*args, **kwargs)
 
 
 if __name__ == "__main__":

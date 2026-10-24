@@ -18,17 +18,47 @@ def digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-LR_DECIMAL_PLACES = 9
+NAME_FORMAT = 'lr-stage-gae-ent-gamma-arch-ne-seed-scientific6-v1'
+AUDIT_VERSION = 3
 
 
-def learning_rate_token(value) -> str:
-    rate = Decimal(str(value))
-    if not rate.is_finite() or not 0 < rate < 1:
-        raise ValueError(f"LR must be finite and between 0 and 1: {value}")
-    rendered = format(rate, f'.{LR_DECIMAL_PLACES}f')
-    if Decimal(rendered) != rate:
-        raise ValueError(f"LR requires more than {LR_DECIMAL_PLACES} decimal places: {value}")
-    return rendered.replace('.', 'p')
+def scientific_token(value):
+    number = Decimal(str(value))
+    if not number.is_finite() or number < 0:
+        raise ValueError(f'Expected finite nonnegative value: {value}')
+    if number == 0:
+        return '0p00000ep0'
+    exponent = number.adjusted()
+    if abs(exponent) > 9:
+        raise ValueError(f'Exponent outside fixed-width format: {value}')
+    mantissa = number.scaleb(-exponent)
+    rendered = format(mantissa, '.5f')
+    if Decimal(rendered).scaleb(exponent) != number:
+        raise ValueError(f'More than six significant digits: {value}')
+    return rendered.replace('.', 'p') + ('em' if exponent < 0 else 'ep') + str(abs(exponent))
+
+
+def two_digits(value, label, minimum=0):
+    if isinstance(value, bool) or int(value) != value or not minimum <= value <= 99:
+        raise ValueError(f'{label} outside fixed-width format: {value}')
+    return f'{int(value):02d}'
+
+
+def file_digest(path):
+    h = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def historical_reference(rel):
+    # Immutable snapshots: deliberately retain the names used at creation time.
+    return any(rel.startswith(prefix) for prefix in (
+        'artifacts/queue_analysis/', 'artifacts/search_queues/',
+        'artifacts/verification/', 'artifacts/cpu_replay_reports/',
+        'artifacts/seed_path_analysis/', 'artifacts/hardware_sessions/',
+    ))
 
 
 def proposed_names(configs: dict) -> dict:
@@ -56,7 +86,7 @@ def proposed_names(configs: dict) -> dict:
             for field in ('seed',):
                 if c['run'][field] != configs[source]['run'][field]:
                     raise ValueError(f"Different {field}: {old} <- {source}")
-            for field in ('hidden_sizes', 'learning_rate', 'gamma', 'n_epochs'):
+            for field in ('hidden_sizes', 'learning_rate', 'gamma', 'n_epochs', 'ent_coef', 'gae_lambda'):
                 if c['ppo'][field] != configs[source]['ppo'][field]:
                     raise ValueError(f"Different {field}: {old} <- {source}")
         else:
@@ -64,13 +94,18 @@ def proposed_names(configs: dict) -> dict:
         widths = c['ppo']['hidden_sizes']
         if not widths or len(set(widths)) != 1:
             raise ValueError(f"Non-uniform hidden layers: {old}")
-        gamma = Decimal(str(c['ppo']['gamma'])) * 100
-        if gamma != gamma.to_integral_value():
-            raise ValueError(f"Gamma cannot be represented by gNNN: {old}")
-        learning_rate = learning_rate_token(c['ppo']['learning_rate'])
+        ppo = c['ppo']
+        seed = two_digits(c['run']['seed'], 'seed')
+        epochs = two_digits(ppo['n_epochs'], 'n_epochs', 1)
+        stage = two_digits(phase, 'stage')
+        if not 0 < Decimal(str(ppo['learning_rate'])) < 1:
+            raise ValueError(f'Invalid LR: {old}')
         prefix = 'f' if mode == 'fresh' else 'r'
-        name = (f"{prefix}_v{phase}_w{widths[0]}x{len(widths)}_g{int(gamma):03d}"
-                f"_lr{learning_rate}_s{c['run']['seed']}_ne{c['ppo']['n_epochs']}")
+        name = (f"lr{scientific_token(ppo['learning_rate'])}_{prefix}_v{stage}"
+                f"_gae{scientific_token(ppo['gae_lambda'])}"
+                f"_ent{scientific_token(ppo['ent_coef'])}"
+                f"_g{scientific_token(ppo['gamma'])}"
+                f"_w{widths[0]}x{len(widths)}_ne{epochs}_s{seed}")
         result[old] = {'new_name': name, 'phase': phase}
         visiting.remove(old)
         return result[old]
@@ -178,14 +213,16 @@ def main():
         rel=Path(cp['relative_path'])
         if rel.is_absolute() or '..' in rel.parts:
             checkpoint_problems.append({'id':cp['id'],'problem':'unsafe relative_path'});continue
-        path=root/rel
+        from extra_tools.maintenance.rename_runs import safe
+        path=safe(root, rel)
         if not path.is_file():checkpoint_problems.append({'id':cp['id'],'problem':'missing'})
         elif path.stat().st_size != cp['size_bytes']:checkpoint_problems.append({'id':cp['id'],'problem':'size mismatch'})
+        elif file_digest(path) != cp['sha256']:checkpoint_problems.append({'id':cp['id'],'problem':'SHA256 mismatch'})
     if checkpoint_problems:errors.append(f'{len(checkpoint_problems)} checkpoint path/size problems')
     pattern=re.compile('|'.join(re.escape(k) for k in sorted(names,key=len,reverse=True)))
     for dirname in ['artifacts','configs','extra_tools']:
         for path in sorted((root/dirname).rglob('*')):
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {'.json','.yaml','.yml','.csv','.html','.txt','.md'}:
+            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {'.json','.yaml','.yml','.csv','.html','.txt','.md','.jsonl'}:
                 continue
             rel=path.relative_to(root).as_posix()
             if rel.startswith('extra_tools/maintenance/run_rename/'):
@@ -197,9 +234,9 @@ def main():
             except UnicodeDecodeError:
                 metadata_files.append({'path':rel,'scan':'not_utf8'});continue
             hits=sorted(set(pattern.findall(content)))
-            if hits:metadata_files.append({'path':rel,'sha256':digest(raw),'run_name_matches':hits})
+            if hits:metadata_files.append({'path':rel,'sha256':digest(raw),'run_name_matches':hits,'historical':historical_reference(rel)})
     git=subprocess.run(['git','-C',str(root),'rev-parse','HEAD'],capture_output=True,text=True)
-    report={'audit_version':2,'lr_decimal_places':LR_DECIMAL_PLACES,'created_at':datetime.now(timezone.utc).isoformat(),'project':str(root),
+    report={'audit_version':AUDIT_VERSION,'name_format':NAME_FORMAT,'created_at':datetime.now(timezone.utc).isoformat(),'project':str(root),
             'git_commit':git.stdout.strip() if git.returncode==0 else None,'database':database,
             'counts':{'configs':len(configs),'runs':len(records),'checkpoints':len(checkpoints),
                       'evaluations':len(evaluations),'studies':len(studies),'cycles':len(cycles)},
@@ -207,7 +244,7 @@ def main():
             'mapping':mapping,'outside_runs':outside,'errors':errors,'checkpoint_problems':checkpoint_problems,
             'metadata_references':metadata_files,
             'notes':['Database transaction was read-only; no configs or artifacts changed.',
-                     'Checkpoint existence and byte sizes checked; contents were not rehashed.',
+                     'Checkpoint existence, byte sizes and actual SHA256 checked.',
                      'Text references are inventory candidates, not an automatic replacement plan.',
                      'Training must remain stopped for migration; this audit does not lock future writers.']}
     target = (args.output.expanduser().resolve() if args.output else

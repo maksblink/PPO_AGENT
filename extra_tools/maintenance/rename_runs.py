@@ -125,9 +125,9 @@ def build_plan(connection, root, audit):
     from train_and_eval.database.models import Checkpoint, Evaluation, WalkForwardStudy, WalkForwardCycle
     from train_and_eval.run_config import RunConfig, normalize_config
     import yaml
-    from extra_tools.maintenance.audit_run_names import proposed_names, LR_DECIMAL_PLACES
-    if audit.get('audit_version') != 2 or audit.get('lr_decimal_places') != LR_DECIMAL_PLACES or audit.get('errors'):
-        raise ValueError('A successful version-2 fixed-LR audit is required')
+    from extra_tools.maintenance.audit_run_names import proposed_names, AUDIT_VERSION, NAME_FORMAT, file_digest, historical_reference
+    if audit.get('audit_version') != AUDIT_VERSION or audit.get('name_format') != NAME_FORMAT or audit.get('errors'):
+        raise ValueError('A successful scientific-name version-3 audit is required')
     entries = audit['mapping']
     old_names = [e['old_name'] for e in entries]
     new_names = [e['new_name'] for e in entries]
@@ -175,7 +175,7 @@ def build_plan(connection, root, audit):
         cfg = disk_configs[e['old_name']]
         source = cfg['continuation'].get('source_run')
         if e['new_name'] != expected_names[e['old_name']]['new_name'] or e['old_source_run'] != source:
-            raise ValueError('Audit mapping does not match the fixed-LR template')
+            raise ValueError('Audit mapping does not match the scientific-name template')
         if e['run_id'] is None:
             continue
         r = rows[e['run_id']]
@@ -246,16 +246,19 @@ def build_plan(connection, root, audit):
             change(rel, raw if e['old_name'] == e['new_name'] else dump(obj))
     for ref in audit['metadata_references']:
         rel = ref['path']
+        if historical_reference(rel):
+            continue
         if ref.get('scan') or rel not in files:
             raise ValueError(f'Unresolved audit reference: {rel}')
         if sha(safe(root, rel).read_text(encoding='utf-8')) != ref['sha256']:
             raise ValueError(f'Referenced file changed since audit: {rel}')
     for cp in cps.values():
         path = safe(root, cp['relative_path'])
-        if not path.is_file() or path.stat().st_size != cp['size_bytes']:
-            raise ValueError(f'Checkpoint missing or wrong size: {cp["id"]}')
+        if not path.is_file() or path.stat().st_size != cp['size_bytes'] or file_digest(path) != cp['sha256']:
+            raise ValueError(f'Checkpoint missing, wrong size or SHA256: {cp["id"]}')
     return {'file_only': not any(r['before'] != r['after'] for r in db), 'runs': db, 'files': list(files.values()), 'mapping': entries,
-            'checkpoint_sha256': {str(k):v['sha256'] for k,v in cps.items()}}
+            'checkpoint_sha256': {str(k):v['sha256'] for k,v in cps.items()},
+            'checkpoint_files': [{'path': v['relative_path'], 'sha256': v['sha256']} for v in cps.values()]}
 
 
 def check_files(root, plan, allow_after=False):
@@ -299,11 +302,18 @@ def apply_database(connection, plan):
         raise ValueError('Database verification failed')
 
 
+def verify_checkpoints(root, plan):
+    from extra_tools.maintenance.audit_run_names import file_digest
+    for item in plan.get('checkpoint_files', []):
+        if file_digest(safe(root, item['path'])) != item['sha256']:
+            raise ValueError(f"Checkpoint bytes changed: {item['path']}")
+
+
 def pending_path(root):
     return safe(root, HISTORY+'/pending.json')
 
 
-def recover(engine, root):
+def _recover(engine, root):
     pending = pending_path(root)
     if not pending.exists():
         print('No pending rename.'); return
@@ -318,14 +328,16 @@ def recover(engine, root):
         if project_identity(c, engine, root) != plan['identity']:
             raise ValueError('Journal belongs to a different project/database')
         side = db_side(c, plan)
+        verify_checkpoints(root, plan)
         finish_files(root, plan, side)
+        verify_checkpoints(root, plan)
         write_atomic(journal.parent/'result.json', dump({'status': 'completed' if side=='after' else 'rolled_back',
                                                        'recovered_at': datetime.now(timezone.utc).isoformat()}))
         write_atomic(pending, None)
     print(f'Recovery finished: {side}. History: {journal.parent}')
 
 
-def migrate(engine, root, audit, apply=False, confirm=input):
+def _migrate(engine, root, audit, apply=False, confirm=input):
     if pending_path(root).exists():
         raise ValueError('Pending migration: run --recover before any training or cleanup')
     if safe(root,'artifacts/.cleanup_pending.json').exists():
@@ -366,7 +378,21 @@ def migrate(engine, root, audit, apply=False, confirm=input):
         # Database commits first; persistent journal makes the filesystem step recoverable.
         if not plan['file_only']:
             apply_database(c, plan)
-    recover(engine, root)
+    _recover(engine, root)
+
+
+def migrate(engine, root, audit, apply=False, confirm=input):
+    from extra_tools.maintenance.maintenance_guard import maintenance_guard, activity_guard
+    with maintenance_guard(root, exclude_managed=True), activity_guard(root, exclusive=True):
+        return _migrate(engine, root, audit, apply, confirm)
+
+
+def recover(engine, root):
+    from extra_tools.maintenance.maintenance_guard import maintenance_guard, activity_guard
+    with maintenance_guard(root, exclude_managed=True), activity_guard(root, exclusive=True):
+        if safe(root, 'artifacts/.cleanup_pending.json').exists():
+            raise ValueError('Pending cleanup conflicts with rename recovery')
+        return _recover(engine, root)
 
 
 def main():

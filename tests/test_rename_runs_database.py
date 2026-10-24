@@ -11,7 +11,7 @@ from tests.test_clean_training import cleanup_database
 from train_and_eval.database.models import Run, Checkpoint, TrainingMetric
 from train_and_eval.run_config import RunConfig, normalize_config
 from extra_tools.maintenance import rename_runs as tool
-from extra_tools.maintenance.audit_run_names import proposed_names
+from extra_tools.maintenance.audit_run_names import proposed_names, NAME_FORMAT
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def case(cleanup_database, tmp_path):
                 training_steps_completed=10,data_epochs_completed=1,status='completed',started_at=now,finished_at=now)
             s.add(r);s.flush()
             cp=Checkpoint(run_id=r.id,run_step=10,model_step=(index+1)*10,save_reason='final',
-                          relative_path=f'artifacts/runs/{r.id:08d}/checkpoints/model.zip',sha256='c'*64,size_bytes=7)
+                          relative_path=f'artifacts/runs/{r.id:08d}/checkpoints/model.zip',sha256=tool.sha('weights'),size_bytes=7)
             s.add(cp);s.flush();cpid=cp.id
             s.add(TrainingMetric(run_id=r.id,run_step=1,model_step=1,rollout_number=1))
             p=tmp_path/cp.relative_path;p.parent.mkdir(parents=True);p.write_text('weights')
@@ -53,7 +53,7 @@ def case(cleanup_database, tmp_path):
     for e in entries:
         e['new_name'] = names[e['old_name']]['new_name']
         e['new_config_path'] = str(Path(e['old_config_path']).with_name(e['new_name']+'.yml'))
-    audit={'audit_version':2,'lr_decimal_places':9,'errors':[],'mapping':entries,'counts':{'checkpoints':2,'evaluations':0},'metadata_references':refs}
+    audit={'audit_version':3,'name_format':NAME_FORMAT,'errors':[],'mapping':entries,'counts':{'checkpoints':2,'evaluations':0},'metadata_references':refs}
     return engine,tmp_path,audit
 
 

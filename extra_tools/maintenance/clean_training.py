@@ -295,7 +295,7 @@ def finish_pending(connection, root, identity):
     print('Pending cleanup recovered: ' + ('artifacts restored (database rollback).' if existing else 'artifact deletion completed.'))
 
 
-def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm=input, validate_plan=None):
+def _cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm=input, validate_plan=None):
     root = Path(root).resolve()
     # Identity contains no credentials; it also distinguishes test schemas.
     with engine.connect() as connection:
@@ -343,6 +343,15 @@ def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm
     print('Cleanup completed. Market data, configs and migrations were preserved.')
     print('Experiment ID sequences restarted at 1.' if mode == 'clean-all' else 'ID sequences were preserved.')
     return True
+
+
+def cleanup(engine, root, mode, run_ids=(), study_ids=(), dry_run=False, confirm=input, validate_plan=None):
+    from extra_tools.maintenance.maintenance_guard import maintenance_guard
+    root = Path(root).resolve()
+    with maintenance_guard(root):
+        if (root / 'extra_tools/maintenance/run_rename/pending.json').exists():
+            raise ValueError('Pending rename: run rename_runs.py --recover before cleanup')
+        return _cleanup(engine, root, mode, run_ids, study_ids, dry_run, confirm, validate_plan)
 
 
 def main():

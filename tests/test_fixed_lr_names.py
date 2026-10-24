@@ -6,25 +6,25 @@ from pathlib import Path
 import pytest
 import yaml
 
-from extra_tools.maintenance.audit_run_names import learning_rate_token, proposed_names
+from extra_tools.maintenance.audit_run_names import scientific_token, proposed_names
 from extra_tools.maintenance.rename_runs import rename_config, sha
 from train_and_eval.run_config import RunConfig, normalize_config
 
 
 @pytest.mark.parametrize('rate,token', [
-    (0.00035, '0p000350000'), (0.000025, '0p000025000'),
-    (0.000015, '0p000015000'), (0.00005, '0p000050000'),
-    ('0.000000001', '0p000000001'), ('0.000950000', '0p000950000'),
+    (0.00035, '3p50000em4'), (0.000025, '2p50000em5'),
+    (0.000015, '1p50000em5'), (0.00005, '5p00000em5'),
+    ('0.000000001', '1p00000em9'), ('0', '0p00000ep0'),
 ])
 def test_exact_fixed_width(rate, token):
-    assert learning_rate_token(rate) == token
-    assert len(token) == 11
+    assert scientific_token(rate) == token
+    assert len(token) == 10
 
 
-@pytest.mark.parametrize('rate', ['0.0000000001', '0.0000150001', 'NaN', 'Infinity', '0', '-0.1', '1'])
+@pytest.mark.parametrize('rate', ['0.0000000001', '0.00001500001', 'NaN', 'Infinity', '-0.1'])
 def test_no_rounding_or_invalid_lr(rate):
     with pytest.raises(ValueError):
-        learning_rate_token(rate)
+        scientific_token(rate)
 
 
 def chain():
@@ -45,8 +45,8 @@ def chain():
 def test_parent_child_names_and_raw_yaml_hashes():
     configs = chain()
     names = {old: value['new_name'] for old, value in proposed_names(configs).items()}
-    assert names == {'fresh': 'f_v0_w384x3_g090_lr0p000025000_s1_ne3',
-                     'resume': 'r_v1_w384x3_g090_lr0p000025000_s1_ne3'}
+    assert names == {'fresh': 'lr2p50000em5_f_v00_gae8p50000em1_ent2p00000em4_g9p00000em1_w384x3_ne03_s01',
+                     'resume': 'lr2p50000em5_r_v01_gae8p50000em1_ent2p00000em4_g9p00000em1_w384x3_ne03_s01'}
     raw = yaml.safe_dump(configs['resume'], sort_keys=False).replace('2.5e-05', '0.000025') + '# preserve comment\n'
     renamed, norm, digest = rename_config(raw, names)
     assert 'learning_rate: 0.000025' in renamed

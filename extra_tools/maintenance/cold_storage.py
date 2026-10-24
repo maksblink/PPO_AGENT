@@ -7,7 +7,7 @@ pointer to a verified generation. Never train in, or edit, backup generations. P
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -222,7 +222,7 @@ def clean_git(root):
 
 def no_workers(root):
     """Refuse local project workers even before their first database insert."""
-    patterns = ('run_search_queue.py', 'train_and_eval.training', 'train_and_eval.walk_forward',
+    patterns = ('run_managed_queue.py', 'run_search_queue.py', 'train_and_eval.queue_execution', 'train_and_eval.training', 'train_and_eval.walk_forward',
                 'train_and_eval.evaluation', 'clean_training.py', 'rename_runs.py')
     for proc in Path('/proc').iterdir():
         if not proc.name.isdigit() or int(proc.name) == os.getpid():
@@ -238,6 +238,41 @@ def no_workers(root):
         raise BackupError('Finish pending run-name migration before backup.')
     if (root / 'artifacts/.cleanup_pending.json').exists():
         raise BackupError('Finish pending training cleanup before backup.')
+
+
+@contextmanager
+def project_operation_guard(root, mode):
+    """Exclude queues and maintenance for live captures/database restoration.
+
+    Load guards from the selected project, not RESTORE.py's own directory.
+    restore-files and offline object verification remain standalone operations.
+    """
+    if mode not in {'scan', 'sync', 'restore-database'}:
+        yield
+        return
+    import importlib.util
+    root = Path(root).resolve()
+    relative = Path('extra_tools/maintenance/maintenance_guard.py')
+    current = root
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise BackupError(f'Maintenance guard path is a symlink: {current}')
+    if not current.is_file():
+        raise BackupError('Project maintenance_guard.py is missing. Install the maintenance tools before capture or database restoration.')
+    spec = importlib.util.spec_from_file_location('_cold_storage_project_guard', current)
+    guards = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guards)
+    # Same acquisition order as rename: maintenance, hardware, queue activity.
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(guards.maintenance_guard(root, exclude_managed=True))
+            stack.enter_context(guards.activity_guard(root, exclusive=True))
+        except (RuntimeError, OSError, ValueError) as exc:
+            raise BackupError(f'Backup/restore cannot acquire project locks: {exc}') from exc
+        # Check journals and legacy/direct workers after acquiring locks.
+        no_workers(root)
+        yield
 
 
 @contextmanager
@@ -936,7 +971,7 @@ def _main(argv=None):
                 restore_files(store, args.target.resolve())
             return 0
         root = args.project.resolve()
-        with local_state(root) as (local, project_id):
+        with project_operation_guard(root, args.mode), local_state(root) as (local, project_id):
             if PROGRESS is not None:
                 PROGRESS.summary_path = local / "last_operation_summary.json"
             if args.mode == 'disks':

@@ -48,14 +48,5 @@ train_and_eval/market_data/manifest.json.tmp
 /CONCLUSIONS_NE3_FULL_GRID.md
 /CONCLUSIONS_NE3_540_RUNS.md
 
-
-# Private seed2 configs and queues
-/configs/stage_one/grid1/s2/
-/configs/search_queues/grid1/s2/
-
-# Private seed1_low_LR_big_arch configs and queues
-/configs/stage_one/grid2/s1/
-/configs/search_queues/grid2/s1/
-
 # Local experiment configurations and queues
 /configs/

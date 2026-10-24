@@ -291,7 +291,7 @@ def test_sync_twice_and_scan_compare_semantics(offline_snapshot, tmp_path):
             backup.snapshot(project, local, pid, store)
             second, new = backup.current(store)
             assert second != first
-            backup.verify_generation(first, old)
+            assert not first.exists()
             backup.verify_generation(second, new)
             assert old['files']['code.py']['sha256'] == new['files']['code.py']['sha256']
             assert not (first / 'project').exists() and not (second / 'project').exists()

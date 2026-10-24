@@ -2,7 +2,8 @@
 """Complete Linux project backup. Run --help; no Git ignore rules filter payloads.
 
 The destination is managed exclusively by this program. CURRENT is an atomic
-pointer to a verified generation. Never train in, or edit, backup generations. Payloads are SHA-256 objects; Linux metadata live in manifests.
+pointer to a verified generation. Successful sync keeps only that generation.
+Never train in, or edit, backup generations. Payloads are SHA-256 objects; Linux metadata live in manifests.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ import uuid
 
 STATE = '.cold_storage'
 FORMAT = 2
+CLEANUP_MARKER = 'cleanup_pending.json'
 ACTIVE_TABLES = ('runs', 'evaluations', 'walk_forward_studies', 'walk_forward_cycles')
 
 
@@ -719,7 +721,7 @@ def publish(store, pending, doc):
     gen = store / name
     os.rename(pending, gen)
     fsync_dir(store)
-    # Previous generations are never deleted automatically.
+    # Publish first. Only a verified CURRENT may authorize old-content cleanup.
     atomic_json(store / 'CURRENT', {'generation': name, 'manifest_sha256': digest(gen / 'manifest.json')})
     return gen
 
@@ -727,6 +729,9 @@ def publish(store, pending, doc):
 def snapshot(root, local, project_id, store=None):
     no_workers(root)
     old_gen, old = current(store)
+    if old and ((store / CLEANUP_MARKER).exists() or (store / CLEANUP_MARKER).is_symlink()):
+        print('Finishing interrupted latest-only cleanup...', flush=True)
+        prune(store, confirm=False)
     if old:
         print('Verifying previous backup objects (SHA-256)...', flush=True)
         verify_generation(old_gen, old)
@@ -755,7 +760,9 @@ def snapshot(root, local, project_id, store=None):
                 raise BackupError(f'Not enough free backup space: need at least {required / 1024**3:.2f} GiB.')
             report(delta)
             print(f'New file content bytes: {needed:,}; existing content is reused without hardlinks.')
-            if input('Type YES to create a new complete backup generation: ').strip() != 'YES':
+            print('Retention: keep only the latest verified backup. Older generations and unreferenced content will be deleted inside this backup folder only.')
+            print('Managed backup folder:', store)
+            if input('Type YES to create and verify the backup, then remove older versions: ').strip() != 'YES':
                 raise BackupError('Cancelled; previous backup unchanged.')
         # Dumps use local Linux storage, never permissions/xattrs on exFAT.
         local_pending = Path(tempfile.mkdtemp(prefix='.incomplete-', dir=local))
@@ -787,10 +794,17 @@ def snapshot(root, local, project_id, store=None):
                 raise BackupError('Source changed during backup. Stop writers and retry; previous backup is intact.')
             if store:
                 atomic_bytes(store / 'RESTORE.py', Path(__file__).read_bytes())
+                atomic_json(store / CLEANUP_MARKER, {'format': FORMAT, 'project_id': project_id, 'policy': 'latest-only'})
                 gen = publish(store, pending, doc)
                 atomic_json(local / 'manifest.json', doc)
                 atomic_json(local / 'last_destination.json', {'path': str(store), 'generation': gen.name})
-                print(f'Backup committed and verified: {gen}\nLocal manifest: {local / "manifest.json"}\nDisk manifest: {gen / "manifest.json"}\nPrevious manifests retained; prune removes unreferenced content.')
+                atomic_json(local / 'identity.json', {'format': FORMAT, 'project_id': project_id})
+                print(f'Backup committed and verified: {gen}', flush=True)
+                try:
+                    prune(store, confirm=False)
+                except (Exception, KeyboardInterrupt) as exc:
+                    raise BackupError('The latest backup is committed; cleanup is incomplete. Run sync or prune again to finish. No training data was deleted.') from exc
+                print(f'Latest-only backup complete: {gen}\nLocal manifest: {local / "manifest.json"}\nDisk manifest: {gen / "manifest.json"}')
             else:
                 atomic_json(local_pending / 'manifest.json', doc)
                 capture = local / ('capture-' + uuid.uuid4().hex)
@@ -881,11 +895,16 @@ def restore_database(root, local):
         engine.dispose()
 
 
-def prune(store):
+def prune(store, *, confirm=True):
     gen, doc = current(store)
     if not gen:
         raise BackupError('No current backup; refusing to prune.')
     verify_generation(gen, doc)
+    marker = store / CLEANUP_MARKER
+    if marker.exists() or marker.is_symlink():
+        request = read_json(marker)
+        if request != {'format': FORMAT, 'project_id': doc['project_id'], 'policy': 'latest-only'}:
+            raise BackupError('Invalid pending cleanup identity; nothing deleted.')
     keep = set(references(doc))
     candidates = [p for p in store.iterdir() if p != gen and (re.fullmatch(r'[0-9TZ]+_[a-f0-9]{12}', p.name) or p.name.startswith('.incomplete-'))]
     for path in candidates:
@@ -911,15 +930,27 @@ def prune(store):
     for path in candidates:
         print('DELETE generation:', path.name)
     print(f'Unreferenced objects/partial objects: {len(garbage)}; bytes: {sum(p.stat().st_size for p in garbage):,}')
-    if (candidates or garbage) and input('Type YES to delete old generations and unreferenced objects: ').strip() == 'YES':
-        # Delete old manifests first: after interruption remaining objects are harmless.
-        for path in candidates:
-            shutil.rmtree(path)
+    if (candidates or garbage) and confirm:
+        if input('Type YES to delete old generations and unreferenced objects: ').strip() != 'YES':
+            print('Cleanup cancelled; existing backup content retained.')
+            return False
+    # Delete old manifests first: an interruption leaves only harmless extra objects.
+    for path in candidates:
+        shutil.rmtree(path)
+    fsync_dir(store)
+    for path in garbage:
+        path.unlink()
+        fsync_dir(path.parent)
+    # An empty shard carries no content; remove it after its objects are gone.
+    for shard in base.iterdir():
+        if not any(shard.iterdir()):
+            shard.rmdir()
+    fsync_dir(base)
+    if marker.exists():
+        marker.unlink()
         fsync_dir(store)
-        for path in garbage:
-            path.unlink()
-            fsync_dir(path.parent)
-    print('Current generation and every referenced object retained.')
+    print('PASS: only the current generation and its referenced content remain; unrelated entries preserved.')
+    return True
 
 
 def probe(local, mount):

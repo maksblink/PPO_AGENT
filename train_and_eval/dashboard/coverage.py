@@ -52,11 +52,12 @@ def read_plan(root: Path, manifests: list[Path]):
                     config = json.loads(normalize_config(RunConfig.model_validate(yaml.safe_load(path.read_text()))))
                     name = config['run']['name']
                     if name in entries:
-                        if entries[name]['config'] != config or entries[name]['path'] != relative:
-                            raise ValueError(f'Duplicate run name with different config/path: {name}')
+                        if entries[name]['config'] != config:
+                            raise ValueError(f'Duplicate run name with different config: {name}')
                         entries[name]['queues'].add(manifest.stem)
+                        entries[name]['paths'].add(relative)
                     else:
-                        entries[name] = dict(config=config, path=relative, queues={manifest.stem})
+                        entries[name] = dict(config=config, path=relative, paths={relative}, queues={manifest.stem})
                 except Exception as exc:
                     errors.append(f'{manifest.name}: {relative}: {exc}')
         except Exception as exc:

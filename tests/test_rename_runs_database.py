@@ -161,3 +161,42 @@ def test_database_lr_mismatch_blocks_all_changes(case):
         tool.migrate(engine, root, audit, apply=True, confirm=lambda _: 'YES')
     assert (root/entry['old_config_path']).exists()
     assert not tool.pending_path(root).exists()
+
+
+def test_shared_copies_migrate_once_in_database_and_all_files(case):
+    engine,root,audit=case
+    mirror_paths=[]
+    for e in audit['mapping']:
+        original=root/e['old_config_path']
+        mirror=f'configs/stage_one/shared/{original.name}'
+        raw='# Equivalent shared configuration\n'+original.read_text()
+        p=root/mirror;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(raw)
+        keys=('old_config_path','new_config_path','disk_config_sha256')
+        e['config_copies']=[{k:e[k] for k in keys},dict(
+            old_config_path=mirror,
+            new_config_path=str(Path(mirror).with_name(e['new_name']+'.yml')),
+            disk_config_sha256=tool.sha(raw))]
+        mirror_paths.append(mirror)
+        audit['metadata_references'].append({'path':mirror,'sha256':tool.sha(raw)})
+    q=root/'configs/search_queues/shared.yml'
+    raw=yaml.safe_dump({'queue_schema_version':1,'name':'shared','configs':mirror_paths})
+    q.write_text(raw)
+    audit['metadata_references'].append({'path':q.relative_to(root).as_posix(),'sha256':tool.sha(raw)})
+    with engine.connect() as c:
+        before=tool.run_rows(c)
+        cp_before=list(c.execute(select(Checkpoint.__table__)).mappings())
+        metrics_before=list(c.execute(select(TrainingMetric.__table__)).mappings())
+        plan=tool.build_plan(c,root,audit)
+        assert len(plan['runs'])==len(before)==2
+    tool.migrate(engine,root,audit,apply=True,confirm=lambda _: 'YES')
+    with engine.connect() as c:
+        after=tool.run_rows(c)
+        assert set(after)==set(before)
+        assert list(c.execute(select(Checkpoint.__table__)).mappings())==cp_before
+        assert list(c.execute(select(TrainingMetric.__table__)).mappings())==metrics_before
+    for e in audit['mapping']:
+        for item in e['config_copies']:
+            assert not (root/item['old_config_path']).exists()
+            cfg=yaml.safe_load((root/item['new_config_path']).read_text())
+            assert cfg['run']['name']==after[e['run_id']]['name']==e['new_name']
+    assert all((root/p).is_file() for p in yaml.safe_load(q.read_text())['configs'])

@@ -118,6 +118,31 @@ def proposed_names(configs: dict) -> dict:
     return result
 
 
+def collect_configs(root):
+    """One normalized identity per run, retaining every physical config copy."""
+    from train_and_eval.run_config import load_run_config
+    configs, files, loaded, copies = {}, {}, {}, {}
+    for path in sorted((root / 'configs/stage_one').rglob('*')):
+        if path.suffix not in ('.yml', '.yaml'):
+            continue
+        current = path
+        while current != root:
+            if current.is_symlink():
+                raise ValueError(f'Symlink config path: {path}')
+            current = current.parent
+        obj = load_run_config(path, verify_data=False)
+        name = obj.config.run.name
+        cfg = json.loads(obj.normalized_json)
+        relative = path.relative_to(root).as_posix()
+        if name in configs and configs[name] != cfg:
+            raise ValueError(f'Conflicting config copies for {name}: {files[name]} and {relative}')
+        if name not in configs:
+            configs[name], files[name], loaded[name] = cfg, relative, obj
+            copies[name] = []
+        copies[name].append({'old_config_path': relative, 'disk_config_sha256': obj.sha256})
+    return configs, files, loaded, copies
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--project', type=Path, default=Path.cwd())
@@ -132,19 +157,8 @@ def main():
     from train_and_eval.database.models import Run, Checkpoint, Evaluation, WalkForwardStudy, WalkForwardCycle
     from train_and_eval.database.session import create_database_engine
 
-    errors, configs, files, loaded = [], {}, {}, {}
-    for path in sorted((root / 'configs/stage_one').rglob('*')):
-        if path.suffix not in ('.yml', '.yaml'):
-            continue
-        if path.is_symlink():
-            raise ValueError(f'Symlink config: {path}')
-        obj = load_run_config(path, verify_data=False)
-        name = obj.config.run.name
-        if name in configs:
-            raise ValueError(f'Duplicate config name: {name}')
-        configs[name] = json.loads(obj.normalized_json)
-        files[name] = path.relative_to(root).as_posix()
-        loaded[name] = obj
+    errors = []
+    configs, files, loaded, copies = collect_configs(root)
     if not configs:
         raise ValueError('No stage-one configs found')
     names = proposed_names(configs)
@@ -181,8 +195,13 @@ def main():
                'old_source_run':source,'new_source_run':names[source]['new_name'] if source else None,
                'phase':plan['phase'],'learning_rate':format(Decimal(str(configs[old]['ppo']['learning_rate'])), 'f'),
                'disk_config_sha256':loaded[old].sha256}
-        if new_path != files[old] and (root/new_path).exists():
-            errors.append(f'Target config already exists: {new_path}')
+        entry['config_copies'] = []
+        for item in copies[old]:
+            old_path = item['old_config_path']
+            target_path = Path(old_path).with_name(plan['new_name'] + Path(old_path).suffix).as_posix()
+            entry['config_copies'].append(dict(item, new_config_path=target_path))
+            if target_path != old_path and (root / target_path).exists():
+                errors.append(f'Target config already exists: {target_path}')
         collision=by_name.get(plan['new_name'])
         if collision and collision is not r:
             errors.append(f'Target run name already exists: {plan["new_name"]}')
@@ -238,7 +257,7 @@ def main():
     git=subprocess.run(['git','-C',str(root),'rev-parse','HEAD'],capture_output=True,text=True)
     report={'audit_version':AUDIT_VERSION,'name_format':NAME_FORMAT,'created_at':datetime.now(timezone.utc).isoformat(),'project':str(root),
             'git_commit':git.stdout.strip() if git.returncode==0 else None,'database':database,
-            'counts':{'configs':len(configs),'runs':len(records),'checkpoints':len(checkpoints),
+            'counts':{'configs':sum(map(len, copies.values())),'unique_config_names':len(configs),'shared_config_names':sum(len(v)>1 for v in copies.values()),'runs':len(records),'checkpoints':len(checkpoints),
                       'evaluations':len(evaluations),'studies':len(studies),'cycles':len(cycles)},
             'run_statuses':dict(Counter(getattr(r['status'],'value',r['status']) for r in records)),
             'mapping':mapping,'outside_runs':outside,'errors':errors,'checkpoint_problems':checkpoint_problems,
@@ -253,7 +272,7 @@ def main():
     (target/'audit.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     with (target/'mapping.csv').open('w',newline='',encoding='utf-8') as f:
         writer=csv.DictWriter(f,fieldnames=['run_id','old_name','new_name','old_config_path','new_config_path','old_source_run','new_source_run','status','learning_rate'])
-        writer.writeheader();writer.writerows({k:r.get(k) for k in writer.fieldnames} for r in mapping)
+        writer.writeheader();writer.writerows({k:dict(r, **item).get(k) for k in writer.fieldnames} for r in mapping for item in r['config_copies'])
     print(json.dumps(report['counts'],indent=2));print(f'Issues requiring review: {len(errors)}')
     for error in errors:print('REVIEW:',error)
     print(f'Audit: {target / "audit.json"}');print(f'Mapping: {target / "mapping.csv"}')

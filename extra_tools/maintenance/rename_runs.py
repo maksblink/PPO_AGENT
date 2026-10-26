@@ -120,6 +120,42 @@ def run_rows(connection):
     return {r['id']: dict(r) for r in connection.execute(select(Run.__table__)).mappings()}
 
 
+def config_copies(entry):
+    """Legacy audits describe one file; new audits retain all equivalent copies."""
+    keys = ('old_config_path', 'new_config_path', 'disk_config_sha256')
+    primary = {key: entry[key] for key in keys}
+    copies = entry.get('config_copies', [primary])
+    if not copies or primary != {key: copies[0][key] for key in keys}:
+        raise ValueError('Primary config differs from audited copies')
+    return copies
+
+
+def validate_disk_configs(root, entries):
+    import yaml
+    from train_and_eval.run_config import RunConfig, normalize_config
+    expected = [item['old_config_path'] for e in entries for item in config_copies(e)]
+    if len(expected) != len(set(expected)):
+        raise ValueError('Duplicate config path in audit')
+    actual = {p.relative_to(root).as_posix() for p in (root/'configs/stage_one').rglob('*')
+              if p.suffix in ('.yml', '.yaml')}
+    if actual != set(expected):
+        raise ValueError('Stage-one config inventory changed since audit')
+    configs = {}
+    for e in entries:
+        for item in config_copies(e):
+            path = item['old_config_path']
+            raw = safe(root, path).read_text(encoding='utf-8')
+            if sha(raw) != item['disk_config_sha256']:
+                raise ValueError(f'Config changed since audit: {path}')
+            cfg = json.loads(normalize_config(RunConfig.model_validate(yaml.safe_load(raw))))
+            if cfg['run']['name'] != e['old_name']:
+                raise ValueError('Config name differs from audit')
+            if e['old_name'] in configs and configs[e['old_name']] != cfg:
+                raise ValueError(f'Conflicting config copies: {e["old_name"]}')
+            configs[e['old_name']] = cfg
+    return configs
+
+
 def build_plan(connection, root, audit):
     from sqlalchemy import select, func
     from train_and_eval.database.models import Checkpoint, Evaluation, WalkForwardStudy, WalkForwardCycle
@@ -155,21 +191,7 @@ def build_plan(connection, root, audit):
         path = safe(root, rel)
         files[rel] = {'path': rel, 'before': read_optional(path), 'after': after}
     path_mapping = {}
-    disk_configs = {}
-    expected_paths = {e['old_config_path'] for e in entries}
-    actual_paths = {p.relative_to(root).as_posix() for p in (root/'configs/stage_one').rglob('*')
-                    if p.suffix in ('.yml', '.yaml')}
-    if actual_paths != expected_paths:
-        raise ValueError('Stage-one config inventory changed since audit')
-    for e in entries:
-        old_path = e['old_config_path']
-        raw_disk = safe(root, old_path).read_text(encoding='utf-8')
-        if sha(raw_disk) != e['disk_config_sha256']:
-            raise ValueError(f'Config changed since audit: {old_path}')
-        cfg = json.loads(normalize_config(RunConfig.model_validate(yaml.safe_load(raw_disk))))
-        if cfg['run']['name'] != e['old_name']:
-            raise ValueError('Config name differs from audit')
-        disk_configs[e['old_name']] = cfg
+    disk_configs = validate_disk_configs(root, entries)
     expected_names = proposed_names(disk_configs)
     for e in entries:
         cfg = disk_configs[e['old_name']]
@@ -206,19 +228,20 @@ def build_plan(connection, root, audit):
                      config_sha256=sha(raw), normalized_config_sha256=norm_hash)
         db.append({'id': r['id'], 'before': before, 'after': after})
     for e in entries:
-        old_path, new_path = e['old_config_path'], e['new_config_path']
-        if not old_path.startswith('configs/stage_one/') or Path(old_path).parent != Path(new_path).parent or Path(new_path).stem != e['new_name']:
-            raise ValueError('Invalid config destination')
-        text = safe(root, old_path).read_text(encoding='utf-8')
-        if e['run_id'] is not None and disk_configs[e['old_name']] != rows[e['run_id']]['normalized_config_json']:
-            raise ValueError('Disk/database config mismatch (including LR)')
-        if old_path != new_path and safe(root, new_path).exists():
-            raise ValueError(f'Target exists: {new_path}')
-        renamed, _, _ = rename_config(text, mapping)
-        if old_path != new_path:
-            change(old_path, None)
-        change(new_path, renamed)
-        path_mapping[old_path] = new_path
+        for item in config_copies(e):
+            old_path, new_path = item['old_config_path'], item['new_config_path']
+            if not old_path.startswith('configs/stage_one/') or Path(old_path).parent != Path(new_path).parent or Path(new_path).stem != e['new_name']:
+                raise ValueError('Invalid config destination')
+            text = safe(root, old_path).read_text(encoding='utf-8')
+            if e['run_id'] is not None and disk_configs[e['old_name']] != rows[e['run_id']]['normalized_config_json']:
+                raise ValueError('Disk/database config mismatch (including LR)')
+            if old_path != new_path and safe(root, new_path).exists():
+                raise ValueError(f'Target exists: {new_path}')
+            renamed, _, _ = rename_config(text, mapping)
+            if old_path != new_path:
+                change(old_path, None)
+            change(new_path, renamed)
+            path_mapping[old_path] = new_path
     # Known structured metadata only: no global string substitution in reports.
     for path in sorted((root/'configs/search_queues').rglob('*')):
         if path.suffix not in ('.yml', '.yaml'):
@@ -370,7 +393,7 @@ def _migrate(engine, root, audit, apply=False, confirm=input):
             keys = ['run_id','old_name','new_name','old_config_path','new_config_path',
                     'old_source_run','new_source_run','status','learning_rate']
             writer=csv.DictWriter(stream,fieldnames=keys);writer.writeheader()
-            writer.writerows({k:e.get(k) for k in keys} for e in plan['mapping'])
+            writer.writerows({k:dict(e, **item).get(k) for k in keys} for e in plan['mapping'] for item in config_copies(e))
             stream.flush();os.fsync(stream.fileno())
         raw = dump(plan); journal = directory/'manifest.json'
         write_atomic(journal, raw)

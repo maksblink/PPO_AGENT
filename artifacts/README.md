@@ -242,3 +242,20 @@ Deleting filesystem artifacts does not automatically delete the corresponding Po
 Evaluation scope suffixes are `train`, `val`, `reference` and `test`.
 Stage one saves paired evaluations of each assessed checkpoint; all evaluation
 plots carry the same suffix. PPO update diagnostics are not frozen TRAIN metrics.
+
+
+## Backup boundary
+
+The [cold-storage tool](../extra_tools/maintenance/COLD_STORAGE.md) captures this
+entire directory, including ignored files, together with the rest of the project
+and a separate full PostgreSQL dump. Run/checkpoint files and database records
+must remain consistent: stop writers during capture and use the maintenance
+cleanup tools when removing runs.
+
+Backup control files and local scan captures live in the project-root
+`.cold_storage/`, not under `artifacts/`. The external managed backup retains only
+the latest verified generation after successful synchronization. It is not a
+historical archive or a directly executable project tree. Restore files to a new
+Linux directory and restore the corresponding database before using the restored
+project. Do not delete local run artifacts merely because a checksum verification
+passed; a complete isolated restore rehearsal remains a separate check.

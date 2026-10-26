@@ -791,13 +791,24 @@ unfinished cleanup/rename operations block capture. User tables are locked
 against writes and the dump uses an exported snapshot. Source files are hashed
 and rechecked before publication; other file/schema writers must remain stopped.
 
-Only a fully verified generation is published through an atomic CURRENT pointer.
-Interrupted transfers can leave unreferenced objects; subsequent synchronization
-reuses valid content. Pruning verifies the current generation, removes older
-manifests, then removes only objects unreferenced by the current manifest. This
-ordering keeps current content reachable if pruning is interrupted. Destination
-corruption is reported rather than silently overwritten. Format 1 disk backups
-are not silently converted or reused.
+Only a fully verified generation is published through an atomic `CURRENT` pointer.
+Each successful `sync` then automatically removes older managed generations and
+objects not referenced by the latest manifest: the destination retains **one
+latest verified backup**, not a history of snapshots. The previous backup remains
+available until the replacement is committed. Modified content is written in full;
+unchanged content is checked and reused without another copy or hardlinks.
+
+Cleanup failure after publication leaves the latest backup committed and a durable
+`cleanup_pending.json` marker. The next `sync` or explicit `prune` finishes cleanup
+only after verifying the current backup. Interrupted operations may temporarily
+leave extra generations or objects. Destination corruption is reported rather than
+silently overwritten. Format 1 disk backups are not silently converted or reused.
+
+`scan`, `sync` and `restore-database` acquire exclusive project activity and
+maintenance locks, including the managed hardware lock. Guarded queues and
+maintenance cannot overlap these operations; direct writers must still remain
+stopped. PostgreSQL table write locks are held across the capture context,
+including confirmation and transfer. The tool does not alter hardware settings.
 
 A destination probe exercises a small file/metadata round-trip without accessing
 the experiment database. A standalone recovery script is saved beside CURRENT.
@@ -812,7 +823,8 @@ No source files, experiment records or existing unrelated disk contents are
 removed by synchronization. Capacity estimates reserve space for new content,
 dumps and metadata; failures do not publish an incomplete generation. Access
 times, inode identities and filesystem allocation are not archive attributes.
-Operational commands and recovery steps are in the local instructions.
+Operational commands and recovery steps are in [Cold storage](extra_tools/maintenance/COLD_STORAGE.md)
+and [INSTRUCTIONS.md](INSTRUCTIONS.md#full-project-backup-and-recovery).
 
 
 Cold-storage operations expose per-stage progress and elapsed-time summaries.
@@ -828,7 +840,11 @@ before confirmation, explicitly marked as not yet backed up. Completed manifests
 remain separate from this plan. Comparisons and final timing summaries are also
 stored as local JSON records. Console output contains aggregate change counts
 and locations of these records instead of listing every project path. I/O counts
-include checksum reads and must not be interpreted as archive size.
+include checksum reads and must not be interpreted as archive size. The current
+implementation reads unchanged destination content multiple times during `sync`;
+reuse saves writes but does not eliminate full verification reads. Total elapsed
+time includes interactive confirmation time. SHA-256 verification is not a test
+of PostgreSQL restoration; rehearse restoration separately on an isolated target.
 
 ### Dashboard numeric presentation
 

@@ -6,7 +6,7 @@ Run commands from the repository root with the project virtual environment.
 |---|---|
 | `analysis/` | Grid rankings, seed comparisons and detailed path reports. See [GRID_ANALYSIS.md](analysis/GRID_ANALYSIS.md). |
 | `diagnostics/` | Policy probability distributions and evolution across checkpoints. |
-| `maintenance/` | Cleanup, name auditing/renaming and cold storage. |
+| `maintenance/` | Cleanup, name auditing/renaming and [latest-only cold storage](maintenance/COLD_STORAGE.md). |
 
 Examples (use `--help` to inspect available options):
 
@@ -25,3 +25,9 @@ They are data, not Python tools; do not move or rewrite them during code cleanup
 No legacy entry-point wrappers remain at the top level. Update local shortcuts
 or external scripts that still use the old paths. Analysis behavior and report
 output directories are unchanged by this reorganization.
+
+Cold storage includes ignored project files and a full PostgreSQL dump. Successful
+`sync` keeps one verified external generation and automatically removes obsolete
+managed content. Live capture/restoration excludes guarded queue and maintenance
+operations. See the linked guide for prerequisites, local state, recovery and
+remaining restore rehearsals; `verify` checks hashes, not database restoration.

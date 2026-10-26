@@ -253,3 +253,18 @@ continuation runs and compare saved training metrics, evaluation results,
 checkpoint tensor payloads, trajectories, and artifact metrics. Use the same
 source checkpoint for a continuation replay. Import checks and passing unit
 tests alone do not establish numerical reproducibility.
+
+
+## Coordination with backup and maintenance
+
+Cold-storage `scan`, `sync` and `restore-database` take exclusive project activity
+and maintenance locks, including the managed hardware lock. Stop the queue before
+starting these operations; guarded queues and maintenance operations refuse to
+overlap. Backup operations do not change CPU, GPU, fan or thermal settings.
+Direct/manual file and database writers must also remain stopped during capture.
+The cold-storage tool does not stop an active queue on the user's behalf.
+
+See [Cold storage](extra_tools/maintenance/COLD_STORAGE.md) for the latest-only
+backup policy, commands and isolated restoration procedure. Offline destination
+verification is distinct from a live capture and does not use the project activity
+guard, although it still uses cold-storage locks and consumes disk resources.

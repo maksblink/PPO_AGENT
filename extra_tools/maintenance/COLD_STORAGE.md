@@ -8,13 +8,14 @@ retain that file. Other files on the external disk are outside the backup scope.
 
 ## Commands
 
-Run from the project root with its virtual environment active:
+Run from the project root with its virtual environment active. Replace
+`/path/to/mounted/disk` with the actual mount point, not a subdirectory:
 
 ```bash
 python extra_tools/maintenance/cold_storage.py disks
-python extra_tools/maintenance/cold_storage.py probe --disk /run/media/maks/Expansion
-python extra_tools/maintenance/cold_storage.py sync --disk /run/media/maks/Expansion
-python extra_tools/maintenance/cold_storage.py verify --disk /run/media/maks/Expansion
+python extra_tools/maintenance/cold_storage.py probe --disk /path/to/mounted/disk
+python extra_tools/maintenance/cold_storage.py sync --disk /path/to/mounted/disk
+python extra_tools/maintenance/cold_storage.py verify --disk /path/to/mounted/disk
 ```
 
 | Mode | Behavior |
@@ -47,6 +48,12 @@ stored in full; there are no byte-level delta patches. Unchanged contents can
 be reused even if their path was renamed. Permissions, ownership, timestamps,
 symlinks and extended attributes are represented in the manifest.
 
+Each capture creates a fresh full database dump and a globals/roles dump. Their
+bytes can change even if application rows do not. Identical dump bytes reuse an
+existing object; different bytes create a new object. Obsolete dump objects are
+removed after publication, unless still referenced by the current manifest.
+Only the latest captured database state remains after successful cleanup.
+
 The previous complete backup remains available during copying. A failed copy,
 dump, verification or pre-publication source-stability check does not replace it.
 After publication, cleanup failure leaves the new backup usable and a durable
@@ -72,6 +79,14 @@ these sources and is not encrypted by this tool.
 External symlink targets, including an interpreter in `/opt`, are not copied.
 The virtual environment may require recreation on a different system/path.
 
+Capture requires a running PostgreSQL server and matching-major `pg_dump`, plus
+`pg_dumpall` and `pg_restore`. `DATABASE_URL` or `.env` supplies the connection.
+The database account must be able to lock tables, export snapshots and dump globals.
+The capture context holds source table write locks through confirmation, transfer
+and finalization; do not leave a capture waiting for input while expecting writers
+to proceed. A standalone clean Git checkout is required; external Git object
+stores, submodules and unsupported special files are rejected.
+
 Live capture and database restoration exclude guarded queues, rename and cleanup
 operations. Direct/manual writers must also remain stopped. The tool does not
 change CPU, GPU, fan or thermal settings. All external deletions are scoped to
@@ -94,8 +109,69 @@ restored project's connection, and restore the database:
 python /path/to/backup/RESTORE.py restore-database --project /path/to/new/project
 ```
 
-The database must not already exist. `roles.sql` is saved but is not automatically
+The connection must use the original application database name on a server with
+the same PostgreSQL major version as the capture. For a rehearsal, use a separate
+PostgreSQL instance initialized with `POSTGRES_DB=postgres`; do not connect to the
+production instance. The database must not already exist. `roles.sql` is saved but is not automatically
 applied. Live modes load maintenance guards from the chosen project; an older
 restored project must have those tools installed first. Verify the restored
 project/database and environment before training. A failed database restore can
 leave a partial database; it is never silently overwritten on retry.
+
+
+## Local working state
+
+The external latest-only policy does not remove local `scan` captures.
+
+| Local path under `.cold_storage/` | Purpose |
+| --- | --- |
+| `identity.json` | Stable project UUID used to find the managed backup folder. |
+| `lock` | Serializes local cold-storage operations; never unlink it during an operation. |
+| `plan.json` | Inventory and proposed changes, marked `PLANNED_NOT_BACKED_UP`. |
+| `manifest.json` | Last successfully captured local manifest. |
+| `capture.json`, `capture-*` | Pointer and locally retained database captures made by `scan`. |
+| `last_destination.json` | Last committed external backup location and generation. |
+| `comparison.json` | Result of the most recent manifest comparison. |
+| `last_operation_summary.json` | Timing/I/O summary, overwritten by the next command. |
+
+Not every command creates every file. Even `disks` and `probe` initialize local
+state and may replace the summary. Preserve the identity for future updates to
+the same backup. Resetting it creates a new project UUID, not an update to the
+old backup folder. Do not remove working state during an active operation.
+
+## Progress and performance
+
+`N/M/D` describe new, modified and deleted paths, including directory/link and
+metadata changes. They do not count database rows. `New file content bytes`
+excludes the not-yet-created database dump. `copied` measures newly stored object
+bytes; `reused objects` counts existing content used without copying it again.
+Multiple paths with identical content share one object.
+
+`GiB I/O` includes reads and writes and can greatly exceed backup size. With an
+existing backup, the current implementation verifies the old generation, checks
+reused objects during storage, verifies the proposed generation, and verifies the
+current generation again before pruning. Source files are also hashed twice.
+These repeated reads are implemented behavior, not a promised optimization.
+
+The total timer includes waiting for `YES`; that wait appears in
+`setup/confirmation/finalization` along with unclassified work. Do not interpret
+that entire remainder as disk processing time. A successful `sync` already
+includes content verification; a separate `verify` can be used for a later check.
+
+## Validation status and remaining rehearsal
+
+Practical checks reported on 24–25 October 2026:
+
+- Destination `probe`: passed the temporary file/metadata round-trip checks.
+- Initial full backup: passed; about 199.97 GiB stored in 129,275 new objects.
+- Repeat backup: `N=0, M=0, D=0`; 129,273 objects reused, two new objects totalling
+  about 0.38 GiB copied. The old generation and two obsolete objects were removed.
+- The project regression suite passed 850 tests before these practical checks.
+
+These results validate the observed captures and latest-only cleanup. They do
+not establish a complete production restore. Still to perform: controlled
+add/modify/delete tests using disposable files, a complete file restore into a
+new directory, and a database restore into an isolated PostgreSQL instance with
+schema, row/sequence and artifact-reference checks. Do not delete source data to
+conduct a rehearsal. A checksum check alone cannot prove the restored application
+will run with the target system's interpreter, drivers and dependencies.

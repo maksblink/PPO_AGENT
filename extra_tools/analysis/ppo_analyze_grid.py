@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Grid, seed comparison and path analysis v4. Read-only PostgreSQL snapshot; writes only HTML and JSON reports.
+"""Grid, seed comparison and path analysis v5. Read-only PostgreSQL snapshot; writes only HTML and JSON reports.
 Run from PPO_AGENT: python extra_tools/analysis/ppo_analyze_grid.py --all-runs
 No training, model loading, hardware changes, database updates or network requests.
 """
@@ -24,7 +24,7 @@ import statistics as st
 import sys
 import zipfile
 
-VERSION = '4.0.0'
+VERSION = '5.0.0'
 EPS = 1e-10
 METRICS = ('agent_return', 'balanced_score', 'agent_max_drawdown')
 EXTRA = ('market_exposure', 'round_trips', 'profit_factor', 'win_rate', 'always_long_return')
@@ -1036,12 +1036,14 @@ def load_detail_ids(path):
     return list(dict.fromkeys(ids))
 
 
-def tabbed_report(grid_html, diagnostics=None, detail_html=None):
+def tabbed_report(grid_html, diagnostics=None, detail_html=None, custom_tabs=None):
     """Keep original report content; add offline accessible navigation panels."""
     split = grid_html.index('<h1>')
     head, grid_body = grid_html[:split], grid_html[split:].removesuffix('</html>')
     tabs = [('Grid overview', grid_body)]
-    if diagnostics is not None:
+    if custom_tabs is not None:
+        tabs = custom_tabs
+    elif diagnostics is not None:
         sections = re.findall(r'<section>(.*?)</section>', detail_html, flags=re.S)
         pairs = diagnostics['detailed_pairs']
         npaths = len(sections)-len(pairs)
@@ -1309,12 +1311,12 @@ def path_compare_positions(a, b):
     return result
 
 
-def path_chart(a, b):
+def path_chart(a, b, labels=('Reference seed', 'Replay seed')):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     fig, axs = plt.subplots(3, 1, figsize=(11, 8), sharex=True, layout='constrained')
-    for frame, label in ((a,'Reference seed'), (b,'Replay seed')):
+    for frame, label in ((a,labels[0]), (b,labels[1])):
         axs[0].plot(frame.timestamp, frame.agent_equity*100, label=label, lw=1)
         axs[1].plot(frame.timestamp, frame.dd*100, label=label, lw=1)
         exposure = frame.set_index('timestamp').exposure.resample('W-SUN').mean()
@@ -1323,7 +1325,7 @@ def path_chart(a, b):
     for ax, label in zip(axs, ('Cumulative return [% of stake]', 'Drawdown [pp of stake]', 'Weekly exposure [%]')):
         ax.set_ylabel(label); ax.grid(alpha=.2); ax.legend(loc='best')
     buffer = BytesIO(); fig.savefig(buffer, format='png', dpi=110); plt.close(fig)
-    return '<img alt="Return, drawdown and exposure by seed" src="data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode()+'">'
+    return '<img alt="Return, drawdown and exposure comparison" src="data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode()+'">'
 
 
 def path_table(headers, rows):
@@ -1407,6 +1409,301 @@ def path_build_analysis(root, original, reference_ids, source_label='Current gri
 
 
 
+# Generic comparisons deliberately keep legacy seed-report identities unchanged.
+AXIS_ALIASES = dict(seed='run.seed', architecture='ppo.hidden_sizes',
+    learning_rate='ppo.learning_rate', gamma='ppo.gamma', n_epochs='ppo.n_epochs',
+    ent_coef='ppo.ent_coef', gae_lambda='ppo.gae_lambda', stage='stage')
+SCIENTIFIC_SECTIONS = ('data', 'environment', 'training', 'ppo', 'evaluation', 'continuation')
+
+
+def axis_path(value):
+    value = AXIS_ALIASES.get(value, value)
+    if value == 'stage' or value == 'run.seed':
+        return value
+    if value.split('.')[0] not in SCIENTIFIC_SECTIONS or '.' not in value:
+        raise ValueError('Use a scientific config path, e.g. ppo.ent_coef: '+value)
+    if value in ('continuation.source_run', 'continuation.mode'):
+        raise ValueError('Use stage instead of continuation identity: '+value)
+    return value
+
+
+def axis_get(config, row, axis):
+    if axis == 'stage':
+        return row['stage']
+    value = config
+    try:
+        for key in axis.split('.'):
+            value = value[key]
+    except (KeyError, TypeError):
+        raise ValueError('Missing comparison field '+axis+' in '+row['name']) from None
+    return value
+
+
+def axis_remove(config, axis):
+    if axis == 'stage':
+        return
+    parts = axis.split('.')
+    current = config
+    for key in parts[:-1]:
+        if key not in current:
+            return
+        current = current[key]
+    current.pop(parts[-1], None)
+
+
+def parse_assignments(values):
+    result = {}
+    for item in values:
+        if '=' not in item:
+            raise ValueError('Expected FIELD=JSON_VALUE: '+item)
+        key, value = item.split('=', 1)
+        key = axis_path(key)
+        if key in result:
+            raise ValueError('Repeated assignment: '+key)
+        try:
+            value = json.loads(value, parse_constant=lambda x: (_ for _ in ()).throw(ValueError(x)))
+        except (ValueError, json.JSONDecodeError):
+            raise ValueError('Value must be valid JSON (quote strings): '+item) from None
+        result[key] = value
+    return result
+
+
+def generic_signature(config, row, varying):
+    # Every unselected scientific setting is held fixed, including seed and stage.
+    fixed = {k:config.get(k) for k in SCIENTIFIC_SECTIONS}
+    fixed = json.loads(canonical(fixed))
+    fixed['run'] = {'seed':config['run']['seed']}
+    fixed['continuation'] = {k:v for k,v in fixed['continuation'].items()
+                             if k not in ('source_run','mode')}
+    # Fresh has no checkpoint selector; stage is the explicit progression axis.
+    if 'stage' in varying:
+        fixed['continuation'].pop('checkpoint', None)
+    for axis in varying:
+        axis_remove(fixed, axis)
+    signatures = {s:{k:v for k,v in row[s]['signature'].items()
+                    if k != 'seed' or 'run.seed' not in varying} for s in SCOPES}
+    return dict(config=fixed, stage=None if 'stage' in varying else row['stage'],
+                evaluations=signatures, device=row['device'])
+
+
+def generic_comparison(rows, configs, axes, filters=None, reference=None,
+                       rank_axes=None, group_axes=None, top_percent=1):
+    axes = list(dict.fromkeys(map(axis_path, axes)))
+    if not axes:
+        raise ValueError('Select at least one comparison variable')
+    for a,b in combinations(axes,2):
+        if a.startswith(b+'.') or b.startswith(a+'.'):
+            raise ValueError('Overlapping comparison fields: '+a+', '+b)
+    filters, reference = filters or {}, reference or {}
+    if reference and set(reference) != set(axes):
+        raise ValueError('--reference must specify every --compare-by field exactly once')
+    rank_axes = list(dict.fromkeys(map(axis_path, rank_axes if rank_axes is not None else axes)))
+    group_axes = list(dict.fromkeys(map(axis_path, group_axes or [])))
+    known = {r['name']:r for r in rows}
+    # Validate requested fields even when filtering selects zero rows.
+    for r in rows:
+        for axis in set(axes+rank_axes+group_axes+list(filters)):
+            axis_get(configs[r['name']], r, axis)
+    selected = [r for r in rows if all(axis_get(configs[r['name']],r,k)==v for k,v in filters.items())]
+    if not selected:
+        raise ValueError('No eligible runs match --where filters')
+    def variant(r):
+        return {a:axis_get(configs[r['name']],r,a) for a in axes}
+    variants = {canonical(variant(r)):variant(r) for r in selected}
+    refkey = canonical(reference) if reference else None
+    if refkey is not None and refkey not in variants:
+        raise ValueError('Reference variant is absent after filtering')
+    # Include full ancestry signatures: otherwise different training histories
+    # could look identical at a final stage. Stage contrasts are progression only.
+    def signature(r, varying):
+        chain = []; seen = set(); current = r
+        while current:
+            if current['name'] in seen:
+                raise ValueError('Cycle in ancestry')
+            seen.add(current['name'])
+            chain.append(generic_signature(configs[current['name']],current,varying))
+            parent = current['source']
+            if parent and parent not in known:
+                raise ValueError('Missing ancestor: '+parent)
+            current = known.get(parent)
+        if 'stage' in varying:
+            chain = chain[-1:]  # Compare progress from equivalent fresh roots.
+            return digest(dict(current=generic_signature(configs[r['name']],r,varying),root=chain))
+        return digest(chain)
+    cells = defaultdict(lambda:defaultdict(list))
+    for r in selected:
+        cells[signature(r,axes)][canonical(variant(r))].append(r)
+    pairs=[]; coverage=[]; ambiguous=[]
+    keys = sorted(variants)
+    contrasts = [(refkey,k) for k in keys if k!=refkey] if refkey else list(combinations(keys,2))
+    for cell_key, cell in cells.items():
+        for v, rr in cell.items():
+            if len(rr)>1:
+                ambiguous.append(dict(cell=cell_key,variant=variants[v],run_ids=[r['id'] for r in rr]))
+    for a,b in contrasts:
+        matched=[]; unmatched_a=[]; unmatched_b=[]; only_a=only_b=ambiguous_cells=0
+        for ck, cell in sorted(cells.items()):
+            aa,bb=cell.get(a,[]),cell.get(b,[])
+            if len(aa)>1 or len(bb)>1:
+                ambiguous_cells+=1; continue
+            if not aa or not bb:
+                only_a+=bool(aa);only_b+=bool(bb)
+                unmatched_a.extend(r['id'] for r in aa);unmatched_b.extend(r['id'] for r in bb);continue
+            left,right=aa[0],bb[0]
+            for scope in SCOPES:
+                if abs(left[scope]['always_long_return']-right[scope]['always_long_return'])>EPS:
+                    raise ValueError('Matched always-long baseline differs: '+left['name']+' / '+right['name'])
+            pair=dict(cell=ck,A=brief_run(left),B=brief_run(right),
+                delta={s:{m:right[s][m]-left[s][m] for m in METRICS} for s in SCOPES})
+            pairs.append(pair);matched.append(pair)
+        coverage.append(dict(A=variants[a],B=variants[b],matched=len(matched),only_A=only_a,only_B=only_b,
+            ambiguous_cells=ambiguous_cells,unmatched_A_ids=unmatched_a,unmatched_B_ids=unmatched_b,metrics={s:{m:delta_stats([p['delta'][s][m] for p in matched])
+                for m in METRICS} for s in SCOPES}))
+    ranking_groups=defaultdict(list)
+    for r in selected:
+        ranking_groups[signature(r,rank_axes)].append(r)
+    rankings=[]; candidate_ids=set()
+    for key,rr in sorted(ranking_groups.items()):
+        for scope in SCOPES:
+            vals=[r[scope]['always_long_return'] for r in rr]
+            if max(vals)-min(vals)>EPS:
+                raise ValueError('Ranking always-long baseline differs')
+        fronts={s:frontier(rr,s) for s in SCOPES}
+        chosen={r['id']:r for r in fronts['VAL']}
+        tops={}
+        for m in ('agent_return','balanced_score'):
+            top,info=select_top_percent(rr,'VAL',m,top_percent)
+            tops[m]=info
+            chosen.update({r['id']:r for r in top})
+        candidate_ids.update(chosen)
+        rankings.append(dict(cohort=key,runs=len(rr),fixed_conditions=generic_signature(configs[rr[0]['name']],rr[0],rank_axes),fronts={s:[brief_run(r) for r in front] for s,front in fronts.items()},
+            candidates=[brief_run(r) for r in chosen.values()],top_selection=tops))
+    roots={}
+    def root_name(r):
+        while r['source']:
+            r=known[r['source']]
+        return r['name']
+    wanted={root_name(r) for r in selected if r['id'] in candidate_ids}
+    for r in rows:
+        name=root_name(r)
+        if name in wanted:
+            roots.setdefault(name,[]).append(brief_run(r))
+    groups=defaultdict(list)
+    for r in selected:
+        vals={a:axis_get(configs[r['name']],r,a) for a in axes+group_axes}
+        groups[canonical(vals)].append(r)
+    summaries=[]
+    for key,rr in sorted(groups.items()):
+        summaries.append(dict(group=json.loads(key),n=len(rr),metrics={s:{m:dict(
+            median=med([r[s][m] for r in rr]),p90=quantile([r[s][m] for r in rr],.9),
+            maximum=max(r[s][m] for r in rr),leaders=[dict(id=r['id'],name=r['name'],value=r[s][m])
+                for r in sorted(rr,key=lambda r:(-r[s][m],r['id']))[:3]]) for m in METRICS} for s in SCOPES}))
+    return dict(version='generic-1',axes=axes,filters=filters,reference=reference,rank_across=rank_axes,
+        selected_runs=len(selected),variants=list(variants.values()),coverage=coverage,ambiguous_cells=ambiguous,
+        pairs=pairs,rankings=rankings,group_summaries=summaries,
+        candidate_paths={k:sorted(v,key=lambda r:(r['stage'],r['id'])) for k,v in roots.items()},
+        selected_run_ids=[r['id'] for r in selected],
+        run_parameters={str(r['id']):{a:axis_get(configs[r['name']],r,a) for a in set(axes+rank_axes+group_axes)} for r in selected},
+        notes=['B minus A; higher is better for return, balanced score and signed max DD.',
+          'Matched contrasts hold all other scientific settings, evaluation conditions and ancestry fixed.',
+          'Unmatched and ambiguous cells are reported, never guessed or averaged into a pair.',
+          'Rank-across controls pooling only; it does not relax matched-pair conditions.',
+          'Groups are descriptive; their maxima can come from unequal search spaces.',
+          'Stages and contrasts are dependent; no significance or causal claim is made.',
+          'Stage comparisons measure progression from equivalent roots, not independent replicas.',
+          'Candidate paths include available ancestors/descendants even outside selected filters.'])
+
+
+def generic_html(result, rows):
+    sections=['<h1>Flexible experiment comparison</h1>',
+        '<p>'+esc(' '.join(result['notes']))+'</p>',
+        '<p>Compared fields: '+esc(result['axes'])+'; selected runs: '+str(result['selected_runs'])+'</p>',
+        '<p>Filters: '+esc(result['filters'])+'; reference: '+esc(result['reference'])+'</p>',
+        '<h2>Matched comparisons and coverage</h2>']
+    for c in result['coverage']:
+        sections+=['<h3>'+esc(c['A'])+' → '+esc(c['B'])+'</h3>',
+            '<p>Matched: '+str(c['matched'])+'; only A: '+str(c['only_A'])+'; only B: '+str(c['only_B'])+
+            '; ambiguous: '+str(c['ambiguous_cells'])+'</p>',
+            table(['Scope','Metric','N','Better','Worse','Tie','Mean delta','Median delta'],
+                [[s,m,d['n'],d['better'],d['worse'],d['tie'],fmt(d['mean']),fmt(d['median'])]
+                 for s,mm in c['metrics'].items() for m,d in mm.items()])]
+    sections+=['<h2>Rankings and Pareto fronts</h2><p>Pool across: '+esc(result['rank_across'])+'</p>']
+    for r in result['rankings']:
+        sections+=['<details><summary>Cohort '+esc(r['cohort'][:16])+'; '+str(r['runs'])+' runs</summary>']
+        for scope,front in r['fronts'].items():
+            sections += ['<h3>'+scope+' Pareto</h3>',table(['ID','Name','Return','DD','Score','Exposure','Trips'],
+                [[x['id'],x['name'],pct(x[scope]['agent_return']),pct(x[scope]['agent_max_drawdown']),
+                  fmt(x[scope]['balanced_score']),pct(x[scope]['market_exposure']),x[scope]['round_trips']] for x in front])]
+        sections+=['<details><summary>Fixed scientific conditions</summary><pre>'+esc(json.dumps(r['fixed_conditions'],default=serial,indent=2))+'</pre></details>', '<h3>VAL candidates</h3>',table(['ID','Name','Return','DD'],
+            [[x['id'],x['name'],pct(x['VAL']['agent_return']),pct(x['VAL']['agent_max_drawdown'])] for x in r['candidates']]),'</details>']
+    sections+=['<h2>Variant/group upper tails</h2>',table(['Group','N','Scope','Metric','Median','P90','Maximum'],
+        [[x['group'],x['n'],s,m,fmt(d['median']),fmt(d['p90']),fmt(d['maximum'])]
+         for x in result['group_summaries'] for s,mm in x['metrics'].items() for m,d in mm.items()])]
+    sections+=['<h2>Full candidate paths</h2>']
+    for root,rr in result['candidate_paths'].items():
+        sections+=['<details><summary>'+esc(root)+'</summary>',table(['Stage','ID','Name','TRAIN return','VAL return','VAL DD','Exposure','Trips'],
+            [[r['stage'],r['id'],r['name'],pct(r['TRAIN']['agent_return']),pct(r['VAL']['agent_return']),
+              pct(r['VAL']['agent_max_drawdown']),pct(r['VAL']['market_exposure']),r['VAL']['round_trips']] for r in rr]),'</details>']
+    sections+=['<details><summary>All matched pairs</summary>',table(['A ID','B ID','A name','B name','VAL return delta','VAL DD delta'],
+        [[p['A']['id'],p['B']['id'],p['A']['name'],p['B']['name'],fmt(p['delta']['VAL']['agent_return']),
+          fmt(p['delta']['VAL']['agent_max_drawdown'])] for p in result['pairs']]),'</details>',
+        '<details><summary>All selected runs</summary>',table(['ID','Name','Stage','TRAIN return','VAL return','VAL DD'],
+        [[r['id'],r['name'],r['stage'],pct(r['TRAIN']['agent_return']),pct(r['VAL']['agent_return']),
+          pct(r['VAL']['agent_max_drawdown'])] for r in rows if r['id'] in set(result['selected_run_ids'])]),'</details>']
+    return '\n'.join(sections)
+
+
+def generic_write(root,args,rows,configs,issues,stamp,provenance):
+    result=generic_comparison(rows,configs,args.compare_by,parse_assignments(args.where),
+        parse_assignments(args.reference),args.rank_across,args.group_by,args.top_percent)
+    body=generic_html(result,rows)
+    body+='<h2>Integrity issues</h2>'+table(['Name','Level','Reason'],
+        [[x.get('name'),x.get('level'),x.get('reason')] for x in issues])
+    details=[]
+    pairs={(p['A']['id'],p['B']['id']):p for p in result['pairs']}
+    for selector in args.trajectory_pair:
+        try:
+            a,b=map(int,selector.split(':'))
+        except ValueError:
+            raise ValueError('--trajectory-pair requires A_ID:B_ID') from None
+        pair=pairs.get((a,b))
+        if not pair:
+            raise ValueError('Trajectory selection is not an unambiguous matched pair: '+selector)
+        db=path_read_snapshot(root,{r['id']:r for r in (pair['A'],pair['B'])})
+        da,fa=path_read_artifacts(root,db[a]);dbb,fb=path_read_artifacts(root,db[b])
+        agreement=path_compare_positions(fa,fb)
+        details.append(dict(A=a,B=b,A_diagnostics=da,B_diagnostics=dbb,position_comparison=agreement))
+        body+='<h2>VAL diagnostics #'+str(a)+' / #'+str(b)+'</h2>'+path_chart(fa,fb,labels=('A #'+str(a),'B #'+str(b)))
+        body+= '<details><summary>Attribution, periods, costs and drawdown</summary><pre>'+esc(json.dumps(details[-1],default=serial,indent=2))+'</pre></details>'
+    result['trajectory_diagnostics']=details
+    result['issues']=issues
+    result['metadata']=dict(version=VERSION,snapshot_at=stamp,eligible_before_filters=len(rows),
+        export=args.comparison_export,top_percent=args.top_percent,**provenance)
+    result['pair_count']=len(result['pairs'])
+    if args.comparison_export=='summary':
+        result.pop('pairs')
+    elif args.comparison_export=='all':
+        result['all_selected_runs']=[brief_run(r) for r in rows if r['id'] in set(result['selected_run_ids'])]
+    parent=args.output_dir.expanduser()
+    if not parent.is_absolute():parent=root/parent
+    if parent.is_symlink():raise ValueError('Output directory must not be a symlink')
+    out=parent/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+    out.mkdir(parents=True,exist_ok=False)
+    shell='<!doctype html><html lang="en"><meta charset="utf-8"><title>Flexible comparison</title><style>body{font:15px system-ui;margin:24px}table{border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #ccc}pre{white-space:pre-wrap}summary{cursor:pointer}img{max-width:100%}</style>'+body+'</html>'
+    chunks = re.split(r'(?=<h2>)', body)
+    tabs = [('Comparison', chunks[0])]
+    for chunk in chunks[1:]:
+        title = re.match(r'<h2>(.*?)</h2>', chunk).group(1)
+        tabs.append((html.unescape(title), chunk))
+    rendered=tabbed_report(shell,custom_tabs=tabs)
+    (out/'report.html').write_text(rendered,encoding='utf-8')
+    (out/'report.json').write_text(json.dumps(result,default=serial,indent=2,allow_nan=False)+'\n',encoding='utf-8')
+    print('Selected runs:',result['selected_runs'],'; variants:',len(result['variants']),'; matched pairs:',result['pair_count'])
+    print('Ambiguous cells:',len(result['ambiguous_cells']),'; integrity issues:',len(issues))
+    print('HTML:',out/'report.html');print('JSON:',out/'report.json')
+    print('Read-only analysis. Only new reports written.')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     scope=parser.add_mutually_exclusive_group()
@@ -1432,7 +1729,24 @@ def main():
     parser.add_argument('--mode', choices=('auto','full','grid','paths'), default='auto',
                         help='full: grid plus selected path diagnostics; grid: no trajectory reads; paths: existing report only')
     parser.add_argument('--report', type=Path, help='Source grid JSON for --mode paths')
+    parser.add_argument('--compare-by', nargs='+', help='Matched comparison axes: aliases or scientific dotted config paths')
+    parser.add_argument('--where', action='append', default=[], help='Exact filter FIELD=JSON_VALUE; repeat for AND')
+    parser.add_argument('--reference', action='append', default=[], help='Reference variant FIELD=JSON_VALUE; specify all comparison axes')
+    parser.add_argument('--rank-across', nargs='+', help='Axes pooled in rankings; default: compare-by axes')
+    parser.add_argument('--group-by', nargs='+', default=[], help='Additional descriptive grouping axes')
+    parser.add_argument('--comparison-export', choices=('summary','pairs','all'), default='summary', help='Generic JSON detail; HTML always retains all selected runs and matched pairs')
+    parser.add_argument('--trajectory-pair', action='append', default=[], help='Generic matched pair A_ID:B_ID for detailed VAL artifacts')
     args=parser.parse_args()
+    generic_options = args.where or args.reference or args.rank_across or args.group_by or args.trajectory_pair or args.comparison_export != 'summary'
+    if generic_options and not args.compare_by:
+        raise ValueError('Generic comparison options require --compare-by')
+    if args.compare_by:
+        if args.compare_seeds or args.comparison_queue or args.selection_report or args.detail_run_id or args.details_config or args.detail_all_matched or args.report or args.mode == 'paths' or args.clean_old_reports:
+            raise ValueError('Use generic comparison options separately from legacy seed/path/cleanup options')
+        if args.mode == 'grid' and args.trajectory_pair:
+            raise ValueError('Trajectory pairs require auto or full mode')
+        if args.mode == 'full' and not args.trajectory_pair:
+            raise ValueError('Generic full mode requires --trajectory-pair A_ID:B_ID')
     detail_ids = list(args.detail_run_id)
     if args.details_config:
         detail_ids += load_detail_ids(args.details_config)
@@ -1468,7 +1782,7 @@ def main():
         raise ValueError('Grid/full mode requires --all-runs or --queue')
     if args.mode == 'grid' and (detail_ids or args.detail_all_matched):
         raise ValueError('Grid mode excludes trajectory diagnostics; use full mode')
-    if args.mode == 'full' and not (detail_ids or args.detail_all_matched):
+    if args.mode == 'full' and not args.compare_by and not (detail_ids or args.detail_all_matched):
         raise ValueError('Full mode requires a detailed pair selection')
     if (detail_ids or args.detail_all_matched) and not args.compare_seeds:
         raise ValueError('Detailed diagnostics require --compare-seeds')
@@ -1525,6 +1839,9 @@ def main():
     rows,inventory,issues=prepare(root,configs,runs,cps,evs,counts)
     issues=preissues+issues;inventory=excluded_inventory+inventory
     if not rows:raise ValueError('No eligible completed runs: '+canonical(issues[:10]))
+    if args.compare_by:
+        generic_write(root,args,rows,configs,issues,stamp,provenance)
+        return
     # Avoid a pooled ranking when even the deterministic baseline is inconsistent.
     for (cohort,),rr in group(rows,('cohort',)).items():
         for scope_name in SCOPES:

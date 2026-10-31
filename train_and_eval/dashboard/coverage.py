@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import itertools
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -11,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-AXES = ['architecture', 'gamma', 'lr', 'n_epochs', 'seed']
+AXES = ['architecture', 'gamma', 'lr', 'n_epochs', 'seed', 'ent_coef', 'gae_lambda']
 
 
 def decimal_text(value):
@@ -22,7 +21,8 @@ def coordinates(config):
     from train_and_eval.dashboard.lineage import architecture_label
     ppo = config['ppo']
     return (architecture_label(config), decimal_text(ppo['gamma']),
-            decimal_text(ppo['learning_rate']), int(ppo['n_epochs']), int(config['run']['seed']))
+            decimal_text(ppo['learning_rate']), int(ppo['n_epochs']), int(config['run']['seed']),
+            decimal_text(ppo['ent_coef']), decimal_text(ppo['gae_lambda']))
 
 
 def family_settings(config):
@@ -30,7 +30,7 @@ def family_settings(config):
     value = copy.deepcopy(config)
     for section in ('run', 'continuation', 'logging', 'artifacts'):
         value.pop(section, None)
-    for key in ('hidden_sizes', 'gamma', 'learning_rate', 'n_epochs'):
+    for key in ('hidden_sizes', 'gamma', 'learning_rate', 'n_epochs', 'ent_coef', 'gae_lambda'):
         value['ppo'].pop(key, None)
     return value
 
@@ -168,35 +168,27 @@ def coverage_rows(entries, runs, checkpoints, evaluations):
     return pd.DataFrame(rows), families
 
 
-def grid_cells(frame, axes, phases):
-    """Explicit Cartesian expectation, including configurations absent on disk."""
+def grid_cells(frame):
+    """One cell per declared coordinate tuple; never invent Cartesian configs."""
     cells = []
-    for values in itertools.product(*(axes[a] for a in AXES)):
-        subset = frame
-        for axis, value in zip(AXES, values):
-            subset = subset.loc[subset[axis] == value]
-        present = set(subset.phase.dropna().astype(int))
-        missing = sorted(set(phases) - present)
-        done = sum(bool((subset.loc[subset.phase == p, 'ready']).all())
-                   for p in phases if len(subset.loc[subset.phase == p]) == 1)
-        if subset.empty:
-            state = 'no_config'
-        elif subset.issues.ne('').any() or subset.status.isin(['failed', 'cancelled']).any():
+    for key, subset in frame.groupby(['family', *AXES], dropna=False, sort=True):
+        done = int(subset.ready.sum())
+        if subset.issues.ne('').any() or subset.status.isin(['failed', 'cancelled']).any():
             state = 'issue'
         elif subset.status.eq('running').any():
             state = 'running'
-        elif missing:
-            state = 'missing_config'
-        elif done == len(phases):
+        elif done == len(subset):
             state = 'complete'
         elif subset.status.eq('completed').any():
             state = 'partial'
         else:
             state = 'not_started'
-        cells.append(dict(zip(AXES, values), state=state, done=done, total=len(phases),
-                          missing_phases=', '.join(f'v{x}' for x in missing),
-                          planned=len(subset), completed_runs=int(subset.status.eq('completed').sum())))
-    return pd.DataFrame(cells)
+        cells.append(dict(zip(['family', *AXES], key), state=state, done=done,
+                          total=len(subset), planned=len(subset),
+                          planned_phases=', '.join(f'v{p:02d}' for p in sorted(set(subset.phase.dropna().astype(int)))),
+                          completed_runs=int(subset.status.eq('completed').sum())))
+    return pd.DataFrame(cells, columns=['family', *AXES, 'state', 'done', 'total',
+                                      'planned', 'planned_phases', 'completed_runs'])
 
 
 def load_registry():
@@ -220,11 +212,9 @@ def load_registry():
 
 
 LABELS = {'complete': '✓ Complete', 'partial': '◐ Partial', 'running': '▶ Running',
-          'issue': '! Needs review', 'not_started': '○ Not started',
-          'no_config': '— No config', 'missing_config': '— Missing stages'}
+          'issue': '! Needs review', 'not_started': '○ Not started'}
 COLORS = {'complete': '#2ca873', 'partial': '#eab54b', 'running': '#559ee8',
-          'issue': '#e36868', 'not_started': '#939ba7',
-          'no_config': '#d6d9df', 'missing_config': '#b391d4'}
+          'issue': '#e36868', 'not_started': '#939ba7'}
 
 
 def coverage_figure(cells):
@@ -263,16 +253,16 @@ def render_grid_coverage(root: Path):
     )
     if not manifests:
         st.info('No queue manifests found.'); return
-    selected = st.multiselect('Planned queues', manifests,
-        default=manifests, format_func=lambda p: p.stem, key='coverage_manifests')
-    if not selected:
-        st.info('Select at least one queue.'); return
-    entries, errors = read_plan(root, selected)
+    selected = st.selectbox('Grid / queue', manifests,
+        format_func=lambda p: str(p.relative_to(root / 'configs/search_queues')), key='coverage_queue')
+    scope = str(selected.relative_to(root))
+    entries, errors = read_plan(root, [selected])
     if errors:
         st.error('Some planned configs could not be read. Coverage is incomplete; see plan errors.')
         with st.expander('Plan errors', expanded=True):
             for error in errors:
                 st.write(error)
+        return  # Never report full coverage from a partially readable plan.
     if not entries:
         return
     try:
@@ -280,72 +270,58 @@ def render_grid_coverage(root: Path):
     except Exception as exc:
         st.error('Could not read coverage registry.'); st.exception(exc); return
     frame, families = coverage_rows(entries, runs, cps, evals)
-    outside = [dict(run_id=r['id'], name=r['name'], status=r['status']) for r in runs if r['name'] not in entries]
-    with st.expander(f'Runs outside selected plan ({len(outside)})'):
-        dataframe(pd.DataFrame(outside), hide_index=True)
-    st.caption('Families separate all non-axis settings, including data ranges, reward, costs, rollout/batch settings and evaluation protocol.')
-    family = st.selectbox('Configuration family', sorted(families),
+    st.caption(f'Selected queue: {selected.stem} · {len(frame)} declared runs · '
+               f'{int(frame.ready.sum())} ready. Only this queue defines expected coverage. '
+               'A matching database run is reused even when shared with another grid.')
+    st.caption('Families separate non-axis settings such as data ranges, reward, costs, rollout/batch settings and evaluation protocol.')
+    family = st.selectbox('Configuration family', sorted(families), key=f'coverage_family_{scope}',
         format_func=lambda f: f'{f} · {int(frame.family.eq(f).sum())} planned runs')
     with st.expander('Family settings — parameters held constant'):
         st.json(families[family])
-    frame = frame.loc[frame.family == family].copy()
-    a,b = st.columns(2)
-    ne = a.selectbox('PPO n_epochs', sorted(frame.n_epochs.unique()))
-    seed = b.selectbox('Seed', sorted(frame.seed.unique()))
-    # Keep inferred axes across this family before filtering to detect asymmetric grids.
-    architectures = sorted(frame.architecture.unique())
-    gamma_default = ', '.join(sorted(frame.gamma.unique(), key=Decimal))
-    lr_default = ', '.join(sorted(frame.lr.unique(), key=Decimal))
-    phases_default = max(1, int(frame.phase.max())+1) if frame.phase.notna().any() else 1
-    with st.expander('Expected grid — Cartesian axes', expanded=True):
-        st.caption('Defaults come from selected queue configs, not database results. Declare absent LR/gamma values here to detect wholly unconfigured combinations. Every selected combination is expected at every stage.')
-        arches = st.multiselect('Expected architectures', architectures, default=architectures, key=f'coverage_arch_{family}')
-        gamma_input = st.text_input('Expected gamma values (comma separated)', gamma_default, key=f'coverage_gamma_{family}')
-        lr_input = st.text_input('Expected LR values (comma separated)', lr_default, key=f'coverage_lr_{family}')
-        target = st.number_input('Expected stages per path (v0 included)', min_value=1, max_value=100,
-                                 value=phases_default, step=1, key=f'coverage_stages_{family}')
-    try:
-        gammas = sorted({decimal_text(v.strip()) for v in gamma_input.split(',')}, key=Decimal)
-        lrs = sorted({decimal_text(v.strip()) for v in lr_input.split(',')}, key=Decimal)
-        if not all(Decimal(v).is_finite() and 0 < Decimal(v) <= 1 for v in gammas+lrs):
-            raise ValueError('Values must be finite, positive and at most 1')
-    except Exception as exc:
-        st.error(f'Invalid expected axes: {exc}'); return
-    if not arches:
-        return
-    if len(arches)*len(gammas)*len(lrs) > 5000:
-        st.error('Select at most 5000 cells at once.'); return
-    frame = frame.loc[(frame.n_epochs == ne) & (frame.seed == seed)]
-    axes = dict(architecture=arches, gamma=gammas, lr=lrs, n_epochs=[ne], seed=[seed])
-    cells = grid_cells(frame, axes, range(int(target)))
-    included = frame.loc[frame.architecture.isin(arches) & frame.gamma.isin(gammas) & frame.lr.isin(lrs)]
+    included = frame.loc[frame.family == family].copy()
+    context = f'{scope}_{family}'
+    for axis, label in [('n_epochs', 'PPO n_epochs'), ('seed', 'Seed'),
+                        ('ent_coef', 'Entropy coefficient'), ('gae_lambda', 'GAE lambda')]:
+        options = sorted(included[axis].unique(), key=lambda value: Decimal(str(value)))
+        choice = st.selectbox(label, options, key=f'coverage_{axis}_{context}')
+        included = included.loc[included[axis] == choice]
+        context += f'_{choice}'
+    architectures = sorted(included.architecture.unique())
+    arches = st.multiselect('Architectures', architectures, default=architectures,
+                            key=f'coverage_arch_{context}')
+    included = included.loc[included.architecture.isin(arches)]
+    if included.empty:
+        st.info('Select at least one architecture.'); return
+    cells = grid_cells(included)
     a,b,c,d = st.columns(4)
-    a.metric('Expected stages', len(cells)*int(target))
+    a.metric('Planned stages', len(included))
     b.metric('Completed run records', int(included.status.eq('completed').sum()))
     c.metric('Ready stages', int(cells.done.sum()))
     d.metric('Complete paths', f'{int(cells.state.eq("complete").sum())}/{len(cells)}')
+    st.caption('Only declared configurations are expected. Blank positions are not planned, not missing. '
+               'Each path uses its own declared stages; no global path length is inferred.')
     st.caption('Ready = completed full requested budget + matching config/parent + one final checkpoint record + completed final TRAIN and VAL evaluations. Files on disk are not scanned. Stage number is continuation depth, not a measured data-epoch count.')
     for arch in arches:
         st.markdown(f'**{arch}**')
         event = plotly_chart(coverage_figure(cells.loc[cells.architecture == arch]),
-            use_container_width=True, on_select='rerun', selection_mode='points', key=f'coverage_chart_{family}_{ne}_{seed}_{arch}')
+            use_container_width=True, on_select='rerun', selection_mode='points', key=f'coverage_chart_{context}_{arch}')
         points = event.get('selection', {}).get('points', [])
         if points:
             point = points[0].get('customdata')
             if point:
-                detail = frame
+                detail = included
                 for axis, value in zip(AXES, point):
                     detail = detail.loc[detail[axis] == value]
                 dataframe(detail.drop(columns=['family', 'ready']).sort_values('phase'), hide_index=True)
                 if detail.empty:
                     st.info('No configuration is planned for this cell.')
-    st.subheader('Gaps')
+    st.subheader('Unfinished planned paths')
     gaps = cells.loc[cells.state != 'complete'].copy()
     dataframe(gaps, hide_index=True, use_container_width=True)
-    st.download_button('Download gaps CSV', gaps.to_csv(index=False), 'grid_coverage_gaps.csv', 'text/csv')
+    st.download_button('Download gaps CSV', gaps.to_csv(index=False), f'{selected.stem}_coverage_unfinished.csv', 'text/csv')
     st.subheader('Stage details')
     problems_only = st.checkbox('Only unfinished stages or issues', value=True)
     details = included.loc[~included.ready] if problems_only else included
     details = details.drop(columns=['family', 'ready']).sort_values(AXES+['phase'], na_position='last')
     dataframe(details, hide_index=True, use_container_width=True)
-    st.download_button('Download stage details CSV', details.to_csv(index=False), 'grid_coverage_stages.csv', 'text/csv')
+    st.download_button('Download stage details CSV', details.to_csv(index=False), f'{selected.stem}_coverage_stages.csv', 'text/csv')

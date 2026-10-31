@@ -38,8 +38,8 @@ def registry(plan):
     return runs,cps,evals
 
 
-def cells(frame, phases=range(2)):
-    return grid_cells(frame, {a:list(frame[a].unique()) for a in ('architecture','gamma','lr','n_epochs','seed')}, phases)
+def cells(frame):
+    return grid_cells(frame)
 
 
 def test_complete_path_uses_config_and_both_scopes(plan):
@@ -51,15 +51,12 @@ def test_complete_path_uses_config_and_both_scopes(plan):
     assert 'agent_return' not in frame.columns
 
 
-def test_pending_and_missing_grid_stages(plan):
+def test_pending_plan_has_no_inferred_stages(plan):
     frame,_ = coverage_rows(plan,[],[],[])
-    assert cells(frame).iloc[0]['state'] == 'not_started'
-    result = cells(frame, range(3)).iloc[0]
-    assert result['state'] == 'missing_config'
-    assert result['missing_phases'] == 'v2'
-    axes={a:list(frame[a].unique()) for a in ('architecture','gamma','lr','n_epochs','seed')}
-    axes['lr'] = ['0.000000001']
-    assert grid_cells(frame,axes,range(2)).iloc[0]['state'] == 'no_config'
+    result = cells(frame).iloc[0]
+    assert result['state'] == 'not_started'
+    assert result['total'] == 2
+    assert result['planned_phases'] == 'v00, v01'
 
 
 @pytest.mark.parametrize('status,state', [('running','running'),('failed','issue'),('cancelled','issue'),('pending','partial')])
@@ -159,7 +156,5 @@ def test_ui_handles_empty_database_and_axis_changes(plan,tmp_path,monkeypatch):
         f'render_grid_coverage(Path({str(tmp_path)!r}))\n').run(timeout=20)
     assert not app.exception
     assert next(m for m in app.metric if m.label=='Ready stages').value == '0'
-    lr_input=next(t for t in app.text_input if t.label.startswith('Expected LR'))
-    lr_input.set_value('0.000000001').run(timeout=20)
-    assert not app.exception
-    assert any('no_config' in df.value.get('state',pd.Series(dtype=str)).values for df in app.dataframe)
+    assert not app.text_input
+    assert next(m for m in app.metric if m.label=='Planned stages').value == '2'

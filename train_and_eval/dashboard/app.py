@@ -606,6 +606,8 @@ def scatter_tab(
         for column in (
             "run_id",
             "run.architecture",
+            find_column(frame.columns, ".ent_coef"),
+            find_column(frame.columns, ".gae_lambda"),
             run_name,
             seed,
             exposure_penalty,
@@ -753,6 +755,8 @@ def activity_tab(
         for column in (
             "run_id",
             "run.architecture",
+            find_column(frame.columns, ".ent_coef"),
+            find_column(frame.columns, ".gae_lambda"),
             run_name,
             seed,
             exposure_penalty,
@@ -1058,6 +1062,8 @@ def pareto_tab(
         for column in (
             "run_id",
             "run.architecture",
+            find_column(frame.columns, ".ent_coef"),
+            find_column(frame.columns, ".gae_lambda"),
             run_name,
             seed,
             score,

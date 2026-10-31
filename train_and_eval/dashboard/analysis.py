@@ -86,7 +86,7 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
     label = lambda c: ('config.' + c.removeprefix('cfg.normalized_config_json.')) if c.startswith('cfg.normalized_config_json.') else c
     with st.expander('Filters', expanded=True):
         defaults = [c for c in dimensions if c == 'run.architecture' or
-                    c.endswith(('ppo.learning_rate', 'ppo.gamma', 'ppo.n_epochs', 'run.seed'))]
+                    c.endswith(('ppo.learning_rate', 'ppo.gamma', 'ppo.n_epochs', 'ppo.ent_coef', 'ppo.gae_lambda', 'run.seed'))]
         fields = st.multiselect('Filter parameters', dimensions, default=defaults,
                                 format_func=label, key='ga_filter_fields')
         selections, ranges = {}, {}
@@ -144,7 +144,7 @@ def render_grid_analysis(explorer: pd.DataFrame, scope: str) -> None:
                 'eval.market_exposure', 'eval.round_trips'] if m in metrics]
     chosen = st.multiselect('Evaluation metrics', metrics, default=defaults, format_func=label, key='ga_metrics')
     grouping = st.multiselect('Group by (combine any parameters)', dimensions,
-                default=[c for c in dimensions if c.endswith('ppo.gamma')], format_func=label, key='ga_groups')
+                default=[c for c in dimensions if c.endswith(('ppo.gamma', 'ppo.ent_coef', 'ppo.gae_lambda'))], format_func=label, key='ga_groups')
     st.caption('N = finite values for this metric; paths = distinct fresh ancestors. '
                'Averages weight runs equally. Mixing stages gives longer paths more weight; '
                'runs within one path are not independent repetitions. Missing values are not zero.')

@@ -1124,6 +1124,13 @@ def train_ppo_run(
             segment_result = (
                 learn_ppo_exact_timesteps(
                     model,
+                    **({
+                        "diagnostics_path": str(
+                            root / artifacts_directory / "runs"
+                            / f"{run_id:08d}" / "critic_diagnostics.jsonl"
+                        ),
+                        "diagnostics_step_offset": int(model.num_timesteps) - model_steps_before,
+                    } if config.run.name == "diagnostic_repeat_3732" else {}),
                     total_timesteps=(
                         segment_steps
                     ),

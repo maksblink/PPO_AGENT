@@ -359,6 +359,8 @@ def learn_ppo_exact_timesteps(
     log_interval: int | None = 1,
     progress_bar: bool = False,
     update_callback: Callable[[PPOTrainingUpdate], None] | None = None,
+    diagnostics_path: str | None = None,
+    diagnostics_step_offset: int = 0,
 ) -> ExactPPOTrainingResult:
     """
     Train PPO for exactly the requested number of environment steps.
@@ -501,7 +503,14 @@ def learn_ppo_exact_timesteps(
             ):
                 model.dump_logs(iteration)
 
-            model.train()
+            if diagnostics_path is None:
+                model.train()
+            else:
+                from .critic_diagnostics import train_observed
+                train_observed(
+                    model, diagnostics_path,
+                    diagnostics_step_offset + int(model.num_timesteps) - model_steps_before,
+                )
 
             if update_callback is not None:
                 update_callback(

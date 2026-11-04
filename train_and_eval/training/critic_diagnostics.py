@@ -48,7 +48,7 @@ def measure(model):
             "prediction": stats(predictions), "error": stats(errors)}
 
 
-def train_observed(model, path, local_step):
+def train_observed(model, path, local_step, *, capture=False):
     """Call original train exactly once; remove all observers even on failure."""
     if hashlib.sha256(inspect.getsource(PPO.train).encode()).hexdigest() != EXPECTED_TRAIN_HASH:
         raise RuntimeError("Unsupported PPO.train source; diagnostics not started")
@@ -119,6 +119,11 @@ def train_observed(model, path, local_step):
         row["updates"].append(dict(current))
         saved.clear()
 
+    capture_directory = None
+    if capture:
+        from .critic_rollout_experiment import CAPTURE_STEP, capture_before
+        if local_step == CAPTURE_STEP:
+            capture_directory = capture_before(model, path, local_step)
     handles = []
     try:
         if detailed:
@@ -136,3 +141,7 @@ def train_observed(model, path, local_step):
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(row, allow_nan=False) + "\n")
+
+    if capture_directory is not None:
+        from .critic_rollout_experiment import capture_after
+        capture_after(model, capture_directory, row)

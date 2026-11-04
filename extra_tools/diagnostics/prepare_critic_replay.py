@@ -18,7 +18,10 @@ from train_and_eval.training.critic_diagnostics import EXPECTED_TRAIN_HASH, REPL
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--capture', action='store_true', help='Prepare a new replay capturing the rollout at step 404480')
     args = parser.parse_args()
+    replay_name = 'diagnostic_capture_3732' if args.capture else REPLAY_NAME
+    queue_name = 'critic_capture_3732' if args.capture else 'critic_repeat_3732'
     if hashlib.sha256(inspect.getsource(PPO.train).encode()).hexdigest() != EXPECTED_TRAIN_HASH:
         raise SystemExit('STOP: PPO.train differs from reviewed source')
     engine = create_database_engine()
@@ -29,7 +32,7 @@ def main():
             parent = c.execute(text('SELECT c.run_id, c.relative_path, c.save_reason, r.name, r.status FROM checkpoints c JOIN runs r ON r.id=c.run_id WHERE c.id=:id'), {'id':run['source_checkpoint_id']}).mappings().one()
             if run['status'] != 'completed' or parent['status'] != 'completed' or parent['run_id'] != 3730 or parent['save_reason'] != 'final':
                 raise SystemExit('STOP: original/parent identity or status mismatch')
-            if c.execute(text('SELECT count(*) FROM runs WHERE name=:name'), {'name':REPLAY_NAME}).scalar_one():
+            if c.execute(text('SELECT count(*) FROM runs WHERE name=:name'), {'name':replay_name}).scalar_one():
                 raise SystemExit('STOP: diagnostic run already exists; inspect it before retrying')
             cfg = run['normalized_config_json']
             cfg = json.loads(cfg) if isinstance(cfg, str) else copy.deepcopy(cfg)
@@ -47,19 +50,19 @@ def main():
             c.rollback()
     finally:
         engine.dispose()
-    cfg['run']['name']=REPLAY_NAME
+    cfg['run']['name']=replay_name
     from train_and_eval.run_config import RunConfig
     RunConfig.model_validate(cfg)
-    config=Path('configs/diagnostics/critic_repeat_3732.yml')
-    queue=Path('configs/search_queues/diagnostics/critic_repeat_3732.yml')
-    files={config:yaml.safe_dump(cfg,sort_keys=False),queue:yaml.safe_dump({'queue_schema_version':1,'name':'critic_repeat_3732','configs':[str(config)]},sort_keys=False)}
+    config=Path(f'configs/diagnostics/{queue_name}.yml')
+    queue=Path(f'configs/search_queues/diagnostics/{queue_name}.yml')
+    files={config:yaml.safe_dump(cfg,sort_keys=False),queue:yaml.safe_dump({'queue_schema_version':1,'name':queue_name,'configs':[str(config)]},sort_keys=False)}
     for relative, content in files.items():
         path=ROOT/relative
         if path.exists() and path.read_text()!=content:
             raise SystemExit(f'STOP: refusing to overwrite differing file: {relative}')
     print(f'Original: #3732 {run["name"]}')
     print(f'Parent: #3730; checkpoint #{run["source_checkpoint_id"]}; SHA256={digest}')
-    print(f'Replay: {REPLAY_NAME}; only run.name changes')
+    print(f'Replay: {replay_name}; only run.name changes')
     for relative, content in files.items():
         print(('READY: ' if args.apply else 'PREVIEW: ')+str(relative))
         if args.apply:

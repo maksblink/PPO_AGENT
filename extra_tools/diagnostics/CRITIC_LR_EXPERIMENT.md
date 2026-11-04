@@ -4,7 +4,7 @@
 
 This experiment extends the existing diagnostic replay only. Normal run configs,
 PPO configuration schema, existing grids and installed SB3 files are unchanged.
-The only new special run name is `diagnostic_capture_3732`. It repeats #3732 from
+The single-capture run name is `diagnostic_capture_3732`. It repeats #3732 from
 #3730's final checkpoint using the same training parameters.
 
 Run #4079 only recorded statistics. It cannot supply the full optimizer/model state
@@ -109,3 +109,76 @@ The earlier diagnostic was committed together with training analysis. Do not
 revert that earlier mixed commit wholesale if training analysis should remain.
 Removing that earlier diagnostic requires a separate targeted cleanup change.
 No cleanup or Git revert is performed automatically by this tool.
+
+## Multi-rollout extension
+
+Use a separate run `diagnostic_capture_multi_3732` to keep #4080 and the first
+experiment unchanged. This run follows the original #3732 configuration from
+parent #3730; only its name differs. Capture does not change LR during training.
+
+```bash
+python extra_tools/diagnostics/prepare_critic_replay.py --capture-multi
+python extra_tools/diagnostics/prepare_critic_replay.py --capture-multi --apply
+python run_managed_queue.py --queue critic_capture_multi_3732 --dry-run
+python run_managed_queue.py --queue critic_capture_multi_3732
+```
+
+The 16 fixed local steps are selected before running new LR variants:
+
+| Group | Steps | Reason |
+|---|---|---|
+| Known spikes | 404480, 475136, 585728 | Recheck three observed instabilities |
+| Neighbors | 403456, 405504, 474112, 476160, 584704, 586752 | Behavior immediately before and after each spike |
+| Scheduled controls | 1024, 64512, 128000, 256000, 384000, 512000, 638976 | Cover early, middle and late training |
+
+The first four scheduled controls have nonzero rewards in the saved #4079
+timeline. Controls are not claimed to be uniformly stable: step 512000 also
+worsened in the original update. The report preserves actual reward counts,
+action counts and target variance context. This is a targeted diagnostic sample,
+not a random sample or an unbiased estimate of all training updates.
+
+Every selected step stores pre-update weights, Adam, RNG and rollout, plus the
+expected original post-update state and detailed measurements. Captures may use
+several GiB in total; allow extra disk space and replay time. No existing capture
+is overwritten. The existing single-capture commands continue to work.
+
+After the new managed replay completes, with no other training running:
+
+```bash
+python extra_tools/diagnostics/critic_lr_sweep.py
+```
+
+The sweep validates all 16 capture inventories before running trials. It invokes
+the existing guarded experiment in a fresh process per rollout, restoring its
+recorded runtime settings. Both exact-reproduction controls must pass separately
+for every rollout before its lower-LR trials. The sweep stops at the first failed
+control and retains an explicitly stopped partial report.
+
+Each variant starts from that rollout's ORIGINAL pre-update state. Lower-LR
+results are not carried into the next rollout. Thus this tests immediate fitting
+behavior, not the trajectory of a model trained with a lower LR throughout.
+
+Outputs are stored in the NEW run directory under `critic_lr_sweep/<timestamp>/`:
+
+- `report.json`: compact combined report with every rollout, category, reward
+  count, actor-change/clipping counts and the full per-update MSE sequences;
+- `<step>/report.json`: single-rollout comparison and runtime information;
+- `<step>/*.jsonl`: original, equal-LR control and lower-LR detailed traces.
+
+Final/initial MSE tests improvement from the captured state. Final/original MSE
+compares each variant with the original update; below 1 means lower fixed-target
+error. Also inspect peak error, NMSE, EV, actor changes and individual controls.
+Do not select LR solely from the most extreme spike or aggregate all categories
+into one winner. Zero denominators produce null ratios. The combined report does
+not create additional database runs or perform TRAIN/VAL market evaluation.
+
+The sweep runs GPU updates without changing hardware controls; do not run it
+alongside a queue. Use a plain terminal, without debugger or coverage tracing.
+Original full-training equivalence to #3732 is a separate check: the sweep's
+controls verify each saved update against the NEW capture run, not the entire
+new run against the historical run.
+
+Keep the extension in a separate commit. Cleanup later removes only the new
+multi-capture run through clean-first-stage, its diagnostic config/queue and
+queue session logs, then reverts the extension if desired. Preserve #4079, #4080
+and all original runs until results have been reviewed. No cleanup is automatic.

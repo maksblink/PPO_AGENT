@@ -1130,8 +1130,9 @@ def train_ppo_run(
                             / f"{run_id:08d}" / "critic_diagnostics.jsonl"
                         ),
                         "diagnostics_step_offset": int(model.num_timesteps) - model_steps_before,
-                        "diagnostics_capture": config.run.name == "diagnostic_capture_3732",
-                    } if config.run.name in {"diagnostic_repeat_3732", "diagnostic_capture_3732"} else {}),
+                        "diagnostics_capture": ("multi" if config.run.name == "diagnostic_capture_multi_3732"
+                                                else config.run.name == "diagnostic_capture_3732"),
+                    } if config.run.name in {"diagnostic_repeat_3732", "diagnostic_capture_3732", "diagnostic_capture_multi_3732"} else {}),
                     total_timesteps=(
                         segment_steps
                     ),

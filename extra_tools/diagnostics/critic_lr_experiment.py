@@ -28,6 +28,7 @@ def resolve_capture(explicit):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--capture',help='Trusted local capture directory; otherwise find the completed capture run in a read-only DB query')
+    parser.add_argument('--output-dir', help='New, nonexisting directory for this single-rollout experiment')
     parser.add_argument('--factors',type=float,nargs='+',default=[0.5,0.25,0.1])
     args=parser.parse_args()
     import math
@@ -59,7 +60,8 @@ def main():
     if meta['device'].startswith('cuda'):
         if not torch.cuda.is_available() or torch.cuda.get_device_name(meta['device'])!=meta['gpu']:
             raise RuntimeError('Capture requires the original CUDA GPU')
-    output=directory.parent/'critic_lr_experiment'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+    output=(Path(args.output_dir).expanduser().resolve() if args.output_dir else
+            directory.parent/'critic_lr_experiment'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
     output.mkdir(parents=True,exist_ok=False)
     report={'capture':str(directory),'runtime':meta,'baseline_reproduced':False,'split_control_reproduced':False,'trials':[]}
     def save():
@@ -84,6 +86,7 @@ def main():
                     'after_nmse':row['after']['nmse'],'after_ev':row['after']['ev'],
                     'peak_mse':max(u['post']['mse'] for u in row['updates']),
                     'best_mse':min(u['post']['mse'] for u in row['updates']),
+                    'updates':[{'update':u['update'],'epoch':u['epoch'],'mse':u['post']['mse']} for u in row['updates']],
                     'clipped_updates':sum(u['critic_grad_before_clip']!=u['critic_grad_after_clip'] for u in row['updates']),
                     'epochs':[{'epoch':u['epoch'],'mse':u['post']['mse']} for i,u in enumerate(row['updates'])
                               if i+1==len(row['updates']) or row['updates'][i+1]['epoch']!=u['epoch']]}

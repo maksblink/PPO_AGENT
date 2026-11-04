@@ -16,6 +16,27 @@ from stable_baselines3 import PPO
 
 CAPTURE_NAME = 'diagnostic_capture_3732'
 CAPTURE_STEP = 404480
+MULTI_CAPTURE_NAME = 'diagnostic_capture_multi_3732'
+SPIKE_STEPS = (404480, 475136, 585728)
+CONTROL_STEPS = (1024, 64512, 128000, 256000, 384000, 512000, 638976)
+MULTI_CAPTURE_STEPS = tuple(sorted(set(CONTROL_STEPS) | {
+    step + offset for step in SPIKE_STEPS for offset in (-1024, 0, 1024)
+}))
+
+
+def capture_steps(mode):
+    if mode is False: return ()
+    if mode is True: return (CAPTURE_STEP,)
+    if mode == 'multi': return MULTI_CAPTURE_STEPS
+    raise ValueError('Unknown critic capture mode')
+
+
+def step_category(step):
+    if step in SPIKE_STEPS: return 'known_spike'
+    if step in CONTROL_STEPS: return 'scheduled_control'
+    if step in MULTI_CAPTURE_STEPS: return 'spike_neighbor'
+    raise ValueError('Step is outside the predefined experiment')
+
 
 
 def sha(path):
@@ -174,7 +195,8 @@ def run_trial(directory, output, label, factor=None):
     if trace.exists():raise RuntimeError(f'Refusing to append to previous trial: {trace}')
     restore_rng(payload['rng'])
     try:
-        train_observed(model,trace,meta['run_step'])
+        train_observed(model,trace,meta['run_step'],
+                       force_detailed=meta['run_step'] in MULTI_CAPTURE_STEPS)
         result={'model':parameter_state(model),'rng':rng_state(model.device.type=='cuda')}
         row=json.loads(trace.read_text())
     finally:

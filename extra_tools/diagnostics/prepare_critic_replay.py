@@ -18,10 +18,15 @@ from train_and_eval.training.critic_diagnostics import EXPECTED_TRAIN_HASH, REPL
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply', action='store_true')
-    parser.add_argument('--capture', action='store_true', help='Prepare a new replay capturing the rollout at step 404480')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--capture-multi', action='store_true', help='Capture 16 preselected rollouts in a new replay')
+    modes.add_argument('--capture', action='store_true', help='Prepare a new replay capturing the rollout at step 404480')
     args = parser.parse_args()
     replay_name = 'diagnostic_capture_3732' if args.capture else REPLAY_NAME
     queue_name = 'critic_capture_3732' if args.capture else 'critic_repeat_3732'
+    if args.capture_multi:
+        replay_name = 'diagnostic_capture_multi_3732'
+        queue_name = 'critic_capture_multi_3732'
     if hashlib.sha256(inspect.getsource(PPO.train).encode()).hexdigest() != EXPECTED_TRAIN_HASH:
         raise SystemExit('STOP: PPO.train differs from reviewed source')
     engine = create_database_engine()

@@ -48,7 +48,7 @@ def measure(model):
             "prediction": stats(predictions), "error": stats(errors)}
 
 
-def train_observed(model, path, local_step, *, capture=False):
+def train_observed(model, path, local_step, *, capture=False, force_detailed=False):
     """Call original train exactly once; remove all observers even on failure."""
     if hashlib.sha256(inspect.getsource(PPO.train).encode()).hexdigest() != EXPECTED_TRAIN_HASH:
         raise RuntimeError("Unsupported PPO.train source; diagnostics not started")
@@ -60,7 +60,9 @@ def train_observed(model, path, local_step, *, capture=False):
                          torch.nn.modules.batchnorm._BatchNorm))
            for m in model.policy.modules()):
         raise RuntimeError("Diagnostics require a policy without Dropout/BatchNorm")
-    detailed = local_step in DETAILED_STEPS
+    from .critic_rollout_experiment import capture_steps
+    selected_for_capture = local_step in capture_steps(capture)
+    detailed = force_detailed or selected_for_capture or local_step in DETAILED_STEPS
     b = model.rollout_buffer
     row = {"run_step": local_step, "model_step": int(model.num_timesteps),
            "detailed": detailed, "target": stats(b.returns),
@@ -121,8 +123,8 @@ def train_observed(model, path, local_step, *, capture=False):
 
     capture_directory = None
     if capture:
-        from .critic_rollout_experiment import CAPTURE_STEP, capture_before
-        if local_step == CAPTURE_STEP:
+        from .critic_rollout_experiment import capture_before
+        if selected_for_capture:
             capture_directory = capture_before(model, path, local_step)
     handles = []
     try:

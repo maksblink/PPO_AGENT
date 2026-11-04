@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 
-def resolve_run(explicit):
+def resolve_run(explicit, source_run_id=3732):
     if explicit:
         return Path(explicit).expanduser().resolve()
     from sqlalchemy import text
@@ -21,10 +21,10 @@ def resolve_run(explicit):
         with engine.connect() as connection:
             connection.execute(text('SET TRANSACTION READ ONLY'))
             rows = connection.execute(text(
-                "SELECT id,status FROM runs WHERE name='diagnostic_capture_multi_3732'"
-            )).mappings().all()
+                "SELECT id,status FROM runs WHERE name=:name"
+            ), {"name": f"diagnostic_capture_multi_{source_run_id}"}).mappings().all()
             if len(rows) != 1 or rows[0]['status'] != 'completed':
-                raise RuntimeError('Expected one completed diagnostic_capture_multi_3732 run')
+                raise RuntimeError(f'Expected one completed diagnostic_capture_multi_{source_run_id} run')
             return ROOT / 'artifacts/runs' / f'{rows[0]["id"]:08d}'
     finally:
         engine.dispose()
@@ -71,19 +71,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', help='Trusted local multi-capture run directory; default: resolve completed run in DB')
     parser.add_argument('--factors', type=float, nargs='+', default=[0.5, 0.25, 0.1])
+    parser.add_argument('--source-run-id', type=int, choices=[3732, 2143], default=3732)
     args = parser.parse_args()
     if any(not math.isfinite(f) or f <= 0 for f in args.factors):
         parser.error('Factors must be finite and positive')
     factors = [1.0] + [f for f in dict.fromkeys(args.factors) if f != 1.0]
-    run_dir = resolve_run(args.run_dir)
+    run_dir = (resolve_run(args.run_dir) if args.source_run_id == 3732
+               else resolve_run(args.run_dir, args.source_run_id))
     from train_and_eval.training.critic_rollout_experiment import (
-        MULTI_CAPTURE_STEPS, verify_capture, step_category,
+        MULTI_CAPTURE_STEPS, GAE85_CAPTURE_STEPS, verify_capture, step_category,
     )
+    steps = GAE85_CAPTURE_STEPS if args.source_run_id == 2143 else MULTI_CAPTURE_STEPS
     captures = []
     # Validate every input before executing the first experiment.
-    for step in MULTI_CAPTURE_STEPS:
+    for step in steps:
         directory = run_dir / f'critic_capture_{step}'
         meta = verify_capture(directory)
+        if args.source_run_id == 2143 and (meta.get('gae_lambda') != 0.85 or meta.get('gamma') != 0.9):
+            raise RuntimeError('Capture GAE/gamma mismatch for source 2143')
         row = json.loads((directory / 'expected_diagnostics.json').read_text())
         if meta['run_step'] != step or row['run_step'] != step or not row['detailed']:
             raise RuntimeError(f'Capture identity/detail mismatch at {step}')
@@ -93,7 +98,7 @@ def main():
     output = run_dir / 'critic_lr_sweep' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     output.mkdir(parents=True, exist_ok=False)
     report = {'status': 'running', 'run_directory': str(run_dir), 'factors': factors,
-              'planned_steps': list(MULTI_CAPTURE_STEPS), 'rollouts': [],
+              'source_run_id': args.source_run_id, 'planned_steps': list(steps), 'rollouts': [],
               'scope': 'Independent fixed-rollout interventions; not a new training trajectory or a return evaluation.'}
     def save():
         (output / 'report.json').write_text(json.dumps(report, indent=2, allow_nan=False))

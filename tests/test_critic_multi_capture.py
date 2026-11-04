@@ -31,7 +31,9 @@ def test_selection_and_modes():
     with pytest.raises(ValueError): step_category(1)
 
 
-def test_multiple_captures_preserve_training_and_reproduce(tmp_path):
+@pytest.mark.parametrize('mode,steps', [('multi', (1024, 128000, 475136)),
+                                         ('gae85', (199680, 248832, 273408))])
+def test_multiple_captures_preserve_training_and_reproduce(tmp_path, mode, steps):
     model = PPO('MlpPolicy', gym.make('CartPole-v1'), n_steps=16, batch_size=8,
                 n_epochs=2, max_grad_norm=1e6, seed=19, device='cpu',
                 policy_kwargs={'net_arch': [8, 8]})
@@ -41,14 +43,14 @@ def test_multiple_captures_preserve_training_and_reproduce(tmp_path):
     artifact_root = tmp_path / "artifacts" / "runs" / "00000001"
     assert not artifact_root.exists()
     # First capture must work before any run artifacts have been written.
-    for step in (1024, 128000, 475136):
+    for step in steps:
         assert model.collect_rollouts(model.env, callback, model.rollout_buffer, n_rollout_steps=16)
         original = copy.deepcopy(model)
         state = rng_state(False)
         original.train()
         expected = {'model': parameter_state(original), 'rng': rng_state(False)}
         restore_rng(state)
-        train_observed(model, artifact_root/'trace.jsonl', step, capture='multi')
+        train_observed(model, artifact_root/'trace.jsonl', step, capture=mode)
         exact(expected, {'model': parameter_state(model), 'rng': rng_state(False)})
         directory = artifact_root/f'critic_capture_{step}'
         assert verify_capture(directory)['run_step'] == step
@@ -145,3 +147,11 @@ def test_sweep_missing_capture_stops_before_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['sweep', '--run-dir', str(tmp_path)])
     with pytest.raises(FileNotFoundError): load_sweep().main()
     assert not (tmp_path/'critic_lr_sweep').exists()
+
+
+def test_gae85_capture_plan():
+    from train_and_eval.training.critic_rollout_experiment import capture_steps, step_category
+    base, extended = set(capture_steps('multi')), set(capture_steps('gae85'))
+    assert len(base) == 16 and len(extended) == 19
+    assert extended - base == {199680, 248832, 273408}
+    assert all(step_category(s) == 'gae85_mse_increase' for s in extended - base)

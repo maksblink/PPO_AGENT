@@ -24,14 +24,19 @@ MULTI_CAPTURE_STEPS = tuple(sorted(set(CONTROL_STEPS) | {
 }))
 
 
+GAE85_EXTRA_STEPS = (199680, 248832, 273408)
+GAE85_CAPTURE_STEPS = tuple(sorted(set(MULTI_CAPTURE_STEPS) | set(GAE85_EXTRA_STEPS)))
+
 def capture_steps(mode):
     if mode is False: return ()
     if mode is True: return (CAPTURE_STEP,)
     if mode == 'multi': return MULTI_CAPTURE_STEPS
+    if mode == 'gae85': return GAE85_CAPTURE_STEPS
     raise ValueError('Unknown critic capture mode')
 
 
 def step_category(step):
+    if step in GAE85_EXTRA_STEPS: return 'gae85_mse_increase'
     if step in SPIKE_STEPS: return 'known_spike'
     if step in CONTROL_STEPS: return 'scheduled_control'
     if step in MULTI_CAPTURE_STEPS: return 'spike_neighbor'
@@ -124,6 +129,7 @@ def capture_before(model, diagnostic_path, local_step):
     try:
         meta = runtime(model)
         meta.update({'format': 1, 'run_step': local_step,
+                     'gae_lambda': float(model.gae_lambda), 'gamma': float(model.gamma),
                      'model_step': int(model.num_timesteps),
                      'progress_remaining': model._current_progress_remaining})
         (directory/'runtime.json').write_text(json.dumps(meta,indent=2))
@@ -196,7 +202,7 @@ def run_trial(directory, output, label, factor=None):
     restore_rng(payload['rng'])
     try:
         train_observed(model,trace,meta['run_step'],
-                       force_detailed=meta['run_step'] in MULTI_CAPTURE_STEPS)
+                       force_detailed=meta['run_step'] in GAE85_CAPTURE_STEPS)
         result={'model':parameter_state(model),'rng':rng_state(model.device.type=='cuda')}
         row=json.loads(trace.read_text())
     finally:

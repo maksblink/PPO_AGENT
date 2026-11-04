@@ -21,21 +21,27 @@ def main():
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--capture-multi', action='store_true', help='Capture 16 preselected rollouts in a new replay')
     modes.add_argument('--capture', action='store_true', help='Prepare a new replay capturing the rollout at step 404480')
+    parser.add_argument('--source-run-id', type=int, choices=[3732, 2143], default=3732)
     args = parser.parse_args()
+    if args.source_run_id == 2143 and not args.capture_multi:
+        parser.error('Source 2143 requires --capture-multi')
+    source_id = args.source_run_id
+    parent_id = 2089 if source_id == 2143 else 3730
+    gae = 0.85 if source_id == 2143 else 0.95
     replay_name = 'diagnostic_capture_3732' if args.capture else REPLAY_NAME
     queue_name = 'critic_capture_3732' if args.capture else 'critic_repeat_3732'
     if args.capture_multi:
-        replay_name = 'diagnostic_capture_multi_3732'
-        queue_name = 'critic_capture_multi_3732'
+        replay_name = f'diagnostic_capture_multi_{source_id}'
+        queue_name = f'critic_capture_multi_{source_id}'
     if hashlib.sha256(inspect.getsource(PPO.train).encode()).hexdigest() != EXPECTED_TRAIN_HASH:
         raise SystemExit('STOP: PPO.train differs from reviewed source')
     engine = create_database_engine()
     try:
         with engine.connect() as c:
             c.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'))
-            run = c.execute(text('SELECT to_jsonb(r) FROM runs r WHERE id=3732')).scalar_one()
+            run = c.execute(text('SELECT to_jsonb(r) FROM runs r WHERE id=:id'), {'id':source_id}).scalar_one()
             parent = c.execute(text('SELECT c.run_id, c.relative_path, c.save_reason, r.name, r.status FROM checkpoints c JOIN runs r ON r.id=c.run_id WHERE c.id=:id'), {'id':run['source_checkpoint_id']}).mappings().one()
-            if run['status'] != 'completed' or parent['status'] != 'completed' or parent['run_id'] != 3730 or parent['save_reason'] != 'final':
+            if run['status'] != 'completed' or parent['status'] != 'completed' or parent['run_id'] != parent_id or parent['save_reason'] != 'final':
                 raise SystemExit('STOP: original/parent identity or status mismatch')
             if c.execute(text('SELECT count(*) FROM runs WHERE name=:name'), {'name':replay_name}).scalar_one():
                 raise SystemExit('STOP: diagnostic run already exists; inspect it before retrying')
@@ -43,8 +49,19 @@ def main():
             cfg = json.loads(cfg) if isinstance(cfg, str) else copy.deepcopy(cfg)
             if cfg['run']['name'] != run['name'] or cfg['continuation']['source_run'] != parent['name']:
                 raise SystemExit('STOP: saved config/ancestry mismatch')
+            if source_id == 2143:
+                ref = c.execute(text('SELECT normalized_config_json FROM runs WHERE id=3732')).scalar_one()
+                ref = json.loads(ref) if isinstance(ref, str) else copy.deepcopy(ref)
+                def stripped(value):
+                    value = copy.deepcopy(value)
+                    value['run'].pop('name', None)
+                    value['ppo'].pop('gae_lambda', None)
+                    value['continuation'].pop('source_run', None)
+                    return value
+                if stripped(cfg) != stripped(ref):
+                    raise SystemExit('STOP: configurations differ beyond GAE and run/source names')
             ppo=cfg['ppo']
-            expected={'device':'cuda','hidden_sizes':[768]*4,'n_epochs':9,'learning_rate':0.00004,'gamma':0.9,'gae_lambda':0.95,'ent_coef':0.0002}
+            expected={'device':'cuda','hidden_sizes':[768]*4,'n_epochs':9,'learning_rate':0.00004,'gamma':0.9,'gae_lambda':gae,'ent_coef':0.0002}
             if any(ppo.get(k)!=v for k,v in expected.items()) or cfg['evaluation']['device']!='cpu':
                 raise SystemExit('STOP: original scientific configuration differs from expected run')
             candidates={ (ROOT/parent['relative_path']).resolve(), (ROOT/'artifacts'/parent['relative_path']).resolve() }
@@ -65,8 +82,8 @@ def main():
         path=ROOT/relative
         if path.exists() and path.read_text()!=content:
             raise SystemExit(f'STOP: refusing to overwrite differing file: {relative}')
-    print(f'Original: #3732 {run["name"]}')
-    print(f'Parent: #3730; checkpoint #{run["source_checkpoint_id"]}; SHA256={digest}')
+    print(f'Original: #{source_id} {run["name"]}')
+    print(f'Parent: #{parent_id}; checkpoint #{run["source_checkpoint_id"]}; SHA256={digest}')
     print(f'Replay: {replay_name}; only run.name changes')
     for relative, content in files.items():
         print(('READY: ' if args.apply else 'PREVIEW: ')+str(relative))

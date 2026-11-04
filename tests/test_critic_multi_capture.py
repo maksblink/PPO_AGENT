@@ -38,17 +38,19 @@ def test_multiple_captures_preserve_training_and_reproduce(tmp_path):
     model.set_logger(configure(folder=str(tmp_path/'logger'), format_strings=[]))
     model.learn(16)
     _, callback = model._setup_learn(64, None, reset_num_timesteps=False)
-    # Newly detailed controls plus a previously captured spike; same replay continues.
-    for step in (64512, 128000, 475136):
+    artifact_root = tmp_path / "artifacts" / "runs" / "00000001"
+    assert not artifact_root.exists()
+    # First capture must work before any run artifacts have been written.
+    for step in (1024, 128000, 475136):
         assert model.collect_rollouts(model.env, callback, model.rollout_buffer, n_rollout_steps=16)
         original = copy.deepcopy(model)
         state = rng_state(False)
         original.train()
         expected = {'model': parameter_state(original), 'rng': rng_state(False)}
         restore_rng(state)
-        train_observed(model, tmp_path/'trace.jsonl', step, capture='multi')
+        train_observed(model, artifact_root/'trace.jsonl', step, capture='multi')
         exact(expected, {'model': parameter_state(model), 'rng': rng_state(False)})
-        directory = tmp_path/f'critic_capture_{step}'
+        directory = artifact_root/f'critic_capture_{step}'
         assert verify_capture(directory)['run_step'] == step
         expected_row = json.loads((directory/'expected_diagnostics.json').read_text())
         assert expected_row['detailed'] and len(expected_row['updates']) == 4
@@ -59,7 +61,7 @@ def test_multiple_captures_preserve_training_and_reproduce(tmp_path):
             exact(expected_row, row)
         # Offline replay must not alter continuation of the capture training.
         restore_rng(expected['rng'])
-    assert len(list(tmp_path.glob('critic_capture_*'))) == 3
+    assert len(list(artifact_root.glob('critic_capture_*'))) == 3
 
 
 def load_sweep():

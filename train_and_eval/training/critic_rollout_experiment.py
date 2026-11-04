@@ -119,7 +119,7 @@ def runtime(model):
 def capture_before(model, diagnostic_path, local_step):
     """Only explicit capture runs call this; preserve all RNG state."""
     directory = Path(diagnostic_path).parent / f'critic_capture_{local_step}'
-    directory.mkdir(exist_ok=False)
+    directory.mkdir(parents=True, exist_ok=False)
     state = rng_state(model.device.type == 'cuda')
     try:
         meta = runtime(model)

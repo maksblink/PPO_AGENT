@@ -1,4 +1,4 @@
-"""Temporary capture/replay of one fixed PPO rollout, independent of database."""
+"""Capture/replay of a fixed PPO rollout, independent of database."""
 from __future__ import annotations
 import copy
 import hashlib
@@ -13,36 +13,6 @@ import numpy as np
 import torch
 import stable_baselines3
 from stable_baselines3 import PPO
-
-CAPTURE_NAME = 'diagnostic_capture_3732'
-CAPTURE_STEP = 404480
-MULTI_CAPTURE_NAME = 'diagnostic_capture_multi_3732'
-SPIKE_STEPS = (404480, 475136, 585728)
-CONTROL_STEPS = (1024, 64512, 128000, 256000, 384000, 512000, 638976)
-MULTI_CAPTURE_STEPS = tuple(sorted(set(CONTROL_STEPS) | {
-    step + offset for step in SPIKE_STEPS for offset in (-1024, 0, 1024)
-}))
-
-
-GAE85_EXTRA_STEPS = (199680, 248832, 273408)
-GAE85_CAPTURE_STEPS = tuple(sorted(set(MULTI_CAPTURE_STEPS) | set(GAE85_EXTRA_STEPS)))
-
-def capture_steps(mode):
-    if mode is False: return ()
-    if mode is True: return (CAPTURE_STEP,)
-    if mode == 'multi': return MULTI_CAPTURE_STEPS
-    if mode == 'gae85': return GAE85_CAPTURE_STEPS
-    raise ValueError('Unknown critic capture mode')
-
-
-def step_category(step):
-    if step in GAE85_EXTRA_STEPS: return 'gae85_mse_increase'
-    if step in SPIKE_STEPS: return 'known_spike'
-    if step in CONTROL_STEPS: return 'scheduled_control'
-    if step in MULTI_CAPTURE_STEPS: return 'spike_neighbor'
-    raise ValueError('Step is outside the predefined experiment')
-
-
 
 def sha(path):
     h = hashlib.sha256()
@@ -131,7 +101,10 @@ def capture_before(model, diagnostic_path, local_step):
         meta.update({'format': 1, 'run_step': local_step,
                      'gae_lambda': float(model.gae_lambda), 'gamma': float(model.gamma),
                      'model_step': int(model.num_timesteps),
-                     'progress_remaining': model._current_progress_remaining})
+                     'progress_remaining': model._current_progress_remaining,
+                     'n_epochs': int(model.n_epochs), 'batch_size': int(model.batch_size),
+                     'rollout_samples': int(model.rollout_buffer.buffer_size * model.n_envs),
+                     'target_kl': model.target_kl})
         (directory/'runtime.json').write_text(json.dumps(meta,indent=2))
         model.save(directory/'before.zip')
         torch.save({'buffer': model.rollout_buffer, 'rng': state}, directory/'rollout.pt')
@@ -202,7 +175,7 @@ def run_trial(directory, output, label, factor=None):
     restore_rng(payload['rng'])
     try:
         train_observed(model,trace,meta['run_step'],
-                       force_detailed=meta['run_step'] in GAE85_CAPTURE_STEPS)
+                       force_detailed=True)
         result={'model':parameter_state(model),'rng':rng_state(model.device.type=='cuda')}
         row=json.loads(trace.read_text())
     finally:

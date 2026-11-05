@@ -42,7 +42,7 @@ def test_observer_preserves_update_and_rng(tmp_path,step):
     assert model.collect_rollouts(model.env,callback,model.rollout_buffer,n_rollout_steps=16)
     state=rng(); original=copy.deepcopy(model)
     restore(state);original.train(); expected_rng=rng()
-    restore(state);path=tmp_path/'diagnostics.jsonl';train_observed(model,path,step)
+    restore(state);path=tmp_path/'diagnostics.jsonl';train_observed(model,path,step,detail_steps=(1024,))
     equal(expected_rng,rng())
     equal(original.policy.state_dict(),model.policy.state_dict())
     equal(original.policy.optimizer.state_dict(),model.policy.optimizer.state_dict())
@@ -88,7 +88,7 @@ def test_hooks_removed_after_measurement_failure(tmp_path, monkeypatch):
         return original(model)
     monkeypatch.setattr(diagnostics,'measure',fail)
     with pytest.raises(RuntimeError,match='injected'):
-        diagnostics.train_observed(model,tmp_path/'x',1024)
+        diagnostics.train_observed(model,tmp_path/'x',1024,force_detailed=True)
     assert sys.gettrace() is None
     assert not model.policy.optimizer._optimizer_step_pre_hooks
     assert not model.policy.optimizer._optimizer_step_post_hooks

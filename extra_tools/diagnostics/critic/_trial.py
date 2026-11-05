@@ -6,35 +6,20 @@ import json
 import os
 import sys
 
-ROOT=Path(__file__).resolve().parents[2]
+ROOT=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(ROOT))
-
-
-def resolve_capture(explicit):
-    if explicit:return Path(explicit).expanduser().resolve()
-    from sqlalchemy import text
-    from train_and_eval.database.session import create_database_engine
-    engine=create_database_engine()
-    try:
-        with engine.connect() as c:
-            c.execute(text('SET TRANSACTION READ ONLY'))
-            rows=c.execute(text("SELECT id,status FROM runs WHERE name='diagnostic_capture_3732'")).mappings().all()
-            if len(rows)!=1 or rows[0]['status']!='completed':
-                raise RuntimeError('Expected one completed diagnostic_capture_3732 run')
-            return ROOT/'artifacts'/'runs'/f'{rows[0]["id"]:08d}'/'critic_capture_404480'
-    finally:engine.dispose()
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--capture',help='Trusted local capture directory; otherwise find the completed capture run in a read-only DB query')
+    parser.add_argument('--capture',required=True,help='Trusted local capture directory')
     parser.add_argument('--output-dir', help='New, nonexisting directory for this single-rollout experiment')
     parser.add_argument('--factors',type=float,nargs='+',default=[0.5,0.25,0.1])
     args=parser.parse_args()
     import math
     if any(not math.isfinite(f) or f<=0 for f in args.factors):
         raise SystemExit('STOP: factors must be finite and positive')
-    directory=resolve_capture(args.capture)
+    directory=Path(args.capture).expanduser().resolve()
     meta=json.loads((directory/'runtime.json').read_text())
     # Set process-only settings before importing torch or initializing CUDA.
     for key,value in meta['env'].items():
@@ -73,6 +58,8 @@ def main():
         state,row=run_trial(directory,output,'original')
         exact(expected,state);exact(expected_row,row)
         report['baseline_reproduced']=True;save()
+        if not row['updates']:
+            raise RuntimeError('Captured training performed no optimizer updates; LR comparison is undefined')
         print('PASS: captured weights, Adam state, RNG and diagnostic measurements reproduced exactly.',flush=True)
         print('Checking split parameter groups at unchanged LR...',flush=True)
         state,control=run_trial(directory,output,'split_control',1.0)
@@ -84,8 +71,8 @@ def main():
             return {'label':label,'critic_lr_factor':factor,'actor_lr':base_lr,'critic_lr':base_lr*factor,
                     'before_mse':row['before']['mse'],'after_mse':row['after']['mse'],
                     'after_nmse':row['after']['nmse'],'after_ev':row['after']['ev'],
-                    'peak_mse':max(u['post']['mse'] for u in row['updates']),
-                    'best_mse':min(u['post']['mse'] for u in row['updates']),
+                    'peak_mse':max((u['post']['mse'] for u in row['updates']), default=row['before']['mse']),
+                    'best_mse':min((u['post']['mse'] for u in row['updates']), default=row['before']['mse']),
                     'updates':[{'update':u['update'],'epoch':u['epoch'],'mse':u['post']['mse']} for u in row['updates']],
                     'clipped_updates':sum(u['critic_grad_before_clip']!=u['critic_grad_after_clip'] for u in row['updates']),
                     'epochs':[{'epoch':u['epoch'],'mse':u['post']['mse']} for i,u in enumerate(row['updates'])
@@ -97,6 +84,8 @@ def main():
             state,trial=run_trial(directory,output,f'factor_{i}',factor)
             # Randomness/mini-batch draw count must be identical in every trial.
             exact(expected['rng'],state['rng'])
+            if len(trial['updates']) != len(row['updates']):
+                raise RuntimeError('Optimizer update count changed; not a matched intervention')
             item=summary(f'factor_{factor:g}',factor,trial)
             item['actor_changed_tensors']=sum(
                 not torch.equal(value,state['model']['weights'][name])

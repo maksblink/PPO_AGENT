@@ -894,6 +894,15 @@ def train_ppo_run(
         ),
     )
 
+    from .critic_experiment_plan import load_plan
+    critic_plan = load_plan(
+        loaded_config.path, root=root, config_sha256=loaded_config.sha256,
+        source=resume_source, segment_sizes=segment_sizes,
+        rollout_steps=int(config.ppo.n_steps),
+    )
+    if critic_plan is not None and (cycle_id is not None or stage_role is not None):
+        raise ValueError("Critic replay currently supports standalone stage-one runs")
+
     pending = create_pending_run(
         session_factory,
         loaded_config=loaded_config,
@@ -935,6 +944,10 @@ def train_ppo_run(
     rollout_sizes: list[int] = []
 
     try:
+        if critic_plan is not None:
+            from .critic_experiment_plan import save_plan
+            save_plan(root / artifacts_directory / "runs" / f"{run_id:08d}",
+                      critic_plan, run_id=run_id, config=loaded_config.normalized_json)
         mark_run_running(
             session_factory,
             run_id=run_id,
@@ -1130,10 +1143,9 @@ def train_ppo_run(
                             / f"{run_id:08d}" / "critic_diagnostics.jsonl"
                         ),
                         "diagnostics_step_offset": int(model.num_timesteps) - model_steps_before,
-                        "diagnostics_capture": ("gae85" if config.run.name == "diagnostic_capture_multi_2143"
-                                                else "multi" if config.run.name == "diagnostic_capture_multi_3732"
-                                                else config.run.name == "diagnostic_capture_3732"),
-                    } if config.run.name in {"diagnostic_repeat_3732", "diagnostic_capture_3732", "diagnostic_capture_multi_3732", "diagnostic_capture_multi_2143"} else {}),
+                        "diagnostics_capture_steps": tuple(critic_plan["capture_steps"]),
+                        "diagnostics_detail_steps": tuple(critic_plan["detail_steps"]),
+                    } if critic_plan is not None else {}),
                     total_timesteps=(
                         segment_steps
                     ),

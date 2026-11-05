@@ -10,12 +10,6 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-REPLAY_NAME = "diagnostic_repeat_3732"
-# Full per-minibatch measurements only around known spikes and boundaries.
-DETAILED_STEPS = {1024, 638976} | {
-    step + offset for step in (404480, 475136, 585728)
-    for offset in (-1024, 0, 1024)
-}
 EXPECTED_TRAIN_HASH = "7c8d09940123242f0ac401c5ec2cc858b8bf3339f571c222382f048ffd8306ae"
 
 
@@ -48,7 +42,7 @@ def measure(model):
             "prediction": stats(predictions), "error": stats(errors)}
 
 
-def train_observed(model, path, local_step, *, capture=False, force_detailed=False):
+def train_observed(model, path, local_step, *, capture_steps=(), detail_steps=(), force_detailed=False):
     """Call original train exactly once; remove all observers even on failure."""
     if hashlib.sha256(inspect.getsource(PPO.train).encode()).hexdigest() != EXPECTED_TRAIN_HASH:
         raise RuntimeError("Unsupported PPO.train source; diagnostics not started")
@@ -60,9 +54,10 @@ def train_observed(model, path, local_step, *, capture=False, force_detailed=Fal
                          torch.nn.modules.batchnorm._BatchNorm))
            for m in model.policy.modules()):
         raise RuntimeError("Diagnostics require a policy without Dropout/BatchNorm")
-    from .critic_rollout_experiment import capture_steps
-    selected_for_capture = local_step in capture_steps(capture)
-    detailed = force_detailed or selected_for_capture or local_step in DETAILED_STEPS
+    if model.n_envs != 1:
+        raise RuntimeError("Diagnostics currently support one environment")
+    selected_for_capture = local_step in capture_steps
+    detailed = force_detailed or selected_for_capture or local_step in detail_steps
     b = model.rollout_buffer
     row = {"run_step": local_step, "model_step": int(model.num_timesteps),
            "detailed": detailed, "target": stats(b.returns),
@@ -122,7 +117,7 @@ def train_observed(model, path, local_step, *, capture=False, force_detailed=Fal
         saved.clear()
 
     capture_directory = None
-    if capture:
+    if selected_for_capture:
         from .critic_rollout_experiment import capture_before
         if selected_for_capture:
             capture_directory = capture_before(model, path, local_step)

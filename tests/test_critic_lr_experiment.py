@@ -9,10 +9,12 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
 from train_and_eval.training.critic_diagnostics import train_observed
 from train_and_eval.training.critic_rollout_experiment import (
-    CAPTURE_STEP,capture_before,capture_after,verify_capture,run_trial,
+    capture_before,capture_after,verify_capture,run_trial,
     parameter_state,rng_state,restore_rng,exact,split_critic_lr,
 )
 
+
+CAPTURE_STEP = 16
 
 def model_and_capture(tmp_path):
     model=PPO('MlpPolicy',gym.make('CartPole-v1'),n_steps=16,batch_size=8,n_epochs=2,
@@ -27,7 +29,7 @@ def model_and_capture(tmp_path):
     restore_rng(state);source.train();expected={'model':parameter_state(source),'rng':rng_state(False)}
     restore_rng(state)
     path=tmp_path/'diagnostics.jsonl'
-    train_observed(model,path,CAPTURE_STEP,capture=True)
+    train_observed(model,path,CAPTURE_STEP,capture_steps=(CAPTURE_STEP,))
     exact(expected,{'model':parameter_state(model),'rng':rng_state(False)})
     directory=tmp_path/f'critic_capture_{CAPTURE_STEP}'
     return model,directory
@@ -90,7 +92,7 @@ def test_cli_full_experiment(tmp_path):
     import sys
     from pathlib import Path
     _,directory=model_and_capture(tmp_path)
-    script=Path(__file__).resolve().parents[1]/'extra_tools/diagnostics/critic_lr_experiment.py'
+    script=Path(__file__).resolve().parents[1]/'extra_tools/diagnostics/critic/_trial.py'
     result=subprocess.run([sys.executable,str(script),'--capture',str(directory)],capture_output=True,text=True)
     assert result.returncode==0,result.stdout+'\n'+result.stderr
     reports=list((directory.parent/'critic_lr_experiment').glob('*/report.json'))

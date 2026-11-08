@@ -147,6 +147,9 @@ def ppo_constructor_kwargs(
         ),
     }
 
+    if config.experimental_critic_lr_factor is not None:
+        policy_kwargs["critic_lr_factor"] = config.experimental_critic_lr_factor
+
     return {
         "device": config.device,
         "policy_kwargs": policy_kwargs,
@@ -225,6 +228,10 @@ def create_ppo_model(
     policy_name = _POLICY_NAMES[
         config.policy
     ]
+
+    if config.experimental_critic_lr_factor is not None:
+        from .experimental_split_lr import SplitLRPolicy
+        policy_name = SplitLRPolicy
 
     model = PPO(
         policy_name,

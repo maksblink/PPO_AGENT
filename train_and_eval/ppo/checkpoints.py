@@ -181,6 +181,13 @@ def load_persisted_ppo_checkpoint(
         custom_objects=custom_objects,
     )
 
+    if training_config is not None and (
+        training_config.experimental_critic_lr_factor is not None
+        or getattr(model.policy, "critic_lr_factor", None) is not None
+    ):
+        from .experimental_split_lr import verify_resume_factor
+        verify_resume_factor(model, training_config.experimental_critic_lr_factor)
+
     loaded_model_step = _nonnegative_integer(
         model.num_timesteps,
         name="loaded_model.num_timesteps",

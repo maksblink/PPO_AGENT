@@ -20,6 +20,7 @@ from pydantic import (
     ValidationError,
     field_validator,
     model_validator,
+    model_serializer,
 )
 
 from train_and_eval.environment.contexts import AVAILABLE_CONTEXTS
@@ -403,6 +404,23 @@ class PPOSection(StrictConfigModel):
     n_epochs: PositiveInt
 
     learning_rate: PositiveFloat
+    experimental_critic_lr_factor: float | None = Field(
+        default=None, gt=0.0, allow_inf_nan=False,
+    )
+
+    @field_validator("experimental_critic_lr_factor", mode="before")
+    @classmethod
+    def validate_critic_lr_factor(cls, value):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise ValueError("experimental_critic_lr_factor must be a number or null")
+        return value
+
+    @model_serializer(mode="wrap")
+    def serialize_without_disabled_experiment(self, handler):
+        data = handler(self)
+        if self.experimental_critic_lr_factor is None:
+            data.pop("experimental_critic_lr_factor", None)
+        return data
 
     gamma: float = Field(
         gt=0.0,
@@ -584,6 +602,7 @@ class RunConfig(StrictConfigModel):
 
 
 RESUME_IMMUTABLE_FIELDS = (
+    "ppo.experimental_critic_lr_factor",
     "environment.window",
     "environment.context",
     "environment.position_side",

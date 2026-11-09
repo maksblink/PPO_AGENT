@@ -903,12 +903,6 @@ def train_ppo_run(
     if critic_plan is not None and (cycle_id is not None or stage_role is not None):
         raise ValueError("Critic replay currently supports standalone stage-one runs")
 
-    if config.ppo.experimental_critic_lr_factor is not None:
-        if cycle_id is not None or stage_role is not None:
-            raise ValueError("Split LR experiment supports standalone stage-one runs only")
-        if critic_plan is not None:
-            raise ValueError("Split LR cannot be combined with fixed-rollout critic replay")
-
     pending = create_pending_run(
         session_factory,
         loaded_config=loaded_config,

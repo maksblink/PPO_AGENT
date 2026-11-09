@@ -73,8 +73,6 @@ def proposed_names(configs: dict) -> dict:
             raise ValueError(f"Source run has no stage-one config: {old}")
         visiting.add(old)
         c = configs[old]
-        if c['ppo'].get('experimental_critic_lr_factor') is not None:
-            raise ValueError("Experimental split-LR runs are outside canonical name migration: " + old)
         continuation = c['continuation']
         mode = continuation['mode']
         if mode == 'fresh':

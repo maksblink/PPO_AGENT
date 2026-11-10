@@ -120,6 +120,8 @@ def validate(raw):
     ):
         if not integer(v):
             raise ValueError("Counts and limits must be positive integers")
+    if p["count"] > 999:
+        raise ValueError("At most 999 proposals per analysis")
     if p["count"] > p["max_sampling_attempts"]:
         raise ValueError("count exceeds max_sampling_attempts")
     if (

@@ -12,7 +12,7 @@ from .config import load
 from .history import assemble, digest, select, snapshot
 from .git_guard import assert_git_clean
 from .propose import suggest
-from .report import save
+from .report import save, update
 
 
 def analyze(cfg, runs, checkpoints, evaluations, timestamp):
@@ -93,13 +93,18 @@ def analyze(cfg, runs, checkpoints, evaluations, timestamp):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Read-only seed-1 history -> in-memory Optuna -> terminal + HTML/JSON proposals. No training/config generation."
+        description="Read-only seed-1 history -> in-memory Optuna -> terminal + HTML/JSON proposals. Optional confirmed config/queue preparation; no training."
     )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument(
         "--validate-config",
         action="store_true",
         help="Validate YAML only; no database or report writes",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Save proposals without asking to prepare configs",
     )
     args = parser.parse_args(argv)
     git_commit = assert_git_clean(Path(__file__).resolve().parents[2])
@@ -129,9 +134,19 @@ def main(argv=None):
         print(message)
     directory = save(result, cfg["report"]["output_dir"])
     print(f"HTML: {directory / 'report.html'}\nJSON: {directory / 'report.json'}")
-    print(
-        "Database, configs, checkpoints and existing reports unchanged. Only new reports written."
-    )
+    if not args.report_only and result.get("sampling", {}).get("proposals"):
+        from .export import prepare_interactive
+
+        try:
+            result["preparation"] = prepare_interactive(
+                Path(__file__).resolve().parents[2], result, directory
+            )
+        except (ValueError, RuntimeError, OSError) as exc:
+            result["preparation"] = {"status": "blocked", "reason": str(exc)}
+            update(result, directory)
+            raise
+        update(result, directory)
+    print("Database and checkpoints unchanged. No training started.")
     return 0 if result["status"] == "complete" else 2
 
 

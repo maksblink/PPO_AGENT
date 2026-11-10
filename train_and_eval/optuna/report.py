@@ -45,6 +45,7 @@ def render(data):
             ),
         ),
         ("Paths", block(data.get("paths", []))),
+        ("Preparation", block(data.get("preparation", {"status": "not_requested"}))),
         ("Configuration", block(data["config"])),
         ("Provenance", block(data.get("provenance", {}))),
     ]
@@ -87,3 +88,22 @@ def save(data, root):
     )
     (directory / "report.html").write_text(render(data), encoding="utf-8")
     return directory
+
+
+def update(data, directory):
+    """Update only this invocation's newly created report after preparation."""
+    for name, content in (
+        (
+            "report.json",
+            json.dumps(data, indent=2, ensure_ascii=False, default=str, allow_nan=False)
+            + "\n",
+        ),
+        ("report.html", render(data)),
+    ):
+        temporary = directory / (name + ".tmp")
+        try:
+            with temporary.open("x", encoding="utf-8") as stream:
+                stream.write(content)
+            temporary.replace(directory / name)
+        finally:
+            temporary.unlink(missing_ok=True)

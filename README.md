@@ -6,7 +6,7 @@ The main workflow has two separately started stages: baseline development,
 followed by weekly walk-forward training, validation, refit and testing.
 
 This README describes the system, configuration contracts and interpretation of
-metrics. Experiment-specific evidence and conclusions belong in `CONCLUSIONS.md`.
+metrics.
 The local command reference is `INSTRUCTIONS.md`; it is intentionally
 ignored by Git and is not distributed in the public repository.
 

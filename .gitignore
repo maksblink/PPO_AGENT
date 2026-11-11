@@ -39,14 +39,11 @@ data/
 train_and_eval/market_data/manifest.json
 train_and_eval/market_data/manifest.json.tmp
 
-# Local command reference (not published)
+# Local command reference
 /INSTRUCTIONS.md
-/CONCLUSIONS.md
 
 # Local run rename audit and backups
 /extra_tools/maintenance/run_rename/
-/CONCLUSIONS_NE3_FULL_GRID.md
-/CONCLUSIONS_NE3_540_RUNS.md
 
 # Local experiment configurations and queues
 /configs/

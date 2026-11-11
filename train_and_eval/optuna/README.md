@@ -176,6 +176,12 @@ search_space:
   # Include the other six base axes; omit width_3 and later widths.
 ```
 
+Giving `width_1` and `width_2` identical ranges does **not** make them equal:
+they remain separate sampled parameters. Fixed equal values above enforce one
+specific uniform architecture. Searching a common variable width across all
+layers requires an additional parameterization; it is not a supported YAML mode.
+
+
 Integer ranges accept a positive `step`; the upper endpoint must lie on that
 grid. Log integers require step 1. Float axes are continuous and do not accept a
 step. Zero entropy is allowed with `log: false`; a log scale cannot include zero.
@@ -236,6 +242,23 @@ Exit code 0 means the requested proposal count was produced; code 2 means
 invalid input, blocked history or a partial/exhausted search. Valid partial
 proposals remain in the saved report.
 
+## Batch size and training budget
+
+`count` counts propositions, not runs. Before reuse, the stage budget is the sum
+of proposed `data_epochs`; existing and shared prefixes can reduce new work.
+A batch of 100 five-epoch propositions can require 500 new runs. Use the printed
+preparation plan for the actual number; runtime depends on architecture, PPO
+epochs, evaluation work and dependency scheduling.
+
+Batch proposals use the same imported history. They do not learn from one
+another's future results. Run the tool again after training to import real new
+outcomes. Deleting trial results from the database also removes that feedback;
+`exclude_evaluated` cannot remember deleted experiments from old reports.
+
+`best_by` only chooses history points in `best` mode; it does not change the
+objective. For example, selecting peaks by return while optimizing balanced score
+is allowed, but differs from selecting peaks by balanced score.
+
 ## Reading the report
 
 - **Proposals:** exact parameter values, marginal extrapolation flags, nearby
@@ -262,7 +285,7 @@ points instead. No predicted economic outcomes are invented.
 ## Development checks
 
 ```bash
-python -m pytest -q tests/test_optuna_propositions.py tests/test_optuna_git_guard.py tests/test_optuna_preparation.py
+python -m pytest -q tests/test_optuna_propositions.py tests/test_optuna_git_guard.py tests/test_optuna_preparation.py tests/test_optuna_timestamp.py
 python -m pytest -q
 ```
 

@@ -4,6 +4,28 @@ This directory stores generated runtime artifacts produced by PPO_AGENT.
 
 Generated artifacts are **not committed to Git**. Only this README and the directory `.gitignore` are tracked.
 
+## Report and session directories
+
+| Directory | Contents |
+| --- | --- |
+| `runs/<run ID>/` | Owned checkpoints, run reports and evaluation artifacts. |
+| `queue_analysis/<timestamp>/` | Grid/comparison/path HTML and JSON reports. |
+| `training_analysis/<timestamp>/` | Training metric HTML and JSON reports. |
+| `optuna_propositions/<timestamp>/` | Optuna HTML/JSON, including preparation details when requested. |
+| `search_queues/<queue name>/<session ID>/` | Queue plans, events, status and managed hardware telemetry. |
+| `walk_forward/` | Study plans, attempts and aggregate reports. |
+
+Optuna batch timestamps are UTC with microseconds, without a random suffix for
+new reports. The same identifier locates the generated config and queue trees
+under `configs/`. Older suffixed report identifiers remain valid and unchanged.
+Other tools keep their own session identifier formats.
+
+Reports are derived outputs, not additional database runs. Removing a report does
+not remove training results or prevent Optuna from importing them again. Conversely,
+removing a run from the database removes its evidence from future history imports.
+See [Optuna propositions](../train_and_eval/optuna/README.md) and
+[managed queues](../MANAGED_QUEUE.md) for the different lifecycles.
+
 ## Directory layout
 
 Artifacts are organized by run ID:
@@ -44,6 +66,11 @@ artifacts/runs/00000001/
 ```
 
 Exact filenames can vary with the run configuration and artifact settings.
+Trade-return and holding-time plots can legitimately be absent when there are no
+applicable trades. Empty trade-event tables can be valid. Assess completeness
+against the configured writers and evaluation scope, not one reference run's
+file list. Readability/hash checks do not establish economic correctness or
+visual chart quality.
 
 ## Checkpoints
 
@@ -219,25 +246,24 @@ This keeps the database suitable for querying while larger experiment outputs re
 
 ## Cleaning artifacts
 
-Runtime artifacts can be removed without deleting the tracked documentation files:
+Remove experiments through the maintained cleanup tool so database records and
+owned artifact directories stay consistent. Inspect selected IDs and descendants
+before applying a plan:
 
 ```bash
-find artifacts \
-  -mindepth 1 \
-  -maxdepth 1 \
-  ! -name '.gitignore' \
-  ! -name 'README.md' \
-  -exec rm -rf {} +
+python extra_tools/maintenance/clean_training.py clean-first-stage --run-id <RUN_ID> --dry-run
 ```
 
-This preserves:
+After reviewing the plan, use the same command without `--dry-run` and follow its
+confirmation. Do not delete the whole `artifacts/` tree while retaining database
+references. Cleanup preserves configs; inspect and remove only corresponding
+unused config/queue batches separately. Never delete a shared parent merely
+because a removed experiment referenced it.
 
-```text
-artifacts/.gitignore
-artifacts/README.md
-```
-
-Deleting filesystem artifacts does not automatically delete the corresponding PostgreSQL run metadata.
+Derived analysis reports and finished queue sessions have separate lifecycles;
+review their exact directories before deleting them. Preserve this README and
+project control/lock files. Do not clean artifacts during training, evaluation,
+backup or report rebuilding.
 
 Evaluation scope suffixes are `train`, `val`, `reference` and `test`.
 Stage one saves paired evaluations of each assessed checkpoint; all evaluation

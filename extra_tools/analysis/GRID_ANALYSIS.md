@@ -227,3 +227,10 @@ python -m pytest -q tests/test_flexible_grid_comparison.py \
 
 Synthetic and mocked tests, no database/hardware access. Run the full project
 suite before committing. Local report generation performs real-data validation.
+
+## Related workflows
+
+This tool describes recorded outcomes. For suggestions followed by optional
+config/queue preparation, use [Optuna propositions](../../train_and_eval/optuna/README.md).
+Its `history.mode: all|last|best` is unrelated to this tool's `--mode` switch.
+For optimizer and critic metrics, use [training analysis](TRAINING_ANALYSIS.md).

@@ -132,3 +132,14 @@ python -m pytest -q
 ```
 
 Tests use synthetic records and a mocked read-only DB connection. Real PostgreSQL integration and the complete project suite must be run locally. The report includes the database snapshot timestamp, queue/config hashes for queue selections, analysis settings and tool version. Reports are not deterministic byte-for-byte because timestamps change.
+
+## Related workflows
+
+For explicit model replays, captured-rollout LR sweeps and equivalence checks,
+see [Critic diagnostics](../diagnostics/critic/README.md). These are separate,
+opt-in experiments; this analysis does not train or alter a checkpoint.
+
+[Optuna propositions](../../train_and_eval/optuna/README.md) currently optimize
+saved final VAL outcomes. Training/critic metrics in this report are diagnostic
+context, not additional Optuna objective inputs. Better in-rollout value fitting
+alone does not demonstrate better trading results.

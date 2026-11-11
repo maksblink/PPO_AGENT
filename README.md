@@ -21,13 +21,16 @@ ignored by Git and is not distributed in the public repository.
 - [Persistence and recovery](#persistence-and-recovery)
 - [Reports and terminal progress](#reports-and-terminal-progress)
 - [Dashboard and diagnostics](#dashboard-and-diagnostics)
+- [Analysis tools and Optuna proposals](#analysis-tools-and-optuna-proposals)
 - [Experiment cleanup](#experiment-cleanup)
 - [Testing and development](#testing-and-development)
 - [Run-name migration](#run-name-migration)
 
 ## Architecture and repository layout
 
-Versioned YAML configurations define experiments. Market data is verified against
+Local YAML configurations under the ignored `configs/` tree define experiments.
+Saved raw/normalized configurations and hashes preserve each run's configuration;
+source code and test fixtures are versioned. Market data is verified against
 its published manifest before use. PostgreSQL stores experiment identity,
 configuration, lineage, progress and results; immutable checkpoint files preserve
 model state. Reports and dashboard views are derived from persisted results.
@@ -59,9 +62,12 @@ flowchart TD
 | `train_and_eval/dashboard/` | Streamlit analysis views |
 | `train_and_eval/artifact_storage/` | Artifact paths and storage |
 | `train_and_eval/reproducibility/` | Git identity and clean-worktree checks |
-| `extra_tools/` | Probability diagnostics and experiment cleanup |
+| `extra_tools/` | Grid/training analysis, policy/critic diagnostics and maintenance |
 | `set_stage_one_ranges.py` | Calendar-range calculation and confirmed config updates |
-| `run_search_queue.py` | Sequential execution of queue manifests |
+| `run_search_queue.py` | Dependency-aware queue scheduling and worker execution |
+| `run_managed_queue.py` | Hardware-managed queue wrapper; see [MANAGED_QUEUE.md](MANAGED_QUEUE.md) |
+| `train_and_eval/optuna/` | History-based proposals and optional confirmed config/queue preparation |
+| `configs/optuna/` | Local search-space YAML files |
 | `threshold_sweep.py` | Evaluation-only probability-threshold replay |
 | `alembic/versions/` | Database schema migrations |
 | `tests/` | Unit and integration tests |
@@ -71,12 +77,13 @@ flowchart TD
 | `artifacts/walk_forward/` | Study protocols, plans, attempts and aggregate reports |
 
 Queue manifests live under `configs/search_queues/`. The runner requires an
-explicit queue name and has no historical default dependency. Discovery accepts `.yml` and `.yaml`,
+explicit queue name and has no historical default dependency. Discovery recursively accepts `.yml` and `.yaml`,
 rejects duplicate names and reports available names for an unknown selection.
 
-Queue execution is sequential and separate from stage-two grid search. Training
-stops at the first failed child. Before each selected entry, the queue reads its
-current database status. Completed runs (including successful early stopping)
+Queue execution is dependency-aware and separate from stage-two grid search.
+The managed queue normally uses two workers, scanning pending entries for ready
+work. A failure stops new starts while already-running workers finish. Preflight
+inspects all selected runs before training and resolves incomplete-run decisions. Completed runs (including successful early stopping)
 are skipped automatically. Other existing runs display their identity, status,
 progress, timestamps, error, checkpoint/evaluation IDs and artifact directory.
 Incomplete-run handling supports confirmed deletion and retry, preservation with
@@ -247,9 +254,10 @@ other fixed identity settings. `run_step` is local to the creating run;
 
 Optional queue manifests use `queue_schema_version: 1`, a name matching their
 filename and an ordered list of config paths. Positions are one-based and stable;
-duplicate paths are rejected. Selected configs execute sequentially in manifest
-order. Each entry is checked against the database immediately before execution,
-and a failed child stops the queue. Queue summaries are rebuilt from persisted metrics. Queues compare
+duplicate paths and run names are rejected. Manifest order supplies scheduling
+priority; independent ready chains can execute concurrently. A continuation waits
+for its parent, including an existing parent outside the selected queue. Queue
+summaries are rebuilt from persisted metrics. Queues compare
 independent runs; they do not implement walk-forward acceptance.
 
 ## Two-stage workflow
@@ -612,17 +620,16 @@ across periodic/final checkpoints, including histograms and confidence curves.
 
 ### Grid coverage
 
-Grid Coverage compares selected on-disk queue plans with a read-only registry
-snapshot. It displays architecture-specific LR-by-gamma matrices, filtered by
-PPO optimization epochs and seed, plus stage details and missing-work tables.
-The view is independent of TRAIN/VAL performance selection and sidebar filters;
-it queries evaluation presence and status without loading trading metrics.
+Grid Coverage uses the single selected grid/queue manifest as its expected plan.
+It shows architecture-specific LR-by-gamma matrices with explicit filters for
+PPO epochs, seed, entropy and GAE. It does not infer missing combinations from
+other grids or complete a sparse manifest into a Cartesian product. Matching
+physical config copies can refer to one database run.
 
-Expected coverage is a Cartesian product of declared axes and continuation
-stages. Defaults come from selected manifests; LR, gamma and target stage count
-are editable expectations. Missing values outside these declared axes are not
-inferred. Overlapping manifests share one planned run. Malformed or unavailable
-configs are reported explicitly and make the plan incomplete.
+The view is independent of TRAIN/VAL performance selection and sidebar filters.
+Malformed or unavailable configs remain plan errors. See
+[Grid Coverage](train_and_eval/dashboard/GRID_COVERAGE.md) for readiness rules
+and scope; this is a plan-completeness check, not an artifact-content audit.
 
 Axes are derived from validated configuration fields rather than run names.
 Separate configuration families retain non-axis settings such as data ranges,
@@ -642,6 +649,44 @@ this view; recorded checkpoint availability does not certify file integrity.
 Cell selection exposes planned and executed stages. CSV exports contain gaps
 and stage metadata, never performance results. The view does not modify configs,
 start training or write to the registry.
+
+## Analysis tools and Optuna proposals
+
+| Task | Guide |
+| --- | --- |
+| Grid ranking, matched comparisons and path diagnostics | [Grid analysis](extra_tools/analysis/GRID_ANALYSIS.md) |
+| Training/critic metric summaries and comparisons | [Training analysis](extra_tools/analysis/TRAINING_ANALYSIS.md) |
+| Explicit replay, capture and fixed-rollout critic LR experiments | [Critic diagnostics](extra_tools/diagnostics/critic/README.md) |
+| New parameter suggestions and optional config export | [Optuna propositions](train_and_eval/optuna/README.md) |
+
+```bash
+python -m train_and_eval.optuna --config configs/optuna/propositions.yml --report-only
+```
+
+Optuna requires clean Git and imports compatible completed seed-1 stage-one
+results from a read-only snapshot into a new in-memory study on every invocation.
+`history.mode` selects all runs, path endpoints (`last`), or path peaks (`best`).
+`history.best_by` selects peaks; `objective.name` independently sets return,
+balanced score or Pareto optimization. Cumulative `data_epochs` is separate from
+PPO `n_epochs`. Suggestions are not predicted returns or guarantees of improvement.
+
+Reports live in `artifacts/optuna_propositions/<UTC timestamp>/`. Without
+`--report-only`, an interactive terminal offers `PREPARE`, then `CREATE` after
+review. It creates only missing stages, reuses verified existing ancestry, rounds
+name-encoded floats to six significant digits, and validates the exported files.
+A fully covered proposal requires `SKIP`; it does not create duplicate runs.
+Original and effective values remain in the report.
+
+Config batches use `configs/stage_one/optuna_propositions/<timestamp>/prop_001/`
+and queues use `configs/search_queues/optuna_propositions/<same timestamp>/`.
+New timestamps have microseconds and no random suffix. Queue entries are ordered
+by proposal, then stage; the scheduler can run independent chains concurrently.
+Preparation never launches training. Review the queue with `--dry-run` and start
+it explicitly through `run_managed_queue.py` when ready.
+
+Each `width_i` is an independent axis. Fixed equal widths can force a particular
+uniform architecture; identical variable ranges do not tie the layers together.
+A shared variable-width architecture mode is not currently implemented.
 
 ## Experiment cleanup
 
@@ -695,7 +740,8 @@ creation requires CREATEDB permission. An explicit dedicated test database must
 already exist, end in `_test` and differ from the application database. Missing
 configuration, connectivity or permissions fail tests rather than skipping them.
 
-Source, configuration and tests are versioned. Runtime data, secrets, generated
+Source, reusable templates and tests are versioned. Local experiment configs,
+runtime data, secrets, generated
 artifacts and the local command reference are excluded from the public Git tree.
 
 ## Run-name migration
@@ -706,15 +752,21 @@ YAML, normalized configuration, both configuration hashes and report-summary
 identity. Run and evaluation IDs, checkpoint relationships and files, model weights,
 metrics, trajectories, original Git provenance and timestamps are preserved.
 
-Generated names encode training mode, continuation depth, architecture, gamma,
-learning rate, seed and PPO optimization epochs. The LR token has exactly nine
-decimal places, represented by `lr0p` followed by nine digits. Values that cannot
-be represented exactly are rejected rather than rounded. Database and on-disk
-configurations must agree, including learning rate and parent identity.
+Standard stage-one names encode LR, stage, GAE, entropy, gamma, architecture,
+PPO epochs and seed, in that order. Numeric tokens use six significant decimal
+digits, for example `lr2p25000em5` (0.0000225). Database and on-disk configurations
+must agree, including parent identity. Migration is not a mechanism for rounding
+existing experiment parameters.
+
+Optuna-generated names add `op_` and can describe unequal widths such as
+`w903w743w126w32`; their exporter validates names and effective rounded values.
+The legacy name migrator has narrower assumptions (including equal-width networks
+and final-parent selectors). Do not run a blanket rename over Optuna configs or
+bypass validation to force them through it; review the audit's supported scope.
 
 Unstarted configurations participate in the same migration without creating run
 records. YAML rewrites change name scalars only, preserving numeric spelling and
-comments. The current audit format is version 2. Completed stage-one runs, no
+comments. Completed stage-one runs, no
 active evaluations and no walk-forward records are required; concurrent writers
 are outside the supported migration workflow. State changes since the audit,
 name collisions and unresolved metadata references prevent application.
@@ -824,7 +876,7 @@ removed by synchronization. Capacity estimates reserve space for new content,
 dumps and metadata; failures do not publish an incomplete generation. Access
 times, inode identities and filesystem allocation are not archive attributes.
 Operational commands and recovery steps are in [Cold storage](extra_tools/maintenance/COLD_STORAGE.md)
-and [INSTRUCTIONS.md](INSTRUCTIONS.md#full-project-backup-and-recovery).
+and the local, ignored `INSTRUCTIONS.md` backup section.
 
 
 Cold-storage operations expose per-stage progress and elapsed-time summaries.

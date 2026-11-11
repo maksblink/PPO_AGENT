@@ -63,6 +63,23 @@ interrupted state. Allow shutdown and hardware restoration to finish before
 starting another queue. On the next launch, incomplete runs are handled by the
 normal preflight restart/cleanup workflow.
 
+## Optuna-generated queues
+
+The [Optuna tool](train_and_eval/optuna/README.md) can prepare a queue after
+explicit confirmation. It never starts this runner automatically. Its manifest
+lives under `configs/search_queues/optuna_propositions/<timestamp>/` and is named
+`optuna_<timestamp>.yml`; use that stem with `--queue`.
+
+Entries list `prop_001` stages, then `prop_002` stages, and so on. The scheduler
+scans pending jobs for ready dependencies rather than blocking on the first
+waiting continuation. Independent proposals can occupy both workers. A single
+chain still executes sequentially. Verified completed prefixes are omitted from
+the manifest; the first new continuation references its existing parent.
+
+Config export uses exclusive project activity/maintenance guards, including the
+managed hardware lock. Finish preparation before starting the queue. Inspect its
+`--dry-run` first; normal clean-Git and runtime preflight checks still apply.
+
 ## CPU affinity and threads
 
 Topology is discovered through sysfs. Split mode requires two L3 groups with

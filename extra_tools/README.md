@@ -4,14 +4,20 @@ Run commands from the repository root with the project virtual environment.
 
 | Directory | Purpose |
 |---|---|
-| `analysis/` | Grid rankings, seed comparisons and detailed path reports. See [GRID_ANALYSIS.md](analysis/GRID_ANALYSIS.md). |
+| `analysis/` | [Grid comparisons and path reports](analysis/GRID_ANALYSIS.md), plus [training metric analysis](analysis/TRAINING_ANALYSIS.md). |
 | `diagnostics/` | Policy probability distributions and evolution across checkpoints. |
+| `diagnostics/critic/` | [Reusable critic replay, capture, verification and LR sweeps](diagnostics/critic/README.md). |
 | `maintenance/` | Cleanup, name auditing/renaming and [latest-only cold storage](maintenance/COLD_STORAGE.md). |
 
 Examples (use `--help` to inspect available options):
 
 ```bash
 python extra_tools/analysis/ppo_analyze_grid.py --help
+python extra_tools/analysis/ppo_analyze_training.py --help
+python extra_tools/diagnostics/critic/prepare.py --help
+python extra_tools/diagnostics/critic/verify.py --help
+python extra_tools/diagnostics/critic/sweep.py --help
+python extra_tools/diagnostics/critic/compare.py --help
 python -m extra_tools.diagnostics.policy_probability_diagnostic --help
 python -m extra_tools.diagnostics.policy_probability_evolution --help
 python extra_tools/maintenance/clean_training.py --help
@@ -31,6 +37,19 @@ Cold storage includes ignored project files and a full PostgreSQL dump. Successf
 managed content. Live capture/restoration excludes guarded queue and maintenance
 operations. See the linked guide for prerequisites, local state, recovery and
 remaining restore rehearsals; `verify` checks hashes, not database restoration.
+
+## Optuna lives in the main package
+
+[Optuna propositions](../train_and_eval/optuna/README.md) are implemented in
+`train_and_eval/optuna/`, with local search YAML under `configs/optuna/`.
+Use `python -m train_and_eval.optuna --config configs/optuna/propositions.yml`.
+It writes reports and can prepare configs/one queue after confirmation, but never
+starts training. `--report-only` suppresses preparation prompts.
+
+Critic sweeps remain explicit diagnostic experiments; they do not enable separate
+actor/critic learning rates in ordinary training. Follow their guide for supported
+models and capture requirements. Historical run-specific diagnostic helpers were
+replaced by the reusable `diagnostics/critic/` commands.
 
 ## Shared stage-one configurations
 

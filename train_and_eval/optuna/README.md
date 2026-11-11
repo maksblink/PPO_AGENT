@@ -28,10 +28,16 @@ do not execute files inside this package directly.
 Reports are created in a new directory on each invocation:
 
 ```text
-artifacts/optuna_propositions/<UTC timestamp>_<unique suffix>/
+artifacts/optuna_propositions/<UTC timestamp>/
     report.html
     report.json
 ```
+
+New directory names contain UTC date/time with microseconds, for example
+`20261111T123456123456Z`, without a random suffix. The same identifier is reused
+for configs and queues. Existing suffixed directories remain unchanged and
+accepted for compatibility. If a timestamp directory already exists, creation
+fails instead of overwriting it.
 
 Open `report.html` locally. It has Proposals, History, Sampling, Paths,
 Preparation, Configuration, and Provenance tabs and needs no network connection. The JSON

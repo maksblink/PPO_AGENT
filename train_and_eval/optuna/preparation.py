@@ -120,7 +120,7 @@ def build_plan(result, runs, checkpoints, evaluations, timestamp, batch):
     """Pure plan; current snapshot, all stages (independent of history selection mode)."""
     from train_and_eval.run_config import RunConfig, validate_resume_compatibility
 
-    if not re.fullmatch(r"\d{8}T\d{12}Z_[0-9a-f]{8}", batch):
+    if not re.fullmatch(r"\d{8}T\d{12}Z(?:_[0-9a-f]{8})?", batch):
         raise ValueError("Invalid report/batch directory name")
     proposals = result.get("sampling", {}).get("proposals", [])
     if not 1 <= len(proposals) <= 999:

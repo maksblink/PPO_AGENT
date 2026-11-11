@@ -2,7 +2,6 @@
 
 import html
 import json
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -78,7 +77,7 @@ def render(data):
 def save(data, root):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    name = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "_" + uuid.uuid4().hex[:8]
+    name = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     directory = root / name
     directory.mkdir(exist_ok=False)
     (directory / "report.json").write_text(

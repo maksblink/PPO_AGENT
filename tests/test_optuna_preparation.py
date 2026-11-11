@@ -26,7 +26,7 @@ from train_and_eval.optuna.preparation import (
     scientific,
 )
 
-BATCH = "20261110T120000123456Z_1234abcd"
+BATCH = "20261110T120000123456Z"
 
 
 def setup_data(tmp_path):

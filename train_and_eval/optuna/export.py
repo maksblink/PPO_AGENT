@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 
+from .yaml_order import ordered_run_config
 from .git_guard import assert_git_clean
 from .history import snapshot
 from .preparation import build_plan, config_for, verify_checkpoint
@@ -67,7 +68,7 @@ def preflight(root, plan):
 def payloads(plan):
     files = {}
     for node in plan["nodes"]:
-        files[node["path"]] = yaml.safe_dump(node["config"], sort_keys=False)
+        files[node["path"]] = yaml.safe_dump(ordered_run_config(node["config"]), sort_keys=False)
     for item in plan["proposals"]:
         if not item["new_runs"]:
             continue  # SKIP creates no empty proposition directories.

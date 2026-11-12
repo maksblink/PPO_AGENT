@@ -442,3 +442,13 @@ For later cleanup, use the existing training cleanup tool for selected run IDs
 and their owned artifacts, inspect descendant scope, then remove only the
 corresponding local config/queue batch. Never delete a shared parent merely
 because one proposition referenced it.
+
+## Exported YAML field order
+
+New run configs follow the established grid layout: `config_schema_version`,
+`run`, `continuation`, `data`, `training`, `environment`, `ppo`, `evaluation`,
+`logging`, and `artifacts`. Date ranges use `start` before `end`. Nested fields
+follow the same grid convention. Additional fields are preserved after known
+fields; explicit null values are retained. This only changes YAML presentation,
+not configuration values, run identities, or training behavior. Existing configs,
+reports, and database records are not rewritten.

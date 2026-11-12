@@ -148,9 +148,12 @@ def validate_files(plan, read):
     }
     for node in plan["nodes"]:
         cfg = yaml.safe_load(read(node["path"]))
-        if cfg != node["config"]:
+        if cfg != ordered_run_config(node["config"]):
             raise ValueError(f"Config round-trip mismatch: {node['path']}")
-        RunConfig.model_validate(cfg)
+        actual_config = RunConfig.model_validate(cfg)
+        planned_config = RunConfig.model_validate(node["config"])
+        if actual_config.model_dump() != planned_config.model_dump():
+            raise ValueError(f"Config semantic mismatch: {node['path']}")
         parent = None
         if node["stage"]:
             continuation = cfg["continuation"]

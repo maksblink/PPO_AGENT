@@ -443,3 +443,35 @@ def test_first_real_proposal_precision_and_unequal_yaml(tmp_path):
     assert "w909w378w414" in cfg["run"]["name"]
     assert cfg["continuation"] == {"mode": "fresh"}
     assert plan["proposals"][0]["original"] == p
+
+
+def test_export_roundtrip_with_omitted_null_train_ratio(tmp_path):
+    from train_and_eval.optuna.export import payloads
+
+    plan, *_ = plan_for(tmp_path)
+    for node in plan["nodes"]:
+        data = node["config"]["data"]
+        data["train_ratio"] = None
+        data["train_range"] = {
+            "start": "2010-01-01T00:00:00+00:00",
+            "end": "2020-01-01T00:00:00+00:00",
+        }
+        data["validation_range"] = {
+            "start": "2020-01-01T00:00:00+00:00",
+            "end": "2021-01-01T00:00:00+00:00",
+        }
+
+    files = payloads(plan)
+    for node in plan["nodes"]:
+        exported = yaml.safe_load(files[node["path"]])
+        assert "train_ratio" not in exported["data"]
+
+    validate_files(plan, files.__getitem__)
+
+    # A real setting change must still be rejected.
+    path = plan["nodes"][0]["path"]
+    changed = yaml.safe_load(files[path])
+    changed["ppo"]["gamma"] = 0.123456
+    files[path] = yaml.safe_dump(changed, sort_keys=False)
+    with pytest.raises(ValueError, match="Config round-trip mismatch"):
+        validate_files(plan, files.__getitem__)

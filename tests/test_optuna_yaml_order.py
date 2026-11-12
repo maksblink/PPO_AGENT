@@ -28,9 +28,11 @@ class TestOptunaYamlOrder(unittest.TestCase):
                            'train_ratio': None}, 'config_schema_version': 1}
         before = deepcopy(config)
         output = ordered_run_config(config)
-        self.assertEqual(output, before)
+        expected = deepcopy(before)
+        expected["data"].pop("train_ratio")
+        self.assertEqual(output, expected)
         self.assertEqual(list(output['data']['train_range']), ['start', 'end'])
-        self.assertEqual(yaml.safe_load(yaml.safe_dump(output, sort_keys=False)), before)
+        self.assertEqual(yaml.safe_load(yaml.safe_dump(output, sort_keys=False)), expected)
         output['ppo']['hidden_sizes'][0] = 999
         self.assertEqual(config, before)
         self.assertEqual(list(config), ['ppo', 'data', 'config_schema_version'])
@@ -57,3 +59,43 @@ class TestOptunaYamlOrder(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestOptunaTrainRatioPresentation(unittest.TestCase):
+    def test_null_ratio_is_omitted_without_changing_input(self):
+        config = {"data": {"train_ratio": None}, "ppo": {"target_kl": None}}
+        before = deepcopy(config)
+        result = ordered_run_config(config)
+        self.assertNotIn("train_ratio", result["data"])
+        self.assertIsNone(result["ppo"]["target_kl"])
+        self.assertEqual(config, before)
+        self.assertEqual(ordered_run_config(result), result)
+
+    def test_numeric_ratio_is_preserved(self):
+        config = {"data": {"train_ratio": 0.9}}
+        self.assertEqual(ordered_run_config(config), config)
+
+    def test_missing_ratio_is_not_added(self):
+        config = {"data": {"path": "data/example.parquet"}}
+        self.assertEqual(ordered_run_config(config), config)
+
+    def test_explicit_ranges_validate_identically(self):
+        from train_and_eval.run_config import DataSection
+
+        data = {
+            "path": "data/example.parquet",
+            "train_ratio": None,
+            "train_range": {
+                "start": "2010-01-01T00:00:00+00:00",
+                "end": "2020-01-01T00:00:00+00:00",
+            },
+            "validation_range": {
+                "start": "2020-01-01T00:00:00+00:00",
+                "end": "2021-01-01T00:00:00+00:00",
+            },
+        }
+        exported = ordered_run_config({"data": data})["data"]
+        self.assertEqual(
+            DataSection.model_validate(data).model_dump(),
+            DataSection.model_validate(exported).model_dump(),
+        )

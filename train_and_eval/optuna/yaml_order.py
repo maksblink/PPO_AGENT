@@ -1,4 +1,4 @@
-"""Stable presentation order for exported run YAML; preserves every value/key."""
+"""Grid-style run YAML ordering; omits an unset data.train_ratio."""
 
 from copy import deepcopy
 
@@ -80,6 +80,8 @@ def ordered_run_config(config):
             preferred = FIELD_ORDER.get(path, ())
             keys = [key for key in preferred if key in value]
             keys.extend(key for key in value if key not in preferred)
+            if path == ("data",) and value.get("train_ratio") is None:
+                keys = [key for key in keys if key != "train_ratio"]
             return {key: visit(value[key], path + (key,)) for key in keys}
         return deepcopy(value)
 
